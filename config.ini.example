@@ -1,0 +1,35 @@
+; Taiko2x6Wizard — local settings (copy to config.ini)
+;
+; This file only remembers the LAST-USED path per file picker so dialogs
+; reopen where you were. It is optional: the tools work without it and create
+; it on first use. The real config.ini is git-ignored because these paths are
+; specific to your machine.
+;
+; Copy this file to `config.ini` (next to the .py modules) and edit the paths,
+; or just let the GUI fill them in as you browse.
+
+[paths]
+; where you extract / keep game archives
+archive_dir  = D:/Taiko/archives
+extract_dir  = D:/Taiko/extract
+
+; a TJA chart + its audio (for the TJA -> SHT importer)
+tja          = D:/Taiko/songs/MySong/MySong.tja
+wav          = D:/Taiko/songs/MySong/MySong.ogg
+
+; SYSTEM256 disc in/out (iso_packer)
+iso          = D:/Taiko/disc/tk8.iso
+iso_out      = D:/Taiko/disc/tk8_patched.iso
+
+; PS2 HDD image (T14+ SYSTEM2x6) — worked on with PCSX2 CLOSED
+hddimg       = D:/Taiko/images/TK14.img
+hdd_replace  = D:/Taiko/extract/DATA.000
+hdd_extract  = D:/Taiko/extract/DATA.000
+
+; PS2 memory card (arcade COH)
+ps2mc         = D:/Taiko/memcards/CARD.ps2
+ps2mc_extract = D:/Taiko/extract/GAMEFILE
+
+; single-chart / output scratch
+sht          = D:/Taiko/extract/fumen/song1p_m/sht
+outdir       = D:/Taiko/out

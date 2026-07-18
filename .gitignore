@@ -1,0 +1,41 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# ── Local settings (machine-specific paths) ────────────────────────────────
+config.ini
+
+# ── Bundled runtime deps you must supply yourself (NOT redistributed) ───────
+# Commercial font (DFPKanTeiRyu-XB / 勘亭流) — supply your own, see README.
+Font.ttf
+# Game-derived key material (extracted from your own dongle/loader).
+T14LOAD.bin
+taiko.pristine.bin
+# Third-party native tools — download from upstream, see README.
+pfsshell.exe
+vgmstream-win64/
+
+# ── Game data / extracted assets — NEVER commit copyrighted game content ────
+*.img
+*.iso
+*.ps2
+*.nus3bank
+*.vag
+*.sht
+*.nut
+DATA.000*
+list.bin*
+TEBGAME*
+TEAGAME*
+*.dec
+*.7z
+
+# ── OS / editor cruft ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

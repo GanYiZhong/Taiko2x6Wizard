@@ -1,0 +1,15 @@
+# Taiko2x6Wizard — Python dependencies
+# Install with:  pip install -r requirements.txt
+
+# --- Required ---------------------------------------------------------------
+PySide6>=6.5        # Qt GUI framework — every interactive tool
+numpy>=1.24         # binary parsing + audio/image number crunching
+Pillow>=9.0         # song-title texture rendering (needs Font.ttf)
+pycryptodome>=3.17  # AES for Gen3 (Nijiiro) encrypted fumen / datatable
+
+# --- Recommended (audio import: OGG/WAV -> VAG) -----------------------------
+soundfile>=0.12     # fast OGG/WAV decode used by vagtool / hdbd
+
+# --- Optional ---------------------------------------------------------------
+librosa>=0.10       # audio-decode fallback when soundfile can't open a file
+cryptography>=41    # alternative AES backend (auto-used if pycryptodome absent)

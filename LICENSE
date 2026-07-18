@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 TaikoZhong
+Copyright (c) 2026 Taiko2x6Wizard contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+NOTE ON GAME CONTENT
+
+This project is an independent, fan-made toolkit for interoperability and
+research. It contains NO copyrighted game code, assets, audio, fonts, or data
+from any commercial product. "Taiko no Tatsujin" and related marks are the
+property of their respective owners (Bandai Namco). To use this toolkit you
+must supply your own legally obtained game files and third-party binaries; see
+README.md. The authors are not affiliated with or endorsed by Bandai Namco.
