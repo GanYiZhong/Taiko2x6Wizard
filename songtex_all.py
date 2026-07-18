@@ -42,8 +42,9 @@ import tim2
 # --------------------------------------------------------------------------- #
 #  Constants
 # --------------------------------------------------------------------------- #
+import apppaths
 _HERE = Path(__file__).resolve().parent
-FONT_PATH = str(_HERE / "Font.ttf")          # MANDATORY 勘亭流 brush font
+FONT_PATH = str(apppaths.resource_dir() / "Font.ttf")   # MANDATORY 勘亭流 brush font
 
 TEXTURE_TYPES = [
     "games", "kenri_song", "result", "songlevel",

@@ -1712,14 +1712,24 @@ def _bin_editor_module(filename: str):
     if _BIN_EDITORS is None:
         import importlib
         _BIN_EDITORS = {}
-        for path in sorted(Path(__file__).resolve().parent.glob("bineditor_*.py")):
+        stems = sorted(p.stem for p in
+                       Path(__file__).resolve().parent.glob("bineditor_*.py"))
+        if not stems:
+            # Frozen (PyInstaller) build: no .py files on disk to glob. The
+            # modules are compiled into the exe, so import them by name.
+            stems = [
+                "bineditor_enso_parts", "bineditor_fname", "bineditor_hdbdinfo",
+                "bineditor_lamp", "bineditor_musicinfo", "bineditor_rank",
+                "bineditor_streaminfo", "bineditor_tuning",
+            ]
+        for stem in stems:
             try:
-                mod = importlib.import_module(path.stem)
+                mod = importlib.import_module(stem)
                 fn = getattr(mod, "FILENAME", None)
                 if fn and hasattr(mod, "Editor"):
                     _BIN_EDITORS[fn.lower()] = mod
             except Exception as exc:
-                log.debug("bin-editor: skipped %s: %s", path.name, exc)
+                log.debug("bin-editor: skipped %s: %s", stem, exc)
     return _BIN_EDITORS.get(Path(filename).name.lower())
 
 

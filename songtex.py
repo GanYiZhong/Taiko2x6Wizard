@@ -20,12 +20,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 import tim2
+import apppaths
 
 WIDTH, HEIGHT = 640, 160
 
 # Japanese gothic fonts, best-match first (arcade plate uses an MS-Gothic-like face)
 _JP_FONTS = [
-    str(Path(__file__).resolve().parent / "Font.ttf"),  # authentic Taiko 勘亭流
+    str(apppaths.resource_dir() / "Font.ttf"),  # authentic Taiko 勘亭流
     "C:/Windows/Fonts/msgothic.ttc",
     "C:/Windows/Fonts/YuGothB.ttc",
     "C:/Windows/Fonts/meiryo.ttc",

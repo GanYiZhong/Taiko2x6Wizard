@@ -6,6 +6,17 @@ __pycache__/
 venv/
 .env
 
+# ── PyInstaller build output (the released .exe is attached to Releases) ────
+build/
+dist/
+release/*.exe
+release/*.zip
+release/Font.ttf
+release/T14LOAD.bin
+release/pfsshell.exe
+release/vgmstream-win64/
+build_log.txt
+
 # ── Local settings (machine-specific paths) ────────────────────────────────
 config.ini
 

@@ -23,7 +23,8 @@ from __future__ import annotations
 import configparser
 from pathlib import Path
 
-INI_PATH = Path(__file__).resolve().parent / "config.ini"
+import apppaths
+INI_PATH = apppaths.resource_dir() / "config.ini"
 _SECTION = "paths"
 
 

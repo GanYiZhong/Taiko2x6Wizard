@@ -60,6 +60,8 @@ def find_t14load(hint: str | Path | None = None) -> str:
     env = os.environ.get('T14LOAD_BIN')
     if env:
         cands.append(Path(env))
+    import apppaths
+    cands.append(apppaths.resource_dir() / T14LOAD_NAME)
     cands.append(Path(__file__).resolve().parent / T14LOAD_NAME)
     for c in cands:
         if c.is_file():

@@ -38,6 +38,19 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and
 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md) for the reverse-engineered
 formats.
 
+## Download (no Python needed)
+
+Grab the latest **`Taiko2x6Wizard.exe`** from the
+[Releases page](https://github.com/GanYiZhong/Taiko2x6Wizard/releases) — a
+single Windows file with Python and all libraries bundled in. Run it; no
+install required.
+
+Four files are **not** bundled (commercial font / third-party tools / your own
+game data) — drop them next to the `.exe` if you need the features that use
+them: `Font.ttf`, `vgmstream-win64/`, `pfsshell.exe`, `T14LOAD.bin`. See
+[What you must supply](#what-you-must-supply). Developers who want to run from
+source can follow the sections below instead.
+
 ---
 
 ## Requirements

@@ -64,8 +64,10 @@ def find_pfsshell(hint: str | Path | None = None) -> str | None:
     env = os.environ.get("PFSSHELL_EXE")
     if env:
         cands.append(Path(env))
-    here = Path(__file__).resolve().parent
-    cands += [here / "pfsshell.exe", here / "pfsshell" / "pfsshell.exe"]
+    import apppaths
+    here = apppaths.resource_dir()
+    cands += [here / "pfsshell.exe", here / "pfsshell" / "pfsshell.exe",
+              Path(__file__).resolve().parent / "pfsshell.exe"]
     for c in cands:
         try:
             if c.is_file():

@@ -248,8 +248,8 @@ def convert_fumen(path, branch=0):
 
 # --- Audio: nus3bank -> VAG ------------------------------------------------
 
-VGMSTREAM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "vgmstream-win64")
+import apppaths
+VGMSTREAM_DIR = str(apppaths.resource_dir() / "vgmstream-win64")
 
 
 def find_vgmstream(explicit=None):
