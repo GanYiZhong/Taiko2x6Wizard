@@ -857,6 +857,15 @@ class MainWindow(QMainWindow):
             "aliasing arrayA. Close any emulator holding the image first.")
         self.act_taikoexe.triggered.connect(self.open_taiko_exe)
 
+        self.act_taikotimer = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
+                                      "Song-select timer (T14+)…", self)
+        self.act_taikotimer.setToolTip(
+            "Change the song-select countdown in `taiko` (stock 120 s) to any "
+            "value from 1 to 999 s. Sets all three select-flow inactivity timers "
+            "that otherwise drop you back to the attract loop. Close any emulator "
+            "holding the image first.")
+        self.act_taikotimer.triggered.connect(self.open_taiko_timer)
+
         self.act_imgslim = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
                                    "Slim PS2 HDD image…", self)
         self.act_imgslim.setToolTip(
@@ -920,6 +929,7 @@ class MainWindow(QMainWindow):
         tools.addAction(self.act_pfsshell)
         tools.addAction(self.act_ps2mc)
         tools.addAction(self.act_taikoexe)
+        tools.addAction(self.act_taikotimer)
         tools.addAction(self.act_imgslim)
         tools.addAction(self.act_apamerge)
         tools.addAction(self.act_gen3conv)
@@ -1369,6 +1379,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Patch taiko", str(exc))
             return
         dlg = taiko_exe.TaikoExeDialog(self, default_img=self._recent_hdd_img())
+        dlg.exec()
+
+    def open_taiko_timer(self):
+        import taiko_exe
+        try:
+            taiko_exe.find_t14load()
+        except taiko_exe.TaikoExeError as exc:
+            QMessageBox.warning(self, "Song-select timer", str(exc))
+            return
+        dlg = taiko_exe.TaikoTimerDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
 
     def open_gen3_convert(self):
