@@ -307,6 +307,22 @@ def analyze_template(template_nut: bytes, type_name: str) -> dict:
     else:
         align = "left"
 
+    # Vertical (tate-gaki) plates: learn the template's STANDARD glyph size by
+    # segmenting the inked rows into character cells. Retail plates draw every
+    # title at one fixed size (long titles shrink) — without this cap a short
+    # title balloons to fill the whole column.
+    vglyph_w = vglyph_h = 0
+    proj = np.flatnonzero(mask.any(axis=1))
+    if len(proj):
+        # contiguous row runs, merging small (<=3 px) internal stroke gaps
+        breaks = np.flatnonzero(np.diff(proj) > 3)
+        starts = np.r_[proj[0], proj[breaks + 1]]
+        ends = np.r_[proj[breaks], proj[-1]]
+        heights = ends - starts + 1
+        if len(heights):
+            vglyph_h = int(heights.max())
+            vglyph_w = int(x1 - x0 + 1)
+
     out.update({
         "valid": True, "outline": outline,
         "fill_rgb": fill_rgb, "ink_rgb": ink_rgb, "stroke": stroke,
@@ -315,6 +331,7 @@ def analyze_template(template_nut: bytes, type_name: str) -> dict:
                       (left if align == "left" else min(left, right))),
         "align": align,
         "top_margin": max(2, top), "bottom_margin": max(2, bottom),
+        "vglyph_w": vglyph_w, "vglyph_h": vglyph_h,
     })
     return out
 
@@ -622,6 +639,16 @@ def render_texture(type_name: str, template_nut: bytes, title: str,
                     opts.setdefault("margin", min(info["margin"], w // 4))
         elif st["kind"] == "v":
             opts.setdefault("top_margin", min(info["top_margin"], h // 6))
+            # Start the glyph search AT the template's own character size
+            # instead of the column width: short titles keep the retail size,
+            # long ones still shrink. The reliable per-character measure on a
+            # tate-gaki plate is the ink WIDTH (chars often touch vertically,
+            # so run heights merge into the whole column); minus the outline
+            # it approximates the template's font px.
+            if info["vglyph_w"]:
+                tpl_px = info["vglyph_w"] - 2 * info["stroke"]
+                if tpl_px >= 10:
+                    opts.setdefault("size", min(w, tpl_px))
         outline = info["outline"]
     else:
         outline = STYLE[type_name]["outline"]
