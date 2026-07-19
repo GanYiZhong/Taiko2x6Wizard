@@ -225,6 +225,122 @@ STYLE = {
 }
 
 
+# --------------------------------------------------------------------------- #
+#  Template analysis: measure the ACTUAL template so new art matches it
+# --------------------------------------------------------------------------- #
+def analyze_template(template_nut: bytes, type_name: str) -> dict:
+    """Measure a template texture's own text so renders can match it exactly.
+
+    Decodes the template's first TIM2 picture and inspects the inked (opaque)
+    pixels to learn how THIS plate is drawn, instead of trusting the static
+    STYLE table (which was measured on one retail set and is wrong for
+    templates from other songs/games):
+
+      outline   True when the ink holds BOTH a dark edge and a bright fill
+                (white/gold text with a black border). False for flat
+                single-colour plates.
+      fill_rgb  colour of the glyph fill (the bright core when outlined).
+      ink_rgb   colour of a flat plate's ink (black credits text stays black).
+      stroke    outline thickness in px, estimated as dark-edge area over the
+                ink boundary length.
+      hcap      ink height as a fraction of the plate height (horizontal kinds).
+      margin    the anchored side margin in px (right margin when
+                right-aligned; smallest side margin otherwise).
+      align     'right' | 'center' | 'left' from where the ink bbox sits.
+      top_margin  first inked row (vertical kinds).
+      valid     False when the template is empty/undecodable — caller should
+                fall back to STYLE defaults.
+    """
+    out = {"valid": False}
+    try:
+        _w, _h, rgba = tim2.decode_tim2(template_nut)[0]
+    except Exception:
+        return out
+    h, w = rgba.shape[:2]
+    alpha = rgba[:, :, 3].astype(np.int32)
+    mask = alpha > 40
+    n_ink = int(mask.sum())
+    if n_ink < 20:                       # blank/placeholder plate: nothing to learn
+        return out
+
+    ys, xs = np.nonzero(mask)
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    left, right = x0, (w - 1 - x1)
+    top, bottom = y0, (h - 1 - y1)
+
+    px = rgba[mask].astype(np.int32)
+    lum = (299 * px[:, 0] + 587 * px[:, 1] + 114 * px[:, 2]) // 1000
+    dark = lum < 70
+    bright = lum > 150
+    dark_frac = float(dark.mean())
+    bright_frac = float(bright.mean())
+    # Outlined = a real black edge AND a bright fill both present in quantity.
+    outline = dark_frac >= 0.08 and bright_frac >= 0.15
+
+    def _modal_rgb(sel: np.ndarray, default=(255, 255, 255)) -> tuple:
+        if not sel.any():
+            return default
+        cols, counts = np.unique(px[sel][:, :3], axis=0, return_counts=True)
+        r, g, b = cols[counts.argmax()]
+        return (int(r), int(g), int(b))
+
+    fill_rgb = _modal_rgb(bright)          # bright core = the fill colour
+    ink_rgb = _modal_rgb(np.ones(len(px), bool))   # overall modal = flat ink
+
+    # Outline thickness ~= dark-edge area / ink boundary length.
+    stroke = 0
+    if outline:
+        m = mask
+        boundary = m & ~(np.roll(m, 1, 0) & np.roll(m, -1, 0) &
+                         np.roll(m, 1, 1) & np.roll(m, -1, 1))
+        blen = max(1, int(boundary.sum()))
+        stroke = int(round(int(dark.sum()) / blen))
+        stroke = max(2, min(7, stroke))
+
+    # Alignment from where the ink box sits (tolerance scales with the plate).
+    tol = max(4, int(w * 0.08))
+    if abs(left - right) <= tol:
+        align = "center"
+    elif right < left:
+        align = "right"
+    else:
+        align = "left"
+
+    out.update({
+        "valid": True, "outline": outline,
+        "fill_rgb": fill_rgb, "ink_rgb": ink_rgb, "stroke": stroke,
+        "hcap": min(0.95, max(0.20, (y1 - y0 + 1) / h)),
+        "margin": max(2, right if align == "right" else
+                      (left if align == "left" else min(left, right))),
+        "align": align,
+        "top_margin": max(2, top), "bottom_margin": max(2, bottom),
+    })
+    return out
+
+
+def _ink_alpha_palette(rgb: tuple) -> np.ndarray:
+    """16-entry alpha-ramp palette in an arbitrary ink colour (0..255 alpha)."""
+    r, g, b = rgb
+    pal = np.zeros((16, 4), np.uint8)
+    for i in range(16):
+        pal[i] = (r, g, b, round(i / 15 * 255))
+    return pal
+
+
+def _outline_palette_for(fill_rgb: tuple) -> np.ndarray:
+    """Black-outline→fill greyscale-style ramp, but ending at the template's
+    fill colour (retail 'result' plates are gold-filled, not white)."""
+    fr, fg, fb = fill_rgb
+    entries = [(0, 0, 0, 0), (0, 0, 0, 128), (0, 0, 0, 204)]
+    steps = 13
+    for i in range(steps):
+        t = i / (steps - 1)
+        entries.append((round(2 + (fr - 2) * t), round(2 + (fg - 2) * t),
+                        round(2 + (fb - 2) * t), 255))
+    return np.asarray(entries, np.uint8)
+
+
 def _white_alpha_palette() -> np.ndarray:
     """16-entry palette: index 0 transparent, 1..15 opaque-white alpha ramp
     (0..255 alpha space; converted to PS2 0..128 before it is written)."""
@@ -487,22 +603,48 @@ def render_texture(type_name: str, template_nut: bytes, title: str,
         raise ValueError(f"unknown texture type {type_name!r}")
     lay = tim2.first_picture_layout(template_nut)
     w, h = lay["width"], lay["height"]
+
+    # Measure the ACTUAL template (black edge or not, colours, proportions,
+    # margins) so the new art matches it; the static STYLE table is only the
+    # fallback for blank/unreadable templates. Explicit **opts always win.
+    info = analyze_template(template_nut, type_name) if opts.get(
+        "analyze", True) else {"valid": False}
+    if info["valid"]:
+        st = STYLE[type_name]
+        if st["kind"] == "h":
+            opts.setdefault("hcap", info["hcap"])
+            # A left-aligned measurement on a right/center retail kind is more
+            # likely a short-title artefact than a real layout — only adopt the
+            # measured align when it is one the renderer supports.
+            if info["align"] in ("right", "center"):
+                opts.setdefault("align", info["align"])
+                if info["align"] == "right":
+                    opts.setdefault("margin", min(info["margin"], w // 4))
+        elif st["kind"] == "v":
+            opts.setdefault("top_margin", min(info["top_margin"], h // 6))
+        outline = info["outline"]
+    else:
+        outline = STYLE[type_name]["outline"]
+
     rgba, font_px = _render_rgba(type_name, w, h, title, lyricist, composer, opts)
     coverage = rgba[:, :, 3].astype(np.float32) / 255.0
-    # Colourise per the explicit per-type style and WRITE a matching CLUT (the
-    # greyscale black→white ramp the retail outlined nuts use, or a white-alpha
-    # ramp for flat types) so colours are exact regardless of the template's own
-    # palette (e.g. result's retail CLUT is gold — we override it to white+black).
-    if STYLE[type_name]["outline"]:
-        # Bold, clearly-visible black frame that scales with the (now larger)
-        # glyph: ~9% of the font size, floor 3 so small vertical text still has a
-        # solid outline, cap 7 so the biggest plates don't get a heavy blob.
-        stroke = max(3, min(7, round(font_px * 0.09)))
+    # Colourise to match the template and WRITE a matching CLUT: outlined
+    # plates get a black-edge→fill ramp in the TEMPLATE's fill colour (white,
+    # gold, …); flat plates get an alpha ramp in the template's own ink colour
+    # (black credits text stays black instead of being forced white).
+    if outline:
+        # Outline weight: the template's measured stroke if we have it,
+        # otherwise ~9% of the font size (floor 3, cap 7).
+        stroke = (info.get("stroke") or 0) if info["valid"] else 0
+        if not stroke:
+            stroke = max(3, min(7, round(font_px * 0.09)))
         final = _render_white_outline(coverage, stroke)
-        pal255 = _greyscale_outline_palette()
+        pal255 = (_outline_palette_for(info["fill_rgb"])
+                  if info["valid"] else _greyscale_outline_palette())
     else:
         final = _flat_white(coverage)
-        pal255 = _white_alpha_palette()
+        pal255 = (_ink_alpha_palette(info["ink_rgb"])
+                  if info["valid"] else _white_alpha_palette())
     idx = _quantize_to_palette(final, pal255)
     return tim2.encode_indexed4_into_template(template_nut, idx, _to_ps2_alpha(pal255))
 
