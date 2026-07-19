@@ -518,7 +518,9 @@ def _render_kenri(w: int, h: int, title: str, lyricist: str,
 
 
 def _render_vertical(w: int, h: int, text: str, base_size: int,
-                     top_margin: int = 10, bottom_margin: int = 8) -> np.ndarray:
+                     top_margin: int = 10, bottom_margin: int = 8,
+                     cell_px: float | None = None,
+                     max_glyph_w: int | None = None) -> np.ndarray:
     """Render text VERTICALLY (tate-gaki): glyphs stacked top-to-bottom.
 
     Each character is drawn on its own row, the column centred horizontally at
@@ -555,16 +557,33 @@ def _render_vertical(w: int, h: int, text: str, base_size: int,
         cell = max(max_gh, int(round(max_gh * 1.03)))
         return cell, max_gw, max_gh
 
-    size = base_size
-    while size > 8:
+    if cell_px:
+        # Template-standard CELL model (retail behaviour): every character
+        # gets a fixed-height cell learned from the template; the glyph fills
+        # its cell. Only a too-long title shrinks the cell — a short title
+        # keeps the retail size instead of ballooning to fill the column.
+        cell_t = min(float(cell_px), avail_h / n)
+        wcap = min(avail_w, max_glyph_w or avail_w)
+        size = max(base_size, int(cell_t * 1.8) + 2)
+        while size > 8:
+            f = _font(size)
+            _, max_gw, max_gh = _metrics(f)
+            if max_gh <= cell_t * 0.88 and max_gw <= wcap:
+                break
+            size -= 1
         f = _font(size)
-        cell, max_gw, max_gh = _metrics(f)
-        # require the stacked cells AND the tallest/widest glyph to all fit
-        if cell * n <= avail_h and max_gw <= avail_w and max_gh <= avail_h:
-            break
-        size -= 1
-    f = _font(size)
-    cell, _, _ = _metrics(f)
+        cell = max(8, int(round(cell_t)))
+    else:
+        size = base_size
+        while size > 8:
+            f = _font(size)
+            cell, max_gw, max_gh = _metrics(f)
+            # require the stacked cells AND the tallest/widest glyph to all fit
+            if cell * n <= avail_h and max_gw <= avail_w and max_gh <= avail_h:
+                break
+            size -= 1
+        f = _font(size)
+        cell, _, _ = _metrics(f)
 
     total_h = cell * n
     y = top_margin + max(0, (avail_h - total_h) // 2)
@@ -600,7 +619,9 @@ def _render_rgba(type_name: str, w: int, h: int, title: str, lyricist: str,
         # grown as large as the column allows (start from the column width so a
         # glyph can fill it; the height cap shrinks longer titles). No rotation.
         return _render_vertical(w, h, title, opts.get("size", w),
-                                top_margin=opts.get("top_margin", 8))
+                                top_margin=opts.get("top_margin", 8),
+                                cell_px=opts.get("cell_px"),
+                                max_glyph_w=opts.get("max_glyph_w"))
     raise ValueError(f"unknown texture type {type_name!r}")
 
 
@@ -639,16 +660,18 @@ def render_texture(type_name: str, template_nut: bytes, title: str,
                     opts.setdefault("margin", min(info["margin"], w // 4))
         elif st["kind"] == "v":
             opts.setdefault("top_margin", min(info["top_margin"], h // 6))
-            # Start the glyph search AT the template's own character size
-            # instead of the column width: short titles keep the retail size,
-            # long ones still shrink. The reliable per-character measure on a
-            # tate-gaki plate is the ink WIDTH (chars often touch vertically,
-            # so run heights merge into the whole column); minus the outline
-            # it approximates the template's font px.
-            if info["vglyph_w"]:
-                tpl_px = info["vglyph_w"] - 2 * info["stroke"]
-                if tpl_px >= 10:
-                    opts.setdefault("size", min(w, tpl_px))
+            # Retail plates give every character a fixed-height CELL and the
+            # glyph fills it; only long titles shrink. The cell height is a
+            # UI-layout constant (calibrated on retail genpe/KAGEKIYO, whose
+            # character count is known: select_full 32.4/272, short 24.2/264);
+            # the template supplies the width cap — its ink width minus the
+            # outline the render adds back.
+            ratio = {"select_full": 0.119}.get(type_name, 0.092)
+            opts.setdefault("cell_px", h * ratio)
+            if info["vglyph_w"] >= 10:
+                opts.setdefault(
+                    "max_glyph_w",
+                    max(10, info["vglyph_w"] - 2 * info["stroke"]))
         outline = info["outline"]
     else:
         outline = STYLE[type_name]["outline"]
