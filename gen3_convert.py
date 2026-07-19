@@ -160,34 +160,120 @@ def measure_length(meas, k):
 
 # --- Gen3 -> Gen2 sht ------------------------------------------------------
 
-def gen3_to_sht(meas, branch=0):
+def _branch_recs(meas, k, br):
+    """Quantized Gen2 note records for ONE branch of measure k."""
+    L = measure_length(meas, k)
+    recs = []
+    for n in br["notes"]:
+        p = int(round(n["pos"] / L * _POS_DIV)) if L > 0 else 0
+        p = max(0, min(_POS_DIV - 1, p))
+        t = n["type"]
+        recs.append({
+            "type": t,
+            "measure": p,
+            "balloonHitCount": n["u10"] if t in _BALLOON_TYPES else _NONE,
+            "longNoteLength": (int(round(n["dur"])) if t in _ROLL_TYPES
+                               else _NONE),
+        })
+    return recs
+
+
+def _gen2_bunkis(info):
+    """Normalize Gen3 branchInfo to a Gen2-legal bunki row.
+
+    Gen2 charts write either [b01, b12, -1, -1, -1, -1] or the pair repeated
+    three times (both styles ship in retail) — but never a ZERO-filled tail.
+    Gen3 sometimes zero-fills (kecha); a 0 'threshold' could false-trigger a
+    branch-up in the Gen2 engine, so rewrite only that case to the -1-tail
+    style and pass everything else through verbatim (repeat style and
+    non-uniform per-slot rows like soroba are all retail-legal)."""
+    b = list(info)
+    pair = b[:2]
+    if b[2:] == [0, 0, 0, 0] and pair != [0, 0]:
+        return pair + [-1] * 4
+    return b
+
+
+def has_diverge(meas):
+    """True when the Gen3 chart really branches (diverge thresholds set, or the
+    professional/master lanes carry their own notes)."""
+    return any(m["branchInfo"] != [-1] * 6 for m in meas) or any(
+        m["branches"][b]["count"] for m in meas for b in (1, 2))
+
+
+def _gen3_to_sht_diverge(meas):
+    """Branch-preserving conversion, mirroring the official branching layout
+    (established on T14 alrpri/butou*): per measure the three routes' notes are
+    stored as SIX consecutive copies [n, p, m, n, p, m]; sub-tracks 0-2 point
+    at routes 普通/玄人/達人 and 3-5 at their second copies; pointGain is the
+    per-ROUTE remaining-note countdown; bunkis carries the diverge thresholds
+    verbatim — on the shared butou3/4/5 charts Gen2 bunkis == Gen3 branchInfo
+    value-for-value, so no rescaling is needed."""
+    notes = []
+    tracks = []
+
+    per_measure = [(m, [_branch_recs(meas, k, m["branches"][b])
+                        for b in range(3)]) for k, m in enumerate(meas)]
+
+    remaining = [sum(len(r3[b]) for (_m, r3) in per_measure) for b in range(3)]
+    for (m, r3) in per_measure:
+        starts = []
+        for _copy in range(2):
+            for b in range(3):
+                starts.append(len(notes))
+                notes.extend(dict(r) for r in r3[b])
+        for b in range(3):
+            remaining[b] -= len(r3[b])
+
+        subs = [{"noteIndexSt": starts[s], "noteCount": len(r3[s % 3]),
+                 "pointGain": remaining[s % 3]} for s in range(6)]
+        speeds = [float(m["branches"][s % 3]["speed"]) for s in range(6)]
+        tracks.append({
+            "time": m["offset"],
+            "bpm": m["bpm"],
+            "trackLine": int(m["barline"]),
+            "gogoFlag": 1 if m["gogo"] else 0,
+            "_unk": 0,
+            "bunkis": _gen2_bunkis(m["branchInfo"]),
+            "scrollSpeeds": speeds,
+            "subtracks": subs,
+        })
+    return tracks, notes
+
+
+def gen3_to_sht(meas, branch=None):
     """Build Gen2 sht bytes from parsed Gen3 measures.
 
-    The sub-track / note-table layout below is not invented here: it mirrors
-    what tja2sht.convert_tja emits, which in turn matches every corpus chart
-    (each measure's notes stored twice, sub-track 0 and 3 pointing at the two
-    copies, empty slots kept contiguous, pointGain a remaining-note countdown).
-    Deviating from it hangs the game at chart load.
+    branch=None (default): keep diverge branches when the chart has them
+    (official three-route layout), else the plain single-route layout.
+    branch=<int>: flatten to that route (0 普通 / 1 玄人 / 2 達人) like before.
+
+    The sub-track / note-table layouts below are not invented here: they mirror
+    the corpus charts (plain: each measure's notes stored twice, sub-track 0
+    and 3 pointing at the two copies, empty slots kept contiguous, pointGain a
+    remaining-note countdown; branching: see _gen3_to_sht_diverge). Deviating
+    hangs the game at chart load.
     """
+    if branch is None and has_diverge(meas):
+        tracks, notes = _gen3_to_sht_diverge(meas)
+        return tja2sht.serialize_sht({
+            "noteOffset": 16 + len(tracks) * tja2sht.TRACK_NEW_SIZE,
+            "padding": 0,
+            "isOld": False,
+            "tracks": tracks,
+            "notes": notes,
+            "_gap": b"",
+            "_tail": b"",
+        })
+
+    branch = branch or 0
     notes = []
     tracks = []
 
     per_measure = []
     for k, m in enumerate(meas):
-        L = measure_length(meas, k)
         br = m["branches"][branch]
-        recs = []
-        for n in br["notes"]:
-            p = int(round(n["pos"] / L * _POS_DIV)) if L > 0 else 0
-            p = max(0, min(_POS_DIV - 1, p))
-            t = n["type"]
-            recs.append({
-                "type": t,
-                "measure": p,
-                "balloonHitCount": n["u10"] if t in _BALLOON_TYPES else _NONE,
-                "longNoteLength": (int(round(n["dur"])) if t in _ROLL_TYPES
-                                   else _NONE),
-            })
+        recs = _branch_recs(meas, k, br)
         per_measure.append((m, br, recs))
 
     total = sum(len(r) for (_m, _b, r) in per_measure)
@@ -241,8 +327,8 @@ def gen3_to_sht(meas, branch=0):
     })
 
 
-def convert_fumen(path, branch=0):
-    """Gen3 fumen .bin path -> Gen2 sht bytes."""
+def convert_fumen(path, branch=None):
+    """Gen3 fumen .bin path -> Gen2 sht bytes (branches kept when present)."""
     return gen3_to_sht(parse_gen3(decrypt_fumen(path)), branch=branch)
 
 

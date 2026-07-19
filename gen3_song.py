@@ -75,15 +75,14 @@ def _pick_chart(folder, sid, suffix):
     return p if p.exists() else None
 
 
-def load_song(fumen_dir, lang="japaneseText", branch=0, log=lambda s: None):
+def load_song(fumen_dir, lang="japaneseText", branch=None, log=lambda s: None):
     """Load every difficulty of the song in `fumen_dir`.
 
-    `branch` selects which Gen3 branch to keep for charts that use branching
-    (0 = normal, 1 = advanced, 2 = master). Our Gen2 writer emits a single
-    non-branching chart, so one has to be chosen; 0 matches what a player sees
-    by default. musicinfo's official note count refers to branch 2, so a
-    branched chart converted with branch=0 legitimately reports fewer notes
-    than musicinfo -- that is a choice, not a conversion error.
+    `branch=None` (default) KEEPS diverge branches: charts that branch are
+    converted to Gen2's official three-route layout (validated value-for-value
+    against 9 retail branching charts shared by both generations). Pass an int
+    (0 = normal, 1 = advanced, 2 = master) to flatten to a single route
+    instead, as before.
 
     Returns a dict:
         sid, title, subtitle, detail, uniqueId, genreNo, audio_path,
@@ -93,10 +92,7 @@ def load_song(fumen_dir, lang="japaneseText", branch=0, log=lambda s: None):
         branch  {difficulty -> bool}
         warnings[]
 
-    Difficulties the song does not have are simply absent. Charts that use
-    branching are still converted, but only the normal branch survives (the Gen2
-    format this targets has no branch support in our writer) -- that is recorded
-    in `warnings` rather than being silently dropped.
+    Difficulties the song does not have are simply absent.
     """
     folder = pathlib.Path(fumen_dir)
     if not folder.is_dir():
@@ -161,9 +157,12 @@ def load_song(fumen_dir, lang="japaneseText", branch=0, log=lambda s: None):
         branched = bool(info.get(_BRANCH_KEY[suffix]))
         out["branch"][diff] = branched
         if branched:
-            out["warnings"].append(
-                "%s uses branching; only branch %d is converted (the Gen2 "
-                "chart will not branch)" % (diff, branch))
+            if branch is None:
+                log("  %-7s keeps its diverge branches" % diff)
+            else:
+                out["warnings"].append(
+                    "%s uses branching; only branch %d is converted (the Gen2 "
+                    "chart will not branch)" % (diff, branch))
         log("  %-7s star %-2d  %d notes (official)" % (diff, star, onpu))
 
     if not out["sht"]:
