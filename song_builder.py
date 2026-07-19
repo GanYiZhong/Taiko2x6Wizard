@@ -276,8 +276,24 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
                audio_path: str | None = None,
                do_textures=True, do_charts=True, do_audio=True, do_stars=True,
                lead_silence_ms: float = 0.0,
+               charts=None, audio_vag=None, stars=None,
                log=lambda s: None) -> dict:
-    """Regenerate assets for song slot `sid`. Returns a summary dict.
+    """Regenerate assets for song slot `sid`, replacing it in place. Returns a summary dict.
+
+    Charts and audio can come from either of two sources (same split as
+    add_new_song, so the Replacer and Builder share one converter):
+
+      * TJA mode (`tja_text`, `audio_path`): charts are converted from the TJA
+        and the music is re-synced against it (see prepare_tja_for_game).
+      * Prepared mode (`charts`, `audio_vag`, `stars`): charts arrive as ready
+        .sht bytes keyed by course ("easy"/"normal"/"hard"/"oni"), music as ready
+        VAG bytes, and `stars` as the [easy,normal,hard,oni] level list. This is
+        what gen3_song.load_song produces. No sync is applied — a Gen3 chart's
+        measure times are already absolute against its own audio.
+
+    Per asset the prepared value wins: `charts` over `tja_text` for the chart
+    groups, `audio_vag` over `audio_path` for the music, `stars` over the
+    TJA-derived levels.
 
     All bytes (textures, charts, stars, audio) are staged into `archive` via
     stage_replace; nothing is written to disk here. The audio VAG replaces the
@@ -286,12 +302,12 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
     non-fatal notes (e.g. clamped star levels); `summary["errors"]` lists
     per-asset failures without aborting the rest of the build.
 
-    Sync is handled here, once, from the RAW TJA (see prepare_tja_for_game): the
-    OFFSET is baked into the audio and the chart gets a blank lead measure. Feed
-    it the original .tja/.ogg -- a chart that has already been through the
-    community test.py preprocessor is ALREADY shifted, and processing it again
-    desyncs it by a whole measure. `lead_silence_ms` is only a manual nudge on
-    top of that, for taste.
+    Sync (TJA mode only) is handled here, once, from the RAW TJA (see
+    prepare_tja_for_game): the OFFSET is baked into the audio and the chart gets
+    a blank lead measure. Feed it the original .tja/.ogg -- a chart already run
+    through the community test.py preprocessor is ALREADY shifted, and processing
+    it again desyncs it by a whole measure. `lead_silence_ms` is only a manual
+    nudge on top of that, for taste.
     """
     log = _tee(log)
     logger.info("build_song %s: title=%r textures=%s charts=%s audio=%s stars=%s",
@@ -340,11 +356,22 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
             tja_levels = _course_levels(parsed)
         except Exception as exc:
             summary["errors"].append(f"tja parse: {exc}")
-    if do_charts and tja_text:
+    if do_charts and (charts or tja_text):
         for player, letter, grp, e in find_charts(archive, sid):
             course = _DIFF_LETTER[letter]
             try:
-                sht = tja2sht.convert_tja(tja_text, course, player)
+                if charts is not None:
+                    # Prepared mode (Gen3): ready .sht bytes, no TJA conversion.
+                    sht = charts.get(course)
+                    if sht is None:
+                        # Slot has this difficulty but the source song lacks it;
+                        # leave the existing chart untouched rather than blank it.
+                        summary["warnings"].append(
+                            f"no {course} chart in the source; "
+                            f"{grp['name']} left as-is")
+                        continue
+                else:
+                    sht = tja2sht.convert_tja(tja_text, course, player)
                 parsed_sht = tja2sht.parse_sht(sht)  # validate
                 # DIFFICULTY_NOTE_LIMIT is the densest note count *observed* in the
                 # retail corpus for each difficulty — a heuristic upper bound, not a
@@ -370,7 +397,13 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
                 summary["errors"].append(f"chart {grp['name']}: {exc}")
 
     # ---- difficulty stars (tuning.bin) ----
-    if do_stars and tja_levels:
+    # Prepared mode carries an explicit [easy,normal,hard,oni] list (Gen3's own
+    # musicinfo ratings); it wins over anything derived from a TJA.
+    star_map = tja_levels
+    if stars is not None:
+        star_map = {course: stars[di] for course, di in _DIFF_INDEX.items()
+                    if di < len(stars)}
+    if do_stars and star_map:
         try:
             ent = find_named_entry(archive, "tuning.bin")
             ids = song_ids(archive)
@@ -379,7 +412,7 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
                 tu_bytes = archive.read_file(*ent)
                 tu = TU.parse(tu_bytes)
                 changed = False
-                for course, lvl in tja_levels.items():
+                for course, lvl in star_map.items():
                     di = _DIFF_INDEX.get(course)
                     if di is None:
                         continue
@@ -394,18 +427,24 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
                 if changed:
                     archive.stage_replace(ent[0]["index"], ent[1]["index"],
                                           TU.serialize(tu))
-                    summary["stars"] = tja_levels
-                    log(f"stars: {tja_levels}")
+                    summary["stars"] = dict(star_map)
+                    log(f"stars: {dict(star_map)}")
         except Exception as exc:
             summary["errors"].append(f"stars: {exc}")
 
     # ---- audio: replace the sound.stream.music_<id> group's vag in DATA.000 ----
-    if do_audio and audio_path:
+    if do_audio and (audio_vag or audio_path):
         try:
-            lead, trim = _sync_audio_args(sync, lead_silence_ms, log)
-            vag = vagtool.convert_audio_file(audio_path, 44100,
-                                             lead_silence_ms=lead,
-                                             trim_start_ms=trim)
+            if audio_vag is not None:
+                # Prepared mode (Gen3): ready VAG, already aligned to its own
+                # audio, so no sync/OFFSET neutralisation is applied.
+                vag = audio_vag
+                log(f"audio: using prepared VAG ({len(vag):,}B, no sync)")
+            else:
+                lead, trim = _sync_audio_args(sync, lead_silence_ms, log)
+                vag = vagtool.convert_audio_file(audio_path, 44100,
+                                                 lead_silence_ms=lead,
+                                                 trim_start_ms=trim)
             ent = find_group_file(archive, f"sound.stream.music_{sid}", "vag")
             if ent:
                 # stage_replace preserves the existing entry's per-entry

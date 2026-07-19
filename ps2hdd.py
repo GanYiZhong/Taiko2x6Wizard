@@ -1044,6 +1044,136 @@ class Ps2Hdd:
         ck = PfsInode.checksum_of(raw)
         struct.pack_into("<I", raw, 0x00, ck)
 
+    # ---- grow a PFS partition (add an APA sub-partition) --------------------
+    def _invalidate(self):
+        self._parts = None
+        self._supers = {}
+        self._inode_scale = {}
+
+    def grow_partition(self, name, extra_bytes, log=print,
+                       min_sub_sectors=262144, max_sub_sectors=4194304,
+                       margin=None):
+        """Enlarge PFS partition `name` by appending a new APA sub-partition.
+
+        A PFS partition can't grow subpart 0 in place (its bitmap chunks sit at
+        fixed offsets that later file data already occupies), so libapa/libpfs
+        grow a partition by adding a *sub-partition*: a fresh APA extent with its
+        own independent bitmap, referenced from the main header's subs[] table
+        and counted by the superblock's num_subs. The existing allocator already
+        sweeps every subpart (see _search_free_zone), so once the sub is wired in
+        and its bitmap initialised, pfs_write can allocate from it transparently.
+
+        `extra_bytes` is the minimum extra *free* space wanted; the sub is sized
+        to the smallest disk-end-aligned power-of-two ≥ that (plus margin), min
+        128 MiB, max 2 GiB. The image FILE is extended to hold it. Returns a dict
+        with the new sub's start/length/zones. Requires the device be writable.
+        Mirrors libapa apa_header_t (id empty on a sub; main/number back-links)
+        and libpfs subpart bitmap layout; verified by re-mounting + free recount.
+        """
+        if not self.dev.writable or self.dev.overlay:
+            raise PermissionError("grow_partition needs a writable (non-overlay) device")
+        self._mount(name)
+        part = self._find_part(name)
+        sb = self._supers[name]
+        if sb["num_subs"] != 0:
+            # Keep it simple + safe: one sub is enough for our use. Extending an
+            # already-subbed partition would append subs[1] — not needed here.
+            raise NotImplementedError(
+                "partition already has %d sub-partition(s); multi-sub grow not "
+                "implemented" % sb["num_subs"])
+        zs = sb["zone_size"]                     # 8192
+        sec_per_zone = zs // SECTOR              # 16
+
+        # --- size the new sub: aligned power-of-two, min 128 MiB, max 2 GiB ---
+        disk_end = max(p.start + p.length for p in self._read_apa_chain())
+        # headroom so a slightly bigger re-merge doesn't need another grow
+        if margin is None:
+            margin = max(256 * 1024 * 1024, extra_bytes // 2)
+        want_sectors = (extra_bytes + margin + SECTOR - 1) // SECTOR
+        sub_sectors = 1 << max(0, (want_sectors - 1)).bit_length()
+        sub_sectors = max(sub_sectors, min_sub_sectors)  # ≥128 MiB (APA minimum)
+        sub_sectors = min(sub_sectors, max_sub_sectors)  # ≤2 GiB (start stays aligned)
+        if disk_end % sub_sectors != 0:
+            raise ValueError(
+                "disk end LBA %d is not aligned to a %d-sector partition; "
+                "cannot place an APA-legal sub there" % (disk_end, sub_sectors))
+        sub_start = disk_end
+        sub_zones = sub_sectors >> (sec_per_zone.bit_length() - 1)   # //16
+        log("grow %s: adding a %.0f MiB sub-partition at LBA %d (%d zones)"
+            % (name, sub_sectors * SECTOR / 1048576, sub_start, sub_zones))
+
+        # --- 1) extend the image file to cover the new sub (sparse) ----------
+        end_sector = sub_start + sub_sectors - 1
+        self.dev.write_sectors(end_sector, b"\x00" * SECTOR)   # grows the file
+        self.dev.size = (end_sector + 1) * SECTOR
+
+        # --- 2) write the new sub-partition APA header -----------------------
+        sub_hdr = bytearray(1024)
+        struct.pack_into("<I", sub_hdr, 0x04, APA_MAGIC)
+        struct.pack_into("<I", sub_hdr, 0x08, 0)               # next (new tail)
+        struct.pack_into("<I", sub_hdr, 0x0C, part.lba)        # prev = main
+        # id (0x10) left empty — libapa sub-partitions carry no name
+        struct.pack_into("<I", sub_hdr, 0x40, sub_start)       # start
+        struct.pack_into("<I", sub_hdr, 0x44, sub_sectors)     # length
+        struct.pack_into("<H", sub_hdr, 0x48, part.type)       # type = main's
+        struct.pack_into("<H", sub_hdr, 0x4A, APA_FLAG_SUB)    # flags: SUB
+        struct.pack_into("<I", sub_hdr, 0x4C, 0)               # nsub
+        struct.pack_into("<I", sub_hdr, 0x54, part.lba)        # main -> main LBA
+        struct.pack_into("<I", sub_hdr, 0x58, 1)               # number (1st sub)
+        struct.pack_into("<I", sub_hdr, 0x00,
+                         ApaPartition.checksum_of(bytes(sub_hdr)))
+        self.dev.write_sectors(sub_start, bytes(sub_hdr))
+
+        # --- 3) update the main header: subs[0], nsub, next, checksum --------
+        main_raw = bytearray(self.dev.read_sectors(part.lba, 2))
+        struct.pack_into("<I", main_raw, 0x1C0 + 0, sub_start)     # subs[0].start
+        struct.pack_into("<I", main_raw, 0x1C0 + 4, sub_sectors)   # subs[0].length
+        struct.pack_into("<I", main_raw, 0x4C, 1)                  # nsub
+        struct.pack_into("<I", main_raw, 0x08, sub_start)          # next -> sub
+        struct.pack_into("<I", main_raw, 0x00, 0)
+        struct.pack_into("<I", main_raw, 0x00,
+                         ApaPartition.checksum_of(bytes(main_raw[:1024])))
+        self.dev.write_sectors(part.lba, bytes(main_raw[:1024]))
+
+        # --- 4) update __mbr.prev (the APA tail pointer) ---------------------
+        mbr = self._read_apa_chain()[0]
+        if mbr.id == "__mbr":
+            mbr_raw = bytearray(self.dev.read_sectors(mbr.lba, 2))
+            struct.pack_into("<I", mbr_raw, 0x0C, sub_start)      # prev = new tail
+            struct.pack_into("<I", mbr_raw, 0x00, 0)
+            struct.pack_into("<I", mbr_raw, 0x00,
+                             ApaPartition.checksum_of(bytes(mbr_raw[:1024])))
+            self.dev.write_sectors(mbr.lba, bytes(mbr_raw[:1024]))
+
+        # --- 5) superblock: num_subs = 1 -------------------------------------
+        self.dev.write_bytes(sb["super_lba"] * SECTOR + 0x14, struct.pack("<I", 1))
+
+        # --- 6) initialise the new subpart's bitmap (all free but its own
+        #        chunk-backing zones + zone 0, which we reserve to match libpfs)
+        self._invalidate()
+        self._mount(name)
+        part = self._find_part(name)
+        bm = self._get_bitmap(name, 1)             # reads the zeroed region = all free
+        reserved = set(bm.reserved_zones())
+        reserved.add(0)                            # be conservative: keep zone 0 used
+        for z in sorted(reserved):
+            if bm.test(z) == 0:
+                bm.mark_used(z, 1)
+        bm.flush()
+        self.dev.sync()
+
+        # --- 7) verify by re-mounting + recounting free zones ----------------
+        self._invalidate()
+        self._mount(name)
+        bm_cache = {}
+        free_after = self._total_free_zones(name, bm_cache)
+        self._bitmap_for(name, bm_cache, 1).verify_reserved()
+        log("grow %s: done - sub zones=%d, total free zones now %d (%.0f MiB)"
+            % (name, sub_zones, free_after, free_after * zs / 1048576))
+        return {"sub_start": sub_start, "sub_sectors": sub_sectors,
+                "sub_zones": sub_zones, "free_zones": free_after,
+                "new_image_bytes": self.dev.size}
+
     def pfs_write(self, partition_name, path, data):
         """Replace an existing file's content, supporting in-place, shrink AND
         grow (the grow path ports pfsshell's bitmap allocator + inode/segment

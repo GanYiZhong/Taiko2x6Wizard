@@ -15,7 +15,8 @@ release/Font.ttf
 release/T14LOAD.bin
 release/pfsshell.exe
 release/vgmstream-win64/
-build_log.txt
+build_log*.txt
+dist2/
 
 # ── Local settings (machine-specific paths) ────────────────────────────────
 config.ini

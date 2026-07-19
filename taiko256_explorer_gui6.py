@@ -882,6 +882,15 @@ class MainWindow(QMainWindow):
             "selects which game boots. Sources are never modified.")
         self.act_apamerge.triggered.connect(self.open_apa_merge)
 
+        self.act_omnimix = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
+                                   "Omnimix Maker (fuse many games)…", self)
+        self.act_omnimix.setToolTip(
+            "Harvest every song from several Taiko images (8…14) and merge the "
+            "ones the target lacks into one image — charts, textures, audio and "
+            "stars — then lift the exe's song ceiling. Dedup by id; the target is "
+            "the base. Close any emulator holding the images first.")
+        self.act_omnimix.triggered.connect(self.open_omnimix)
+
         self.act_gen3conv = QAction("Gen3 → Gen2 converter…", self)
         self.act_gen3conv.setToolTip(
             "Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin to "
@@ -932,6 +941,7 @@ class MainWindow(QMainWindow):
         tools.addAction(self.act_taikotimer)
         tools.addAction(self.act_imgslim)
         tools.addAction(self.act_apamerge)
+        tools.addAction(self.act_omnimix)
         tools.addAction(self.act_gen3conv)
         self._update_actions()
 
@@ -1418,6 +1428,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Merge HDD images", "PySide6 is required.")
             return
         dlg = apa_merge.ApaMergeDialog(self)
+        dlg.exec()
+
+    def open_omnimix(self):
+        try:
+            import omnimix_gui
+        except Exception as exc:
+            QMessageBox.warning(self, "Omnimix Maker", f"Could not load: {exc}")
+            return
+        dlg = omnimix_gui.OmnimixDialog(self, default_img=self._recent_hdd_img() or "")
         dlg.exec()
 
     def open_pack_iso(self):
