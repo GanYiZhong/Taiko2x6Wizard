@@ -469,6 +469,113 @@ def patch_select_timer(dec: bytes, seconds: int, log=print) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
+#  Boot-flow patches (RE'd 2026-07): skip Notice/Copyright, kill select timer.
+#
+#  NOTE: `patch_select_timer` above rewrites [0x140D18,0x1424C0,0x1426C8] —
+#  those are the CLOCK-SET / service-screen countdowns, NOT the in-game select
+#  countdowns, which is why editing them had no visible effect. The functions
+#  below target the real handlers found by reversing the ArcadeSystemManager
+#  boot state machine and the CourseSelect update loop.
+# --------------------------------------------------------------------------- #
+
+# Notice + Copyright are a single 600-frame (10 s) screen: NoticeInit(0x134400)
+# hands off to NoticeWait, which draws "NOTICE" + the INTERNATIONAL COPYRIGHT
+# lines, then transitions to GameInit(0x134680). Rewriting NoticeInit's entry as
+# a tail `j GameInit` skips the whole screen with zero visible frames — GameInit
+# is self-contained (own prologue, installs the real game handler).
+_NOTICE_INIT  = 0x00134400
+_GAME_INIT    = 0x00134680
+_NOTICE_GUARD = (0x44806000, 0x27bdffe0)   # mtc1 $zero,$f12 ; addiu $sp,-0x20
+_NOTICE_J     = 0x08000000 | ((_GAME_INIT >> 2) & 0x03FFFFFF)   # j 0x134680
+
+
+def is_notice_skipped(dec: bytes) -> bool:
+    return struct.unpack_from('<I', dec, _NOTICE_INIT - DELTA)[0] == _NOTICE_J
+
+
+def patch_skip_notice(dec: bytes, log=print) -> bytes:
+    """Skip the boot Notice/Copyright screen: NoticeInit -> `j GameInit`."""
+    buf = bytearray(dec)
+    o = _NOTICE_INIT - DELTA
+    if struct.unpack_from('<I', buf, o)[0] == _NOTICE_J:
+        log(f'{_NOTICE_INIT:08X}  Notice/Copyright already skipped')
+        return bytes(buf)
+    guard = (struct.unpack_from('<I', buf, o)[0],
+             struct.unpack_from('<I', buf, o + 4)[0])
+    if guard != _NOTICE_GUARD:
+        raise TaikoExeError(
+            f'{_NOTICE_INIT:08X}: NoticeInit prologue mismatch '
+            f'({guard[0]:#010x} {guard[1]:#010x}) — refusing')
+    struct.pack_into('<I', buf, o,     _NOTICE_J)   # j GameInit
+    struct.pack_into('<I', buf, o + 4, 0)           # delay-slot nop
+    log(f'{_NOTICE_INIT:08X}  NoticeInit -> j {_GAME_INIT:08X}   '
+        f'(Notice/Copyright skipped)')
+    return bytes(buf)
+
+
+# Difficulty (course) select 30 s timeout lives in the CourseSelect update
+# sub_125540: the per-player elapsed-frame counter is compared to 1799 (~30 s,
+# "time up" cue) and 1918 (~32 s, force-start EnsoGame). Replacing each
+# `slti $15,$2,imm` with `li $15,1` pins the "still has time" result, so the
+# screen never auto-advances and never fires the time-up cue.
+_DIFF_TIMER_SITES = {0x00125584: 1918, 0x00125588: 1799, 0x00125590: 1918}
+_LI_V16 = 0x240F0001   # addiu $15,$zero,1
+
+
+def is_diff_timer_disabled(dec: bytes) -> bool:
+    return all(struct.unpack_from('<I', dec, va - DELTA)[0] == _LI_V16
+               for va in _DIFF_TIMER_SITES)
+
+
+def patch_difficulty_timer(dec: bytes, log=print) -> bytes:
+    """Disable the 30 s difficulty(course)-select countdown timeout."""
+    buf = bytearray(dec)
+    for va, imm in _DIFF_TIMER_SITES.items():
+        o = va - DELTA
+        cur = struct.unpack_from('<I', buf, o)[0]
+        if cur == _LI_V16:
+            log(f'{va:08X}  difficulty timer already off')
+            continue
+        if (cur >> 26) != 0x0A or (cur & 0xffff) != imm or ((cur >> 16) & 0x1f) != 15:
+            raise TaikoExeError(
+                f'{va:08X}: expected `slti $15,$2,{imm}` (got {cur:#010x}) — refusing')
+        struct.pack_into('<I', buf, o, _LI_V16)
+        log(f'{va:08X}  slti $15,$2,{imm} -> li $15,1   (difficulty timer off)')
+    return bytes(buf)
+
+
+# Attract-loop license/credits screen ("協力" + McDonald's/Nintendo/Capcom/… roll)
+# is a separate state from the boot Notice. LicenseAdvertiseWait (sub_146CB8) waits
+# on `bnezl $v0, loc_146DB4` @0x146CDC — branch-likely: while the credits controller
+# is still displaying it returns (stays). NOP that branch so the Wait always falls
+# through to its own cleanup (sub_14C3F0) + transition on frame 1 -> credits dismissed
+# immediately, WITH proper teardown (no lingering image).
+_COPYRIGHT_BNEZL = 0x00146CDC
+_COPYRIGHT_ORIG  = 0x54400035   # bnezl $v0, loc_146DB4
+
+
+def is_copyright_skipped(dec: bytes) -> bool:
+    return struct.unpack_from('<I', dec, _COPYRIGHT_BNEZL - DELTA)[0] == 0
+
+
+def patch_skip_copyright(dec: bytes, log=print) -> bytes:
+    """Skip the attract-loop license/credits (協力) screen."""
+    buf = bytearray(dec)
+    o = _COPYRIGHT_BNEZL - DELTA
+    cur = struct.unpack_from('<I', buf, o)[0]
+    if cur == 0:
+        log(f'{_COPYRIGHT_BNEZL:08X}  credits screen already skipped')
+        return bytes(buf)
+    if cur != _COPYRIGHT_ORIG:
+        raise TaikoExeError(
+            f'{_COPYRIGHT_BNEZL:08X}: expected `bnezl $v0` ({_COPYRIGHT_ORIG:#010x}, '
+            f'got {cur:#010x}) — refusing')
+    struct.pack_into('<I', buf, o, 0)   # nop
+    log(f'{_COPYRIGHT_BNEZL:08X}  bnezl $v0 -> nop   (License/credits screen skipped)')
+    return bytes(buf)
+
+
+# --------------------------------------------------------------------------- #
 #  HDD image I/O
 # --------------------------------------------------------------------------- #
 def read_from_hdd(img: str | Path, partition: str = PARTITION) -> bytes:
@@ -554,6 +661,39 @@ def patch_hdd_timer(img: str | Path, seconds: int, partition: str = PARTITION,
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'seconds': seconds, 'was': cur, 'md5': md5}
+
+
+def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
+                   disable_diff_timer: bool = True, skip_copyright: bool = True,
+                   partition: str = PARTITION,
+                   t14load=None, log=print, progress=None) -> dict:
+    """Apply boot-flow patches to /taiko in place: skip the boot Notice screen,
+    skip the attract license/credits (協力) screen, and/or disable the difficulty-
+    select timeout. Independent of the song-ceiling patch; round-trip-verified
+    before the image is touched."""
+    import hashlib
+    enc = read_from_hdd(img, partition)
+    dec = decrypt_taiko(enc, t14load, progress)
+    log(f'decrypted OK (ELF32); notice_skipped={is_notice_skipped(dec)} '
+        f'copyright_skipped={is_copyright_skipped(dec)} '
+        f'diff_timer_off={is_diff_timer_disabled(dec)}')
+    out, applied = dec, []
+    if skip_notice:
+        out = patch_skip_notice(out, log); applied.append('skip_notice')
+    if skip_copyright:
+        out = patch_skip_copyright(out, log); applied.append('skip_copyright')
+    if disable_diff_timer:
+        out = patch_difficulty_timer(out, log); applied.append('diff_timer_off')
+    if out == dec:
+        log('nothing to do — already patched')
+        return {'applied': [], 'md5': hashlib.md5(enc).hexdigest()}
+    new_enc = encrypt_taiko(out, t14load, progress)
+    if decrypt_taiko(new_enc, t14load) != out:
+        raise TaikoExeError('repack failed its round-trip self-check — not writing')
+    write_to_hdd(img, new_enc, partition)
+    md5 = hashlib.md5(new_enc).hexdigest()
+    log(f'written and read back OK — md5 {md5}')
+    return {'applied': applied, 'md5': md5}
 
 
 def restore_hdd(img: str | Path, pristine: str | Path,

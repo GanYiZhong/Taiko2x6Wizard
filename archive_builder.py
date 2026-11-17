@@ -94,13 +94,33 @@ def _build_payload(files: list) -> tuple:
     return payload, recs
 
 
-def build_archive(archive, new_group_specs=None, extra_files=None) -> tuple:
+def build_archive(archive, new_group_specs=None, extra_files=None,
+                  compact=False, pin_sectors=None, ghosts=None) -> tuple:
     """Rebuild (list_bytes, data_bytes) for `archive` with additions applied.
 
     new_group_specs: list of {"name": str, "files": [(fname, bytes)], "compression": 2}
     extra_files: {existing_group_name: [(fname, bytes), ...]} to append files into
-                 an existing group (e.g. select_full_<id> into music_texture.music_select)
+                 an existing group (e.g. select_full_<id> into music_select)
     Staged edits in archive.replacements are also applied.
+
+    compact=False (default): unchanged groups keep their original sectors, the
+    original data region is preserved verbatim and changes are appended -- the
+    output can never SHRINK below the original size.
+    compact=True: re-lay every group densely (name order) so shrunken content
+    actually shrinks the archive. PINNED_GROUPS (gamedata/soundinfo -- the ones
+    the game reads by ABSOLUTE sector) keep their original sectors; everything
+    else is table-driven ("a group may live at ANY sector", see layout note
+    below) so dense placement is safe.
+
+    pin_sectors: optional {group_name: sector} -- in compact mode, place these
+    UNCHANGED groups at exactly these sectors instead of packing them (used to
+    keep every non-song group at its retail position, which every known-working
+    image preserves). Overrides the PINNED_GROUPS default.
+    ghosts: optional [(byte_offset, bytes)] -- raw byte ranges written into the
+    output DATA at fixed offsets, NOT referenced by the table. Used to leave
+    stale-but-well-formed copies of gamedata/soundinfo at the absolute
+    positions the game reads outside the table (T14 boot/sound init), exactly
+    as append-mode builds do by preserving the original region.
 
     Return contract (relied on by song_builder): (list_bytes: bytes, data_bytes: bytearray).
     Note on memory: the source DATA.000 is mmap-ed (not fully copied), but the
@@ -225,20 +245,61 @@ def build_archive(archive, new_group_specs=None, extra_files=None) -> tuple:
         #   * new groups / edited groups that outgrew their slot -> append past the
         #     end of the original DATA.000 (their record's sector points there)
         # No group is "pinned" or evicted: reads are table-driven, not absolute.
-        append_pos = orig_bytes                    # dense archive => already aligned
-        for g in assembled:
-            if g["enc"] is None:                   # unchanged: keep original sector
-                g["out_off"] = g["src_off"]
-                g["sector"] = g["src_off"] // SECTOR
-            elif g.get("orig_sector") is not None and g["length"] <= g["orig_cap"]:
-                g["out_off"] = g["orig_sector"] * SECTOR   # edited, fits in place
-                g["sector"] = g["orig_sector"]
-            else:                                  # new / outgrew: append
-                sector = core.align(append_pos, SECTOR) // SECTOR
-                g["out_off"] = sector * SECTOR
-                g["sector"] = sector
-                append_pos = g["out_off"] + g["length"]
-        total = max(append_pos, orig_bytes)
+        if compact:
+            # Dense re-layout: pinned groups stay at fixed sectors, everything
+            # else packs sequentially (name order) around them (and around any
+            # ghost byte-ranges).
+            def _pin_sector(g):
+                if pin_sectors is not None:
+                    return pin_sectors.get(g["_name"])
+                if g["_name"] in PINNED_GROUPS and g.get("orig_sector") is not None:
+                    return g["orig_sector"]
+                return None
+            pinned_extents = [(off, len(data)) for off, data in (ghosts or [])]
+            for g in assembled:
+                ps = _pin_sector(g)
+                if ps is not None:
+                    g["out_off"] = ps * SECTOR
+                    g["sector"] = ps
+                    pinned_extents.append((g["out_off"], g["length"]))
+            pinned_extents.sort()
+            start = min((g["src_off"] for g in assembled
+                         if g["src_off"] is not None), default=0)
+            cursor = start
+            for g in sorted(assembled, key=lambda x: x["_name"].encode("latin-1")):
+                if _pin_sector(g) is not None:
+                    continue
+                length = g["length"]
+                pos = core.align(cursor, SECTOR)
+                # skip over any pinned/ghost extent we'd overlap
+                moved = True
+                while moved:
+                    moved = False
+                    for po, pl in pinned_extents:
+                        if pos < po + pl and po < pos + length:
+                            pos = core.align(po + pl, SECTOR)
+                            moved = True
+                g["out_off"] = pos
+                g["sector"] = pos // SECTOR
+                cursor = pos + length
+            total = max(g["out_off"] + g["length"] for g in assembled)
+            for off, data in (ghosts or []):
+                total = max(total, off + len(data))
+        else:
+            append_pos = orig_bytes                # dense archive => already aligned
+            for g in assembled:
+                if g["enc"] is None:               # unchanged: keep original sector
+                    g["out_off"] = g["src_off"]
+                    g["sector"] = g["src_off"] // SECTOR
+                elif g.get("orig_sector") is not None and g["length"] <= g["orig_cap"]:
+                    g["out_off"] = g["orig_sector"] * SECTOR   # edited, fits in place
+                    g["sector"] = g["orig_sector"]
+                else:                              # new / outgrew: append
+                    sector = core.align(append_pos, SECTOR) // SECTOR
+                    g["out_off"] = sector * SECTOR
+                    g["sector"] = sector
+                    append_pos = g["out_off"] + g["length"]
+            total = max(append_pos, orig_bytes)
 
         # The game binary-searches the GROUP table by name, so the group records
         # MUST stay sorted by name (bytewise / strcmp order). New groups were
@@ -273,22 +334,36 @@ def build_archive(archive, new_group_specs=None, extra_files=None) -> tuple:
                     fr["name_offset"], fr["size"], fr["offset"], fr["unknown"])
             first_file += len(g["files"])
 
-        # ---- DATA.000: preserve original region verbatim, append changes ----
-        new_data = bytearray(total)                          # zero-filled tail
+        # ---- DATA.000 ----
+        new_data = bytearray(total)                          # zero-filled
         dst = memoryview(new_data)
-        # Copy the entire original data region in one shot: this keeps every
-        # unchanged group byte-identical at its original sector (including any
-        # inter-group alignment padding), which is what the absolute-sector boot
-        # loader depends on.
-        dst[:orig_bytes] = src_mv[:orig_bytes]
-        for g in assembled:                                  # write appended blocks
-            o, length = g["out_off"], g["length"]
-            if g["enc"] is not None:                         # edited/new: encoded bytes
-                dst[o:o + length] = g["enc"]
-            elif o != g["src_off"]:                          # evicted unchanged group:
-                # it moved out of the verbatim-copied region, so copy its original
-                # (already-encoded) block from the source to the new location.
-                dst[o:o + length] = src_mv[g["src_off"]:g["src_off"] + length]
+        if compact:
+            # Dense mode: write every group at its (possibly new) offset.
+            # Unchanged groups' encoded blocks are copied verbatim from source;
+            # inter-group padding becomes zeros (reads are (sector,length)
+            # bounded via LIST.BIN, padding content is never read).
+            for g in assembled:
+                o, length = g["out_off"], g["length"]
+                if g["enc"] is not None:
+                    dst[o:o + length] = g["enc"]
+                else:
+                    dst[o:o + length] = src_mv[g["src_off"]:g["src_off"] + length]
+            for off, data in (ghosts or []):     # untabled absolute-read copies
+                dst[off:off + len(data)] = data
+        else:
+            # Copy the entire original data region in one shot: this keeps every
+            # unchanged group byte-identical at its original sector (including any
+            # inter-group alignment padding), which is what the absolute-sector boot
+            # loader depends on.
+            dst[:orig_bytes] = src_mv[:orig_bytes]
+            for g in assembled:                              # write appended blocks
+                o, length = g["out_off"], g["length"]
+                if g["enc"] is not None:                     # edited/new: encoded bytes
+                    dst[o:o + length] = g["enc"]
+                elif o != g["src_off"]:                      # evicted unchanged group:
+                    # it moved out of the verbatim-copied region, so copy its original
+                    # (already-encoded) block from the source to the new location.
+                    dst[o:o + length] = src_mv[g["src_off"]:g["src_off"] + length]
 
         return crypt_list_fast(bytes(new_dl)), new_data
     finally:

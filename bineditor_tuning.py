@@ -175,7 +175,11 @@ def _scan_blocks(data: bytes, pool_offset: int):
     groups.append(cur)
 
     marker_byte = NEG_MARKER_INDEX * 4
-    starts = [g[0] - marker_byte for g in groups]
+    # A marker cluster whose first marker sits before index 15 (offset < 60) would
+    # imply a negative block start — that's a spurious match in a header/preamble
+    # (seen on Taiko 7's tuning), not a real block. Drop it. T8's first real block
+    # starts at offset 0 with its marker at 60, so genuine blocks are never dropped.
+    starts = [g[0] - marker_byte for g in groups if g[0] - marker_byte >= 0]
     bounds = starts + [pool_offset]
     return starts, bounds
 

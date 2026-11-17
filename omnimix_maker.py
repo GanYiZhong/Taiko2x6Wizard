@@ -447,13 +447,20 @@ def precompute_db(target, plan, template_id=None) -> dict:
     return sm._build_result()
 
 
-def assemble(target, sources, plan, precomputed_db, log=lambda s: None) -> dict:
+def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
+             audio_override=None) -> dict:
     """WORKER-THREAD step: harvest every added song and emit the merged archive.
 
     Copies each planned song's chart/texture/audio groups (and its shared-group
     select files) verbatim from its source, stages the precomputed DB bins, and
     does one archive_builder.build_archive. Returns
     {"list", "data", "added", "total", "errors", "warnings"}. No QWidget here.
+
+    audio_override: optional {sid: vag_bytes} — substitute an added song's
+    sound stream at HARVEST time (e.g. a re-encoded/compressed version). This
+    is the only way a smaller stream actually shrinks the output: build_archive
+    appends new groups and never shrinks, so post-rebuild replacement of an
+    already-appended stream would only leave padding.
     """
     import song_builder
     import archive_builder
@@ -479,6 +486,12 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None) -> dict:
                         result["warnings"].append(
                             f"{it.sid} ({label}): no chart groups found — skipped")
                         continue
+                    ov = audio_override.get(it.sid) if audio_override else None
+                    if ov is not None:
+                        want = "sound.stream.music_" + it.sid
+                        for gg in g:
+                            if gg["name"] == want:
+                                gg["files"] = [(fn, ov) for fn, _old in gg["files"]]
                     it.assets = song_asset_summary(g, x)
                     new_groups.extend(g)
                     for gn, files in x.items():

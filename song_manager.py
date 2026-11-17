@@ -941,6 +941,14 @@ class SongManager(QDialog):
                     rec = new_sec0[i]
                     rec[13] = rec[14] = rec[15] = rec[16] = i
                     rec[10] = -1
+                    # col2 = genre folder. A cloned row inherits the TEMPLATE's
+                    # genre, so without this EVERY added song lands in the
+                    # template's folder. Use the song's real source genre when the
+                    # spec carries one (clamped to the 7 real folders 0..6; 7/9-15
+                    # are header-row markers, never a song genre).
+                    g = self._new_songs[ref].get("genre")
+                    if g is not None:
+                        rec[GENRE_COL] = max(0, min(6, int(g)))
 
         # Now overlay edited per-song values. self._songs is aligned to _order.
         # Apply DIFF-BASED to stay byte-exact: only touch a column when its
@@ -1065,6 +1073,21 @@ class SongManager(QDialog):
 
         # structural add/remove
         ids = _music_ids_from_tuning(self.tu)
+        # ``ref`` is a MUSICINFO index (from _order); on T14 the musicinfo row
+        # order differs from tuning id order, so ``ids[ref]`` (a TUNING id) names
+        # the WRONG song. A kept song's stream is music_<its musicinfo id>, so
+        # resolve the name from the musicinfo pool for T14. (T8 is parallel, so
+        # _mi_id(ref) == ids[ref] there — keep ids[ref] to stay byte-exact.)
+        is_t14 = _is_t14_tuning(self._tu_in)
+        mipool = getattr(self.mi, "pool", None)
+        def _mi_id(k):
+            o = self.mi.sec0[k][0]
+            e = mipool.find(b"\x00", o)
+            return bytes(mipool[o:e if e >= 0 else len(mipool)]).decode("latin-1")
+        def _keep_id(k):
+            if is_t14 and mipool is not None and 0 <= k < len(self.mi.sec0):
+                return _mi_id(k)
+            return ids[k] if k < len(ids) else None
         keep_names = set()
         add_specs = []
         # determine, per order entry, the stream record involved
@@ -1076,7 +1099,8 @@ class SongManager(QDialog):
                 if tmpl is not None and song.stream:
                     add_specs.append((song.stream, tmpl))
             else:
-                orig_name = f"music_{ids[ref]}" if ref < len(ids) else None
+                kid = _keep_id(ref)
+                orig_name = f"music_{kid}" if kid is not None else None
                 if orig_name and orig_name in by_name:
                     keep_names.add(orig_name)
         return _stream_rebuild(s, keep_names, add_specs)

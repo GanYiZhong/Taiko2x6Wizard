@@ -1102,17 +1102,102 @@ class Ps2Hdd:
         log("grow %s: adding a %.0f MiB sub-partition at LBA %d (%d zones)"
             % (name, sub_sectors * SECTOR / 1048576, sub_start, sub_zones))
 
-        # --- 1) extend the image file to cover the new sub (sparse) ----------
+        # The sub must be ADDRESSABLE by the emulated drive, whose size follows
+        # the image FILE size. If the file already extends past the sub (e.g. a
+        # 80 GB image whose partitions only cover the first 6 GB), append the
+        # sub INSIDE the existing envelope and leave the file size alone --
+        # changing the file size of a configured HDD is what breaks the drive
+        # in-game (disk err -5). Only a file that really ends at the partition
+        # tail is extended.
         end_sector = sub_start + sub_sectors - 1
-        self.dev.write_sectors(end_sector, b"\x00" * SECTOR)   # grows the file
-        self.dev.size = (end_sector + 1) * SECTOR
+        file_sectors = self.dev.size // SECTOR
+        if end_sector >= file_sectors:
+            log("grow %s: WARNING image file ends at sector %d; extending it to "
+                "%d — the emulated drive's size will change, which some "
+                "HDD configurations reject" % (name, file_sectors, end_sector + 1))
+            self.dev.write_sectors(end_sector, b"\x00" * SECTOR)   # grows the file
+            self.dev.size = max(self.dev.size, (end_sector + 1) * SECTOR)
+        else:
+            log("grow %s: sub fits inside the existing %.2f GB image file "
+                "(no file-size change)" % (name, self.dev.size / 1024**3))
+        return self._attach_sub(name, sub_start, sub_sectors, log)
 
-        # --- 2) write the new sub-partition APA header -----------------------
+    def grow_partition_reclaim(self, name, victim, log=print):
+        """Enlarge PFS partition `name` by reclaiming another partition `victim`
+        as a sub-partition — WITHOUT growing the image file.
+
+        On fixed-size arcade disks the drive can't address sectors past the
+        original end, so appending (grow_partition) produces an image that
+        reads garbage / ``disk err`` in-game. Instead this repurposes an
+        unused partition that already lives INSIDE the disk (e.g. Taiko 14's
+        `t14jp1400.0000`, a base/staging copy with no `taiko`): it removes the
+        victim from the APA main chain and re-homes its extent as `name`'s
+        sub-partition. The sub is NOT placed in the main next-chain (libapa
+        finds subs via the main header's subs[] table), matching how this tool
+        already reads sub-partitions.
+
+        DESTROYS the victim partition's contents. Requires writable device.
+        """
+        if not self.dev.writable or self.dev.overlay:
+            raise PermissionError("grow_partition_reclaim needs a writable device")
+        self._mount(name)
+        part = self._find_part(name)
+        vic = self._find_part(victim)
+        sb = self._supers[name]
+        if sb["num_subs"] != 0:
+            raise NotImplementedError("partition already has a sub-partition")
+        if vic.id == part.id:
+            raise ValueError("victim must differ from the grown partition")
+        chain = self._read_apa_chain()
+        # predecessor in the chain (whose next == victim.lba)
+        pred = next((p for p in chain if p.next == vic.lba), None)
+        if pred is None:
+            raise ValueError("could not find %r's predecessor in the APA chain" % victim)
+        log("reclaim %s (%d MiB @LBA %d) as a sub of %s"
+            % (victim, vic.length * SECTOR // 1048576, vic.start, name))
+
+        # 1) unlink the victim from the main chain: pred.next -> victim.next
+        self._patch_apa(pred.lba, {0x08: vic.next})
+        # 2) if the grown partition pointed back at the victim, fix its prev
+        if part.prev == vic.lba:
+            self._patch_apa(part.lba, {0x0C: pred.lba})
+        # 3) if the victim was the chain tail, move __mbr.prev to its predecessor
+        mbr = chain[0]
+        if mbr.id == "__mbr" and mbr.prev == vic.lba:
+            self._patch_apa(mbr.lba, {0x0C: pred.lba})
+
+        self._invalidate()
+        self._mount(name)
+        return self._attach_sub(name, vic.start, vic.length, log)
+
+    def _patch_apa(self, lba, fields):
+        """Set u32 `fields` {off: value} in the APA header at `lba` and re-checksum."""
+        raw = bytearray(self.dev.read_sectors(lba, 2))
+        for off, val in fields.items():
+            struct.pack_into("<I", raw, off, val)
+        struct.pack_into("<I", raw, 0x00, 0)
+        struct.pack_into("<I", raw, 0x00, ApaPartition.checksum_of(bytes(raw[:1024])))
+        self.dev.write_sectors(lba, bytes(raw[:1024]))
+
+    def _attach_sub(self, name, sub_start, sub_sectors, log=print):
+        """Wire an APA extent [sub_start, +sub_sectors] as subpart 1 of `name`:
+        write an out-of-chain SUB header, add subs[0]+nsub to the main header,
+        bump the superblock num_subs, and initialise the subpart's bitmap
+        (all zones FREE except its own chunk-backing zones + zone 0). The sub
+        must already be zeroed on disk (fresh/appended) or reclaimed; existing
+        stale data in a reclaimed extent is fine because the bitmap marks it
+        free and pfs_write only overwrites zones it allocates."""
+        part = self._find_part(name)
+        sb = self._supers[name]
+        zs = sb["zone_size"]
+        sub_zones = sub_sectors >> ((0x2000 // SECTOR).bit_length() - 1)  # //16
+
+        # SUB header (kept OUT of the main next-chain; found via main.subs[])
         sub_hdr = bytearray(1024)
         struct.pack_into("<I", sub_hdr, 0x04, APA_MAGIC)
-        struct.pack_into("<I", sub_hdr, 0x08, 0)               # next (new tail)
-        struct.pack_into("<I", sub_hdr, 0x0C, part.lba)        # prev = main
-        # id (0x10) left empty — libapa sub-partitions carry no name
+        struct.pack_into("<I", sub_hdr, 0x08, 0)               # next
+        struct.pack_into("<I", sub_hdr, 0x0C, 0)               # prev
+        # id (0x10) empty — sub-partitions carry no name
         struct.pack_into("<I", sub_hdr, 0x40, sub_start)       # start
         struct.pack_into("<I", sub_hdr, 0x44, sub_sectors)     # length
         struct.pack_into("<H", sub_hdr, 0x48, part.type)       # type = main's
@@ -1124,45 +1209,38 @@ class Ps2Hdd:
                          ApaPartition.checksum_of(bytes(sub_hdr)))
         self.dev.write_sectors(sub_start, bytes(sub_hdr))
 
-        # --- 3) update the main header: subs[0], nsub, next, checksum --------
+        # main header: subs[0], nsub=1, re-checksum (leave next/prev as-is)
         main_raw = bytearray(self.dev.read_sectors(part.lba, 2))
-        struct.pack_into("<I", main_raw, 0x1C0 + 0, sub_start)     # subs[0].start
-        struct.pack_into("<I", main_raw, 0x1C0 + 4, sub_sectors)   # subs[0].length
-        struct.pack_into("<I", main_raw, 0x4C, 1)                  # nsub
-        struct.pack_into("<I", main_raw, 0x08, sub_start)          # next -> sub
+        struct.pack_into("<I", main_raw, 0x1C0 + 0, sub_start)
+        struct.pack_into("<I", main_raw, 0x1C0 + 4, sub_sectors)
+        struct.pack_into("<I", main_raw, 0x4C, 1)
         struct.pack_into("<I", main_raw, 0x00, 0)
         struct.pack_into("<I", main_raw, 0x00,
                          ApaPartition.checksum_of(bytes(main_raw[:1024])))
         self.dev.write_sectors(part.lba, bytes(main_raw[:1024]))
 
-        # --- 4) update __mbr.prev (the APA tail pointer) ---------------------
-        mbr = self._read_apa_chain()[0]
-        if mbr.id == "__mbr":
-            mbr_raw = bytearray(self.dev.read_sectors(mbr.lba, 2))
-            struct.pack_into("<I", mbr_raw, 0x0C, sub_start)      # prev = new tail
-            struct.pack_into("<I", mbr_raw, 0x00, 0)
-            struct.pack_into("<I", mbr_raw, 0x00,
-                             ApaPartition.checksum_of(bytes(mbr_raw[:1024])))
-            self.dev.write_sectors(mbr.lba, bytes(mbr_raw[:1024]))
-
-        # --- 5) superblock: num_subs = 1 -------------------------------------
+        # superblock num_subs = 1
         self.dev.write_bytes(sb["super_lba"] * SECTOR + 0x14, struct.pack("<I", 1))
 
-        # --- 6) initialise the new subpart's bitmap (all free but its own
-        #        chunk-backing zones + zone 0, which we reserve to match libpfs)
+        # initialise the subpart bitmap: everything FREE but the bitmap's own
+        # chunk-backing zones (+ zone 0, reserved conservatively). A reclaimed
+        # extent may hold stale bytes in its bitmap-chunk area, so ZERO those
+        # chunk zones first, then set only the reserved bits.
         self._invalidate()
         self._mount(name)
         part = self._find_part(name)
-        bm = self._get_bitmap(name, 1)             # reads the zeroed region = all free
-        reserved = set(bm.reserved_zones())
-        reserved.add(0)                            # be conservative: keep zone 0 used
+        bm = self._get_bitmap(name, 1)
+        for c in range(bm.nchunks):                       # clear stale chunk bytes
+            self.dev.write_bytes(bm._chunk_lba_off(c), b"\x00" * PFS_META_SIZE)
+        self._invalidate(); self._mount(name)
+        bm = self._get_bitmap(name, 1)
+        reserved = set(bm.reserved_zones()); reserved.add(0)
         for z in sorted(reserved):
             if bm.test(z) == 0:
                 bm.mark_used(z, 1)
         bm.flush()
         self.dev.sync()
 
-        # --- 7) verify by re-mounting + recounting free zones ----------------
         self._invalidate()
         self._mount(name)
         bm_cache = {}
