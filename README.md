@@ -1,5 +1,7 @@
 # Taiko2x6Wizard
 
+**English** | [繁體中文](README.zh-TW.md)
+
 A Python + Qt (PySide6) toolkit for **reverse-engineering and modding arcade
 _Taiko no Tatsujin_** — the SYSTEM256 / SYSTEM2x6 (PS2-based) generations. Browse
 the game's archives, add or replace songs (charts, audio, textures, database
@@ -144,6 +146,7 @@ let the GUI fill it in as you browse.
 ```
 Taiko2x6Wizard/
 ├── README.md                  this file
+├── README.zh-TW.md            Traditional Chinese README
 ├── LICENSE                    MIT (tooling only; no game content)
 ├── requirements.txt           Python dependencies
 ├── .gitignore                 excludes game data + supplied binaries
