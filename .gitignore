@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 
 # ── PyInstaller build output (the released .exe is attached to Releases) ────
 build/
@@ -47,6 +48,10 @@ TEBGAME*
 TEAGAME*
 *.dec
 *.7z
+# safeio undo journals / interrupted-transaction leftovers
+*.undo
+*.txn
+*.txn-old
 
 # ── OS / editor cruft ──────────────────────────────────────────────────────
 .DS_Store

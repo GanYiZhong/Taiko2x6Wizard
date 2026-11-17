@@ -485,14 +485,32 @@ def command_patch(args: argparse.Namespace) -> int:
         if args.verbose:
             print(f"patched [{group['index']:04d}] {group['name']} packed {group['packed_size']} -> {len(encoded)}")
 
-    args.out_data.write_bytes(bytes(new_data))
-    args.out_list.write_bytes(crypt_list(bytes(new_list)))
+    _write_outputs(args, new_data, new_list)
     print(f"Changed groups  : {changed_groups}")
     print(f"Unchanged groups: {unchanged_groups}")
     print(f"Skipped groups  : {skipped_groups}")
     print(f"Wrote: {args.out_list}")
     print(f"Wrote: {args.out_data}")
     return 0
+
+
+def _write_outputs(args: argparse.Namespace, new_data, new_list) -> None:
+    """Commit DATA + LIST together (both or neither). Overwriting the input
+    files keeps a rolling .bak of each first."""
+    from taiko2x6.safeio import write_pair
+
+    def same(a, b):
+        try:
+            return b is not None and Path(a).resolve() == Path(b).resolve()
+        except OSError:
+            return False
+
+    overwrite = same(args.out_data, getattr(args, "data", None)) or         same(args.out_list, getattr(args, "list", None))
+    backups = write_pair([(args.out_data, bytes(new_data)),
+                          (args.out_list, crypt_list(bytes(new_list)))],
+                         backup=overwrite)
+    for b in backups:
+        print(f"Backup: {b}")
 
 
 def build_payload_from_files(src_root: Path, group: dict, entries: list[dict]) -> bytes:
@@ -537,8 +555,7 @@ def command_repack_experimental(args: argparse.Namespace) -> int:
             layout.write_file(new_list, entry)
         if args.verbose:
             print(f"packed [{group['index']:04d}] {group['name']} unpacked={group['unpacked_size']} packed={group['packed_size']} sector={group['sector']}")
-    args.out_data.write_bytes(bytes(new_data))
-    args.out_list.write_bytes(crypt_list(bytes(new_list)))
+    _write_outputs(args, new_data, new_list)
     print("WARNING: this is a full DATA relayout. For real hardware, prefer the patch command.", file=sys.stderr)
     print(f"Wrote: {args.out_list}")
     print(f"Wrote: {args.out_data}")

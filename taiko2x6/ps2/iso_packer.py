@@ -402,9 +402,18 @@ def repair_udf(iso_path) -> dict:
         raise ValueError("DATA.000 starts past the buffered header; cannot repair")
     rep = _patch_udf(header, data_lba, data_size, list_lba, list_size)
     if rep.get("patched"):
-        with open(iso_path, "r+b") as f:
-            f.write(header[:data_lba * SEC])
-        log.info("repair_udf %s: %s", iso_path.name, ", ".join(rep["patched"]))
+        from taiko2x6.safeio import UndoJournal
+        undo = UndoJournal(iso_path)          # saves the old header first
+        try:
+            with open(iso_path, "r+b") as f:
+                undo.save(f, 0, data_lba * SEC)
+                f.seek(0)
+                f.write(header[:data_lba * SEC])
+        finally:
+            undo.close()
+        rep["undo"] = str(undo.path)
+        log.info("repair_udf %s: %s (undo: %s)", iso_path.name,
+                 ", ".join(rep["patched"]), undo.path.name)
     rep.update(data_lba=data_lba, data_size=data_size,
                list_lba=list_lba, list_size=list_size)
     return rep

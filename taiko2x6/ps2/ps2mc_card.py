@@ -56,9 +56,16 @@ class Ps2mcError(Exception):
 class Ps2mcCard:
     """Read (and optionally write) a PS2 memory-card image."""
 
-    def __init__(self, path, writable: bool = False):
+    def __init__(self, path, writable: bool = False, backup: bool = True):
+        """writable=True modifies the card image in place; unless backup=False
+        a rolling copy (<card>.bak, .bak.1, ...) is made first (cards are
+        8 MB, so a full copy is cheap). ``self.backup_path`` names it."""
         self.path = str(path)
         self.writable = writable
+        self.backup_path = None
+        if writable and backup:
+            from taiko2x6.safeio import make_backup
+            self.backup_path = make_backup(self.path)
         self.f = open(self.path, "r+b" if writable else "rb")
         try:
             self._read_superblock()
@@ -589,15 +596,17 @@ if _HAVE_QT:
                     self, "Replace in memory card",
                     f"Write {Path(src).name} ({len(data):,} B) over {e['name']} "
                     f"in:\n{self.path}\n\nThe card image is modified IN PLACE "
-                    f"(ECC is regenerated). Back it up first. Continue?",
+                    f"(ECC is regenerated). A .bak copy is made first. Continue?",
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             try:
                 self.card.close(); self.card = None
                 with Ps2mcCard(self.path, writable=True) as w:
                     n = w.write_file("/" + e["name"], data)
+                    bak = w.backup_path
                 self.card = Ps2mcCard(self.path)
-                self.status.setText(f"replaced {e['name']} ✓ ({n:,} B)")
+                self.status.setText(f"replaced {e['name']} ✓ ({n:,} B)"
+                                    + (f" — backup: {Path(bak).name}" if bak else ""))
                 self._refresh()
             except Exception as exc:
                 QMessageBox.critical(self, "Replace failed", str(exc))

@@ -130,7 +130,27 @@ from taiko2x6.songs.song_manager import SongManager
   請先在備份上試。
 
 > ⚠️ **安全須知**：寫入 PS2 硬碟 `.img` 前，**請先關閉 PCSX2**，它會鎖住映像檔不讓寫入
-> （只讀取的話不用關）。請一律在**副本**上操作並保留備份，有些操作無法復原。
+> （只讀取的話不用關）。在**副本**上操作仍是最保險的做法。
+
+### 寫入保護
+
+所有會修改遊戲檔案的工具都經過 `taiko2x6/safeio.py`：
+
+| 寫入對象 | 保護方式 |
+|---|---|
+| `DATA.000` + `list.bin`（Explorer 存檔、Song Builder、封存 CLI、Omnimix 輸出到資料夾） | 兩個檔案一起成功或一起失敗。覆寫時會保留 `.bak`、`.bak.1`…。如果存檔中途程式掛掉，下次開啟封存時會自動完成或還原。 |
+| PS2 硬碟 `.img`（HDD Browser、HDD Song Wizard、Omnimix Maker、`taiko_exe`） | 覆寫任何磁區前，先把舊內容存進 **undo 日誌** `<img>.<日期-時間>.undo`（大小約等於寫入的資料量，不是整個映像檔）。寫入失敗會當場自動還原；寫入成功時日誌會保留，當作這次寫入的備份。 |
+| 記憶卡 `.ps2` | 以寫入模式開啟前先複製一份 `.bak`。 |
+| ISO 的 UDF 修復 | 舊的檔頭先存進 undo 日誌。 |
+
+事後想還原映像檔（或寫到一半當機、斷電）時：
+
+```bash
+python -m taiko2x6.safeio info     TK14.img.20261118-101500.undo
+python -m taiko2x6.safeio rollback TK14.img.20261118-101500.undo
+```
+
+有多個日誌時，從最新的開始還原；不需要時可以自行刪除。
 
 ---
 
@@ -145,9 +165,27 @@ from taiko2x6.songs.song_manager import SongManager
 | 無法寫入 `.img`／權限錯誤 | 關閉 PCSX2，它會鎖住映像檔。 |
 | 選歌時卡住（Taiko 8） | 群組的 `unknown2` 雜湊錯誤，請用 `archive_builder` 重建（見 `docs/unknown2_report.md`）。 |
 | 歌加進去了但看不到（T14） | musicinfo 的自我索引欄位必須指向新的那一列，請用 Song Manager／Song Builder 加歌，不要直接複製原始資料列。 |
+| 寫入後映像檔壞了／想回到舊版 | `python -m taiko2x6.safeio rollback <img>.<日期-時間>.undo`（從最新的日誌開始）。 |
+| `DATA.000` 旁出現 `.txn`／`.txn-old` 檔 | 存檔被中斷留下的；重新開啟封存就會自動清掉。 |
 | 需要更多訊息 | 用 `python main.py --debug` 啟動（或設定 `TAIKO_LOG=DEBUG`）。 |
 
-開發用的自我測試（`python -m taiko2x6.<子資料夾>.<模組>`）會到 `samples/`
+## 測試
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+測試會自己產生迷你的封存檔和 PFS 映像，不需要遊戲檔案；GitHub Actions 會在
+Windows 和 Linux 上執行。想用自己的遊戲檔案測試，把 `TAIKO_GAME_LIBRARY`
+指向放遊戲資料夾的目錄即可（原檔只會以唯讀開啟，寫入都在 pytest 暫存資料夾的副本上做）。
+加上 `TAIKO_HEAVY=1` 會多跑一個複製數 GB 映像檔的測試：
+
+```bash
+TAIKO_GAME_LIBRARY=E:/games/system2x6 TAIKO_HEAVY=1 python -m pytest --basetemp=E:/pytest-tmp
+```
+
+各模組的自我測試（`python -m taiko2x6.<子資料夾>.<模組>`）會到 `samples/`
 （已被 git 忽略）或環境變數 `TAIKO_SAMPLES` 指定的資料夾找範例檔。
 
 ---
@@ -160,13 +198,18 @@ Taiko2x6Wizard/
 ├── README.zh-TW.md            本檔案
 ├── LICENSE                    MIT（僅涵蓋工具程式，不含遊戲內容）
 ├── requirements.txt           Python 套件需求
+├── requirements-dev.txt       測試用套件（pytest）
+├── pytest.ini                 測試設定
 ├── .gitignore                 排除遊戲資料與需自備的檔案
 ├── config.ini.example         路徑記憶的範本
 ├── main.py                    啟動程式，開啟 Explorer 主介面
 ├── Taiko2x6Wizard.spec        PyInstaller 打包設定（單一執行檔）
+├── tests/                     pytest 測試（合成資料；實機資料測試需手動開啟）
+├── .github/workflows/         CI（在 Windows + Linux 跑 pytest）
 ├── taiko2x6/                  工具主體套件
+│   ├── safeio.py               安全寫入：原子寫入、DATA+LIST 交易、undo 日誌
 │   ├── app/                    Explorer 主介面、設定與資源路徑
-│   ├── archive/                DATA.000 + list.bin 讀取與重建
+│   ├── archive/                DATA.000 + list.bin 模型、讀取／存檔／重建
 │   ├── songs/                  歌曲新增／替換、資料庫管理、Omnimix
 │   ├── bineditors/             各 .bin 資料表編輯器（自動偵測）
 │   ├── charts/                 TJA／虹版 → SHT、SHT 檢查工具

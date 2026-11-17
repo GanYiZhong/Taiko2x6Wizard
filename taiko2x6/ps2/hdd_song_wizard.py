@@ -8,8 +8,9 @@ End to end:
   3. write the grown DATA.000 + list.bin back into the .img (PFS allocates the
      extra zones).
 
-The .img is modified in place; there is no automatic 80 GB backup, so the wizard
-warns before writing. Extraction caches to temp files so the song list / template
+The .img is modified in place inside ps2hdd.write_session: everything it
+overwrites is saved to an undo journal first, and a failed write is rolled back
+automatically. Extraction caches to temp files so the song list / template
 combo can be populated before building.
 """
 from __future__ import annotations
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
 from taiko2x6.app import appconfig
 from taiko2x6.ps2 import ps2hdd
 from taiko2x6.songs import song_builder
-from taiko2x6.app import taiko256_explorer_gui6 as gui
+from taiko2x6.archive import archive_model as gui
 
 # Child of the app's "taiko" logger — inherits its console handler under the GUI.
 logger = logging.getLogger("taiko.hddwizard")
@@ -220,8 +221,8 @@ class HddSongWizard(QDialog):
                 self, "Write back to HDD",
                 f"This will add song '{new_id}' and write the grown DATA.000 + "
                 f"list.bin back into:\n{self._img}\n(partition {self._part})\n\n"
-                f"The 80 GB image is modified in place — NO automatic backup. "
-                f"Make sure you have a backup of the .img. Continue?",
+                f"The image is modified in place. {ps2hdd.UNDO_NOTE}\n\n"
+                f"Continue?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         # DB prep on the GUI thread (SongManager is a QWidget)
@@ -247,19 +248,15 @@ class HddSongWizard(QDialog):
             self.archive.close(); self.archive = None      # release temp mmap
             logger.info("writing DATA.000 %d B + list.bin %d B back into %s…",
                         len(data), len(lb), part)
-            h = ps2hdd.Ps2Hdd(img, writable=True)
-            try:
-                # Write DATA.000 first, then list.bin, so the index is only
-                # updated once the data is fully written. This is NOT crash-safe:
-                # pfs_write may overwrite DATA.000 in place, so a failure part
-                # way through leaves the OLD list.bin over MIXED old/new data
-                # (the game may freeze on it). Keep a backup of the image.
+            # DATA.000 then list.bin inside one undo-journaled session: if
+            # either write raises, the image is rolled back to its old pair.
+            # A hard crash mid-write cannot roll back by itself; the journal
+            # path below restores it (python -m taiko2x6.safeio rollback ...).
+            with ps2hdd.write_session(img, log=logger.info) as h:
                 h.pfs_write(part, "/DATA.000", data)
                 h.pfs_write(part, "/list.bin", lb)
-            finally:
-                h.close()
             logger.info("HDD write-back complete in %.1fs", time.perf_counter() - t0)
-            return summ, len(lb), len(data)
+            return summ, len(lb), len(data), h.undo_path
 
         self._busy("Adding song + writing back to the HDD image (large, please wait)…",
                    task, self._after_write)
@@ -272,9 +269,10 @@ class HddSongWizard(QDialog):
             except Exception:
                 pass
             return
-        summ, nl, nd = res
+        summ, nl, nd, undo = res
         self.log.appendPlainText(
             f"\nDONE — wrote into {self._img}\n"
+            f"  undo journal (restores the old DATA.000/list.bin): {undo}\n"
             f"  list.bin {nl:,} B, DATA.000 {nd:,} B\n"
             f"  groups added: {summ['groups']}, select files: {summ['extra_files']}, "
             f"audio: {'yes' if summ['audio'] else 'no'}, db: {summ['db']}")

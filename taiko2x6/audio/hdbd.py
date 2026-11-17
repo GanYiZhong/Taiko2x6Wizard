@@ -234,7 +234,7 @@ if __name__ == "__main__":
     import os
     from pathlib import Path
 
-    from taiko2x6.app import taiko256_explorer_gui6 as g
+    from taiko2x6.archive import archive_model as g
 
     try:
         import soundfile as sf

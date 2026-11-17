@@ -48,7 +48,7 @@ _FUMEN_RE = re.compile(r"^fumen\.(?P<id>.+?)(?P<pl>1p|2p)_(?P<d>[enhmx])$")
 # --------------------------------------------------------------------------- #
 def open_pair(list_path, data_path, fmt=2):
     """Open a (LIST.BIN, DATA.000) pair as an Archive."""
-    from taiko2x6.app import taiko256_explorer_gui6 as gui
+    from taiko2x6.archive import archive_model as gui
     return gui.Archive(str(list_path), str(data_path), fmt=fmt)
 
 
@@ -163,31 +163,27 @@ def iso_extract_pair(iso, tmpdir, log=lambda s: None) -> tuple:
     return lp, dp
 
 
-def write_partition(img, partition, list_bytes, data_bytes, log=lambda s: None):
+def write_partition(img, partition, list_bytes, data_bytes, log=lambda s: None,
+                    undo=True):
     """Write the merged DATA.000 + list.bin back into an .img partition.
 
-    DATA.000 first, then list.bin: if the big write fails the partition still
-    has the OLD list.bin pointing at the OLD data (self-consistent / bootable).
+    Both writes run in one undo-journaled session (ps2hdd.write_session): if
+    either raises, the partition is rolled back to its old pair. undo=False
+    skips the journal when a full image backup was just taken.
     """
     from taiko2x6.ps2 import ps2hdd
-    h = ps2hdd.Ps2Hdd(str(img), writable=True)
-    try:
+    with ps2hdd.write_session(str(img), undo=undo, log=log) as h:
         log(f"writing DATA.000 {len(data_bytes):,} B → {partition}…")
         h.pfs_write(partition, "/DATA.000", data_bytes)
         log(f"writing list.bin {len(list_bytes):,} B → {partition}…")
         h.pfs_write(partition, "/list.bin", list_bytes)
-    finally:
-        try:
-            h.close()
-        except Exception:
-            pass
 
 
 _ENOSPC_RE = re.compile(r"need up to (\d+) zones.*?only (\d+) free")
 
 
 def write_partition_growing(img, partition, list_bytes, data_bytes,
-                            log=lambda s: None):
+                            log=lambda s: None, undo=True):
     """write_partition, but if the PFS partition is too small, GROW it (append
     an APA sub-partition) and retry — so a merged DATA.000 bigger than the
     partition still fits. The _grow allocator verifies free space before any
@@ -196,8 +192,10 @@ def write_partition_growing(img, partition, list_bytes, data_bytes,
     """
     from taiko2x6.ps2 import ps2hdd
     for attempt in (1, 2):
-        h = ps2hdd.Ps2Hdd(str(img), writable=True)
-        try:
+        # each attempt is its own undo-journaled session: an error in the
+        # final attempt rolls that attempt back (a grow from attempt 1 stays;
+        # it only adds unused space to the partition).
+        with ps2hdd.write_session(str(img), undo=undo, log=log) as h:
             try:
                 log(f"writing DATA.000 {len(data_bytes):,} B → {partition}…")
                 h.pfs_write(partition, "/DATA.000", data_bytes)
@@ -213,11 +211,6 @@ def write_partition_growing(img, partition, list_bytes, data_bytes,
                 log("partition full (need %d, free %d zones) - growing it by "
                     ">=%.0f MiB and retrying..." % (need, free, deficit / 1048576))
                 h.grow_partition(partition, deficit, log=log)
-        finally:
-            try:
-                h.close()
-            except Exception:
-                pass
 
 
 # --------------------------------------------------------------------------- #

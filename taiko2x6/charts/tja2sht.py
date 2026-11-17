@@ -757,7 +757,7 @@ def _corpus_roundtrip():
     """Round-trip all 720 corpus charts; return (passed, total, failures)."""
     try:
         from pathlib import Path
-        from taiko2x6.app import taiko256_explorer_gui6 as g
+        from taiko2x6.archive import archive_model as g
     except Exception as e:  # pragma: no cover
         print("  (corpus unavailable: %s)" % e)
         return (0, 0, [])

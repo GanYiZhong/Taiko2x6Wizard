@@ -143,9 +143,28 @@ let the GUI fill it in as you browse.
   song is untested — try it on a copy first.
 
 > ⚠️ **Safety.** When writing to a PS2 HDD `.img`, **close PCSX2 first** — it
-> locks the image for writing (reads are fine while it runs). Always work on
-> **copies** of your game files and keep backups; several operations are
-> not reversible.
+> locks the image for writing (reads are fine while it runs). Working on
+> **copies** of your game files is still the safest habit.
+
+### How writes are protected
+
+Every tool that changes game files goes through `taiko2x6/safeio.py`:
+
+| What is written | Protection |
+|---|---|
+| `DATA.000` + `list.bin` (Explorer save, Song Builder, archive CLI, Omnimix to a folder) | Both files are committed together or not at all. Overwriting keeps a rolling `.bak`, `.bak.1`, …. If the app dies mid-save, the next open of the archive finishes or undoes the save automatically. |
+| PS2 HDD `.img` (HDD Browser, HDD Song Wizard, Omnimix Maker, `taiko_exe`) | Before any sector is overwritten, its old contents go to an **undo journal** `<img>.<date-time>.undo` (about the size of the data written, not the whole image). A failed write is rolled back on the spot; the journal is kept as the backup of a successful write. |
+| Memory card `.ps2` | A `.bak` copy is made before the card is opened for writing. |
+| ISO UDF repair | The old header is saved to an undo journal. |
+
+To undo an image write later (or after a crash/power loss):
+
+```bash
+python -m taiko2x6.safeio info     TK14.img.20261118-101500.undo
+python -m taiko2x6.safeio rollback TK14.img.20261118-101500.undo
+```
+
+Roll journals back newest first, and delete them when you no longer need them.
 
 ---
 
@@ -160,10 +179,29 @@ let the GUI fill it in as you browse.
 | Can't write the `.img` / permission error | Close PCSX2 — it locks the image for writing. |
 | A song freezes when picked (Taiko 8) | The group's `unknown2` hash is wrong; rebuild with `archive_builder` (see `docs/unknown2_report.md`). |
 | Song added but not visible (T14) | musicinfo self-index columns must point at the new row — use Song Manager / Song Builder, not a raw row copy. |
+| Image broken after a write / want the old one back | `python -m taiko2x6.safeio rollback <img>.<date-time>.undo` (newest journal first). |
+| `.txn` / `.txn-old` files next to `DATA.000` | Left by an interrupted save; opening the archive cleans them up. |
 | Need more detail | Start with `python main.py --debug` (or set `TAIKO_LOG=DEBUG`). |
 
-Developer self-tests (`python -m taiko2x6.<sub>.<module>`) look for sample files
-in `samples/` (git-ignored), or wherever `TAIKO_SAMPLES` points.
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite builds tiny synthetic archives and PFS images, so it needs no game
+files; GitHub Actions runs it on Windows and Linux. Tests against your own
+game files run only when you point `TAIKO_GAME_LIBRARY` at a folder of game
+directories (originals are opened read-only; writes happen on copies in the
+pytest temp dir). `TAIKO_HEAVY=1` adds a test that copies a multi-GB image:
+
+```bash
+TAIKO_GAME_LIBRARY=E:/games/system2x6 TAIKO_HEAVY=1 python -m pytest --basetemp=E:/pytest-tmp
+```
+
+Per-module self-tests (`python -m taiko2x6.<sub>.<module>`) look for sample
+files in `samples/` (git-ignored), or wherever `TAIKO_SAMPLES` points.
 
 ---
 
@@ -175,13 +213,18 @@ Taiko2x6Wizard/
 ├── README.zh-TW.md            Traditional Chinese README
 ├── LICENSE                    MIT (tooling only; no game content)
 ├── requirements.txt           Python dependencies
+├── requirements-dev.txt       test dependencies (pytest)
+├── pytest.ini                 test settings
 ├── .gitignore                 excludes game data + supplied binaries
 ├── config.ini.example         template for local path memory
 ├── main.py                    launcher — opens the Explorer GUI
 ├── Taiko2x6Wizard.spec        PyInstaller build (single-file exe)
+├── tests/                     pytest suite (synthetic data; real-data tests opt-in)
+├── .github/workflows/         CI (pytest on Windows + Linux)
 ├── taiko2x6/                  the toolkit package
+│   ├── safeio.py               crash-safe writes: atomic, DATA+LIST transaction, undo journal
 │   ├── app/                    Explorer GUI (hub), config + asset paths
-│   ├── archive/                DATA.000 + list.bin read / rebuild
+│   ├── archive/                DATA.000 + list.bin model, read / save / rebuild
 │   ├── songs/                  song add / replace / DB manager, Omnimix
 │   ├── bineditors/             per-song .bin table editors (auto-discovered)
 │   ├── charts/                 TJA / Gen3 -> SHT, SHT validator

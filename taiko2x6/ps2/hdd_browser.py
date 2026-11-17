@@ -173,9 +173,7 @@ class HddBrowserDialog(QDialog):
                 self, "Replace in HDD image",
                 f"This writes directly into:\n{self.path}\n\n"
                 f"{e['name']}: {e['size']:,} → {new_size:,} bytes\n\n"
-                f"The 80 GB image is modified IN PLACE, NON-ATOMICALLY, with no "
-                f"automatic backup: if the write is interrupted (crash/power loss) "
-                f"the image can be left corrupt. Make a backup of the .img first.\n\n"
+                f"The image is modified IN PLACE. {ps2hdd.UNDO_NOTE}\n\n"
                 f"Larger files are supported (free PFS zones are allocated); make "
                 f"sure the partition has enough free space. Continue?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
@@ -190,11 +188,9 @@ class HddBrowserDialog(QDialog):
         data = Path(src).read_bytes()
         self.hdd.close()                          # GUI thread set this before start
         self.hdd = None                           # mark closed; GUI won't double-close
-        wh = ps2hdd.Ps2Hdd(self.path, writable=True)
-        try:
+        with ps2hdd.write_session(self.path) as wh:   # rolls back on error
             wh.pfs_write(part, fpath, data)
-        finally:
-            wh.close()
+        self._last_undo = wh.undo_path
         return len(data)
 
     def _after_replace(self, r):
@@ -206,7 +202,9 @@ class HddBrowserDialog(QDialog):
             QMessageBox.critical(self, "Reopen failed", str(exc))
             self.status.setText(f"write ok, reopen failed: {exc}")
             return
-        self.status.setText("replaced in image ✓")
+        undo = getattr(self, "_last_undo", None)
+        self.status.setText("replaced in image ✓"
+                            + (f" — undo journal: {Path(undo).name}" if undo else ""))
         self._refresh_files()
 
     # -- worker plumbing ------------------------------------------------------

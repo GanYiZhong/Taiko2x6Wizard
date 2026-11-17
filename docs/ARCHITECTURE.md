@@ -26,8 +26,16 @@ taiko2x6/
 ### `archive/` — container
 | Module | Role |
 |--------|------|
+| `archive_model.py` | `Archive`: the Qt-free LIST.BIN + DATA.000 model (mmap reads, staged edits, in-place `save`, layout-preserving `rebuild`). Used by the Explorer, HDD Song Wizard, Omnimix Maker and self-tests. |
 | `taiko256_archive_tool_v2.py` | Backend/CLI for the SYSTEM256/2x6 archive container (group table + file table + payload). |
 | `archive_builder.py` | Rebuild `DATA.000` + `list.bin` with new/replaced groups (keeps the name-sorted group order the game binary-searches). Append mode by default; `compact=True` re-lays groups densely so the archive can shrink. |
+
+### `safeio.py` — crash-safe writes (package root)
+| Function | Role |
+|----------|------|
+| `atomic_write` / `make_backup` | Temp file + fsync + `os.replace`; rolling `.bak`, `.bak.1`, … |
+| `write_pair` / `recover_pair` | Commit `DATA.000` + `list.bin` as one transaction with a `.txn` journal; `Archive()` recovers an interrupted one on open. |
+| `UndoJournal` / `rollback` | Write-ahead undo log for in-place edits. `ps2hdd.BlockDevice` journals every overwritten range by default; `ps2hdd.write_session()` rolls back on error and keeps the journal on success. CLI: `python -m taiko2x6.safeio info` / `rollback <journal>`. |
 
 ### `songs/` — song assembly & databases
 | Module | Role |
@@ -82,7 +90,7 @@ folder registers it with the Explorer.
 ### `ps2/` — PS2 storage I/O
 | Module | Role |
 |--------|------|
-| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine, incl. `grow_partition` / `grow_partition_reclaim`. |
+| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine, incl. `grow_partition` / `grow_partition_reclaim`. Writable opens keep an undo journal; use `write_session()` for all-or-nothing edits. |
 | `pfsshell_tool.py` | Drive the native `pfsshell.exe` as an alternative PFS path. |
 | `apa_merge.py` | Merge multiple games' APA partitions onto one HDD image (swap-card-per-game setup). |
 | `img_slim.py` | Trim / slim a PS2 HDD image. |
@@ -110,8 +118,10 @@ folder registers it with the Explorer.
 
 - GUI: `python main.py [folder]`
 - A single tool: `python -m taiko2x6.<subpackage>.<module>` from the project root.
-- Frozen build: `pyinstaller Taiko2x6Wizard.spec` (entry `main.py`; every
-  package module is listed in `hiddenimports` because several are imported lazily).
+- Frozen build: `pyinstaller Taiko2x6Wizard.spec` (entry `main.py`;
+  `collect_submodules('taiko2x6')` lists every module because several are
+  imported lazily).
+- Tests: `python -m pytest` (see README → Tests).
 
 ## User-supplied assets
 

@@ -21,6 +21,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from taiko2x6.safeio import write_pair
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QComboBox, QLineEdit,
@@ -383,14 +385,16 @@ class OmnimixDialog(QDialog):
                     bak = img + ".omnimix.bak"
                     log(f"backing up target → {Path(bak).name} (copying, large)…")
                     shutil.copy2(img, bak)
-                OM.write_partition_growing(img, tpart, res["list"], res["data"], log)
+                # a fresh full copy already exists -> skip the undo journal
+                OM.write_partition_growing(img, tpart, res["list"], res["data"],
+                                           log, undo=not do_backup)
                 if do_limit:
                     cap_safe = (self.cb_over.currentIndex() == 1)
                     ceil = OM.patch_song_limit(img, res["total"],
                                                cap_safe=cap_safe, log=log)
                     res["ceiling"] = ceil
             else:
-                Path(td).write_bytes(res["data"]); Path(tl).write_bytes(res["list"])
+                write_pair([(td, res["data"]), (tl, res["list"])], backup=True)
                 log(f"wrote merged pair → {Path(td).parent}")
             return res
 

@@ -578,6 +578,11 @@ def patch_skip_copyright(dec: bytes, log=print) -> bytes:
 # --------------------------------------------------------------------------- #
 #  HDD image I/O
 # --------------------------------------------------------------------------- #
+UNDO_NOTE = ("an undo journal (<img>.<time>.undo) of everything overwritten "
+             "is saved first; undo with: "
+             "python -m taiko2x6.safeio rollback <journal>")
+
+
 def read_from_hdd(img: str | Path, partition: str = PARTITION) -> bytes:
     from taiko2x6.ps2 import ps2hdd
     h = ps2hdd.Ps2Hdd(str(img))
@@ -594,8 +599,8 @@ def write_to_hdd(img: str | Path, data: bytes, partition: str = PARTITION) -> No
     if len(data) != TAIKO_SIZE:
         raise TaikoExeError(
             f'refusing to write {len(data)} B — `taiko` must stay {TAIKO_SIZE} B')
-    h = ps2hdd.Ps2Hdd(str(img), writable=True)
-    try:
+    # undo-journaled: a read-back mismatch (or any error) rolls the image back
+    with ps2hdd.write_session(str(img)) as h:
         before = h.pfs_read(partition, PFS_PATH)
         if len(before) != len(data):
             raise TaikoExeError(
@@ -604,9 +609,7 @@ def write_to_hdd(img: str | Path, data: bytes, partition: str = PARTITION) -> No
             return
         h.pfs_write(partition, PFS_PATH, data)
         if h.pfs_read(partition, PFS_PATH) != data:
-            raise TaikoExeError('read-back mismatch — the image may be inconsistent!')
-    finally:
-        h.close()
+            raise TaikoExeError('read-back mismatch — the write was rolled back')
 
 
 def patch_hdd(img: str | Path, songs: int, partition: str = PARTITION,
@@ -884,8 +887,8 @@ else:
             if QMessageBox.warning(
                     self, 'Patch taiko',
                     f'Raise the song ceiling to {n} in {Path(img).name}?\n\n'
-                    f'The image is modified in place. Make sure you have a backup '
-                    f'of `taiko` (and that PCSX2 is closed). Continue?{extra}',
+                    f'The image is modified in place; {UNDO_NOTE}. '
+                    f'Make sure PCSX2 is closed. Continue?{extra}',
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             self._run(lambda log: patch_hdd(img, n, log=log),
@@ -1063,8 +1066,8 @@ else:
             if QMessageBox.warning(
                     self, 'Song-select timer',
                     f'Set the song-select timer to {n} s in {Path(img).name}?\n\n'
-                    f'The image is modified in place. Make sure PCSX2 is closed and '
-                    f'you have a backup of `taiko`. Continue?',
+                    f'The image is modified in place; {UNDO_NOTE}. '
+                    f'Make sure PCSX2 is closed. Continue?',
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             self._run(lambda log: patch_hdd_timer(img, n, log=log),

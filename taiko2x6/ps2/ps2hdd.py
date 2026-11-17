@@ -133,6 +133,7 @@ WRITE-SAFETY NOTES (verified against ps2sdk iop/hdd/libpfs @ master)
 =============================================================================
 """
 
+import contextlib
 import os
 import struct
 
@@ -199,9 +200,13 @@ class BlockDevice:
                      are captured in an in-memory dict {lba: 512-byte bytes}.
                      The underlying file is NEVER written.
     overlay=False -> read/write straight through to the file (writable=True).
+
+    undo (real writes only): True -> every overwritten range is first saved to
+    an undo journal ``<img>.<stamp>.undo`` (see taiko2x6.safeio); a path ->
+    use that journal file; False/None -> no journal.
     """
 
-    def __init__(self, path, writable=False, overlay=False):
+    def __init__(self, path, writable=False, overlay=False, undo=True):
         self.path = path
         self.overlay = overlay
         self.writable = writable
@@ -210,6 +215,10 @@ class BlockDevice:
         self.f.seek(0, os.SEEK_END)
         self.size = self.f.tell()
         self._ov = {} if overlay else None  # lba -> bytes(512)
+        self.undo = None
+        if writable and not overlay and undo:
+            from taiko2x6.safeio import UndoJournal
+            self.undo = UndoJournal(path, None if undo is True else undo)
 
     # --- sector-level ---
     def read_sectors(self, lba, count):
@@ -235,6 +244,8 @@ class BlockDevice:
             return
         if not self.writable:
             raise PermissionError("device not opened writable")
+        if self.undo is not None:
+            self.undo.save(self.f, lba * SECTOR, len(data))
         self.f.seek(lba * SECTOR)
         self.f.write(data)
         self.f.flush()
@@ -296,6 +307,11 @@ class BlockDevice:
             self.f.close()
         except Exception:
             pass
+        if self.undo is not None:
+            if self.undo.bytes_saved == 0:
+                self.undo.discard()      # nothing was overwritten
+            else:
+                self.undo.close()
 
 
 # ---------------------------------------------------------------------------
@@ -644,15 +660,19 @@ class PfsBitmap:
 # Main HDD class
 # ---------------------------------------------------------------------------
 class Ps2Hdd:
-    def __init__(self, path, writable=False, overlay=False):
+    def __init__(self, path, writable=False, overlay=False, undo=True):
         """Open a PS2 HDD image.
 
-        writable=True  -> writes go to the real file.
+        writable=True  -> writes go to the real file. By default every range
+                          is saved to an undo journal first (``undo=True``;
+                          ``self.undo_path`` names it, None if nothing was
+                          written). Roll back with
+                          ``python -m taiko2x6.safeio rollback <journal>``.
         overlay=True   -> copy-on-write: real file is read-only, writes captured
                           in memory (safe write testing).  Implies writes allowed.
         """
         self.path = path
-        self.dev = BlockDevice(path, writable=writable, overlay=overlay)
+        self.dev = BlockDevice(path, writable=writable, overlay=overlay, undo=undo)
         self._parts = None          # list[ApaPartition]
         self._supers = {}           # name -> superblock dict
         self._inode_scale = {}      # name -> log2(zone/512)
@@ -1589,8 +1609,59 @@ class Ps2Hdd:
 
         return new_extents
 
+    @property
+    def undo_path(self):
+        """Path of this session's undo journal, or None if nothing was saved."""
+        u = self.dev.undo
+        if u is None or u.bytes_saved == 0 or not u.path.exists():
+            return None
+        return u.path
+
     def close(self):
         self.dev.close()
+
+
+UNDO_NOTE = ("Everything overwritten is first saved to an undo journal "
+             "(<img>.<time>.undo, about the size of the data written); a "
+             "failed write is rolled back automatically, and after a crash "
+             "run: python -m taiko2x6.safeio rollback <journal>")
+
+
+@contextlib.contextmanager
+def write_session(path, undo=True, log=None):
+    """Open ``path`` writable for one all-or-nothing edit.
+
+    Every overwritten range goes to an undo journal first. If the body raises,
+    the image is rolled back from the journal (and the journal deleted), so a
+    failed DATA.000 + list.bin write never leaves a half-written partition. On
+    success the journal is KEPT as the backup of what was overwritten; the
+    path is logged and available as ``h.undo_path``. undo=False skips the
+    journal (use only when a full copy of the image was just made).
+
+    A crash or power loss mid-write cannot run this rollback; restore by hand::
+
+        python -m taiko2x6.safeio rollback <img>.<stamp>.undo
+    """
+    from taiko2x6 import safeio
+    h = Ps2Hdd(path, writable=True, undo=undo)
+    try:
+        yield h
+    except BaseException:
+        j = h.dev.undo
+        h.close()
+        if j is not None and j.bytes_saved:
+            try:
+                safeio.rollback(j.path, path, log=log)
+                j.path.unlink()
+            except Exception as rb_exc:          # keep the journal for a manual retry
+                if log:
+                    log(f"ROLLBACK FAILED ({rb_exc}); restore manually with: "
+                        f"python -m taiko2x6.safeio rollback \"{j.path}\"")
+        raise
+    else:
+        h.close()
+        if log and h.undo_path:
+            log(f"undo journal: {h.undo_path}")
 
 
 # ===========================================================================
