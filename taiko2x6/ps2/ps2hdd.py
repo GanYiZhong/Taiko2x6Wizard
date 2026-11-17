@@ -1278,6 +1278,210 @@ class Ps2Hdd:
                 "sub_zones": sub_zones, "free_zones": free_after,
                 "new_image_bytes": self.dev.size}
 
+    # ---- create / delete files (root or any existing directory) ----------
+    _DENT_TYPE_FILE = 0x2000          # dentry aLen top nibble: 2 = file, 1 = dir
+
+    def _split_path(self, path):
+        comps = [c for c in path.replace("\\", "/").split("/") if c]
+        if not comps:
+            raise ValueError("empty path")
+        return "/" + "/".join(comps[:-1]), comps[-1]
+
+    def _dir_block_lba(self, part, scale, zs, dir_ino, byte_off):
+        """LBA of the 512-byte directory sector holding byte_off of the
+        directory's data."""
+        pos = 0
+        for (sub, zone, count) in self._walk_extents(part, scale, dir_ino):
+            nbytes = count * zs
+            if byte_off < pos + nbytes:
+                rel = byte_off - pos
+                return self._zone_to_lba(part, scale, sub, zone) + rel // SECTOR
+            pos += nbytes
+        raise OSError("directory offset %d beyond its extents" % byte_off)
+
+    def pfs_create(self, partition_name, path, data=b""):
+        """Create a NEW regular file and write ``data`` into it.
+
+        The new inode copies mode/attr/uid/gid from a regular file already in
+        the same directory (falls back to 0x21FF / 0x80 / 0xFFFF), starts with
+        one data zone, and is filled through pfs_write (which grows it). The
+        directory entry is the committing write: bitmap + inode are written
+        first, so a crash before the entry leaves only two leaked zones.
+        Directories are never grown: if the parent's existing blocks have no
+        room for the entry, OSError is raised before anything is written.
+        """
+        if not (self.dev.overlay or self.dev.writable):
+            raise PermissionError("device not writable")
+        parent, leaf = self._split_path(path)
+        nm = leaf.encode("latin-1")
+        if not 0 < len(nm) <= 255 or "/" in leaf:
+            raise ValueError("bad file name %r" % leaf)
+        pino, part, scale, zs = self._resolve_path(partition_name, parent)
+        if not pino.is_dir:
+            raise NotADirectoryError(parent)
+        sb = self._supers[partition_name]
+        if sb["pfsFsckStat"] & PFS_FSCK_STAT_WRITE_ERROR:
+            raise OSError("PFS %r flagged as having write errors; run fsck first"
+                          % partition_name)
+        ents = self._parse_dir(part, scale, pino, zs)
+        if any(not e.get("dotdir") and e["name"] == leaf for e in ents):
+            raise FileExistsError(path)
+
+        # -- find room for the dentry (split an entry's slack) -- read only --
+        raw_dir, _ = self._read_file_data(part, scale, pino, zs)
+        need = (8 + len(nm) + 3) & ~3
+        slot = None
+        for sec in range(0, len(raw_dir), SECTOR):
+            off = sec
+            end = min(sec + SECTOR, len(raw_dir))
+            while off + 8 <= end:
+                alen_raw = _u16(raw_dir, off + 6)
+                alen = alen_raw & 0xFFF
+                if alen < 8:
+                    break
+                plen = raw_dir[off + 5]
+                used = (8 + plen + 3) & ~3 if _u32(raw_dir, off) else 0
+                if alen - used >= need:
+                    slot = (off, alen_raw, used, alen)
+                    break
+                off += alen
+            if slot:
+                break
+        if slot is None:
+            raise OSError("directory %r has no free entry space (growing a "
+                          "directory is not supported)" % parent)
+
+        # -- template inode fields from a sibling regular file --
+        mode, attr, uidgid = 0x21FF, 0x80, b"\xff\xff\xff\xff"
+        for e in ents:
+            if e.get("dotdir"):
+                continue
+            sib, _ = self._read_inode(part, scale, {"number": e["inode_zone"],
+                                                    "subpart": e["sub"], "count": 1})
+            if not sib.is_dir:
+                mode, attr = sib.mode, sib.attr
+                uidgid = bytes(sib.raw[0x3BC:0x3C0])
+                break
+
+        # -- allocate inode zone + one data zone (contiguous, subpart 0) --
+        bm = self._get_bitmap(partition_name, 0)
+        bm.verify_reserved()
+        hint = pino.inode_block["number"] if pino.inode_block["subpart"] == 0 else 0
+        z = bm.alloc_contiguous(hint, 2)
+        if z is None:
+            z = bm.alloc_contiguous(0, 2)
+        if z is None:
+            raise OSError("ENOSPC: no 2 free contiguous zones in %r" % partition_name)
+
+        raw = bytearray(PFS_INODE_BYTES)
+        struct.pack_into("<I", raw, 0x04, PFS_SEGD_MAGIC)
+        for off in (0x08, 0x18, 0x28):              # inode_block, last_segment, data[0]
+            struct.pack_into("<IHH", raw, off, z, 0, 1)
+        struct.pack_into("<IHH", raw, 0x28 + 8, z + 1, 0, 1)   # data[1]
+        struct.pack_into("<HH", raw, 0x3B8, mode, attr)
+        raw[0x3BC:0x3C0] = uidgid
+        now = pfs_datetime_now()
+        for off in (PFS_INODE_OFF_ATIME, PFS_INODE_OFF_CTIME, PFS_INODE_OFF_MTIME):
+            raw[off:off + 8] = now
+        struct.pack_into("<Q", raw, PFS_INODE_OFF_SIZE, 0)
+        struct.pack_into("<IIII", raw, 0x3E0, 2, 2, 1, 0)   # blocks, data, segdesg, subpart
+        self._seg_finalize(raw)
+
+        # writes: data zone (zeroed), inode zone, bitmap, then the dentry
+        zone_sectors = zs // SECTOR
+        self.dev.write_sectors(self._zone_to_lba(part, scale, 0, z + 1),
+                               b"\x00" * zs)
+        self.dev.write_sectors(self._zone_to_lba(part, scale, 0, z),
+                               bytes(raw) + b"\x00" * ((zone_sectors * SECTOR) - len(raw)))
+        bm.flush()
+
+        off, alen_raw, used, alen = slot
+        sec_base = (off // SECTOR) * SECTOR
+        lba = self._dir_block_lba(part, scale, zs, pino, sec_base)
+        blk = bytearray(self.dev.read_sectors(lba, 1))
+        rel = off - sec_base
+        if used:
+            # shrink the existing entry to its own size, new entry gets the rest
+            struct.pack_into("<H", blk, rel + 6, (alen_raw & 0xF000) | used)
+            new_off, new_alen = rel + used, alen - used
+        else:
+            new_off, new_alen = rel, alen               # reuse an empty record
+        struct.pack_into("<IBBH", blk, new_off, z, 0, len(nm),
+                         self._DENT_TYPE_FILE | new_alen)
+        blk[new_off + 8:new_off + 8 + len(nm)] = nm
+        blk[new_off + 8 + len(nm):new_off + new_alen] = b"\x00" * (new_alen - 8 - len(nm))
+        self.dev.write_sectors(lba, bytes(blk))
+        self.dev.sync()
+
+        if data:
+            self.pfs_write(partition_name, "/".join([parent.rstrip("/"), leaf]), data)
+        return len(data)
+
+    def pfs_delete(self, partition_name, path):
+        """Delete a regular file: remove its directory entry (the committing
+        write), then free its data, inode and segment zones in the bitmap."""
+        if not (self.dev.overlay or self.dev.writable):
+            raise PermissionError("device not writable")
+        parent, leaf = self._split_path(path)
+        pino, part, scale, zs = self._resolve_path(partition_name, parent)
+        raw_dir, _ = self._read_file_data(part, scale, pino, zs)
+        target = prev = None
+        for sec in range(0, len(raw_dir), SECTOR):
+            off, p_in_sec = sec, None
+            end = min(sec + SECTOR, len(raw_dir))
+            while off + 8 <= end:
+                alen = _u16(raw_dir, off + 6) & 0xFFF
+                if alen < 8:
+                    break
+                plen = raw_dir[off + 5]
+                if _u32(raw_dir, off) and \
+                        raw_dir[off + 8:off + 8 + plen].decode("latin-1") == leaf:
+                    target, prev = off, p_in_sec
+                    break
+                p_in_sec = off
+                off += alen
+            if target is not None:
+                break
+        if target is None:
+            raise FileNotFoundError(path)
+        bi = {"number": _u32(raw_dir, target), "subpart": raw_dir[target + 4], "count": 1}
+        ino, _ = self._read_inode(part, scale, bi)
+        if ino.is_dir:
+            raise IsADirectoryError(path)
+        extents, _locs = self._walk_extents_loc(part, scale, ino, strict=True)
+        segs = [bi]
+        cur = ino
+        while cur.next_segment["number"]:
+            ns = dict(cur.next_segment)
+            segs.append(ns)
+            cur, _ = self._read_inode(part, scale, ns)
+
+        # 1) directory entry: merge into the previous record, or blank it
+        sec_base = (target // SECTOR) * SECTOR
+        lba = self._dir_block_lba(part, scale, zs, pino, sec_base)
+        blk = bytearray(self.dev.read_sectors(lba, 1))
+        rel = target - sec_base
+        alen_t = _u16(blk, rel + 6) & 0xFFF
+        if prev is not None:
+            prel = prev - sec_base
+            pa = _u16(blk, prel + 6)
+            struct.pack_into("<H", blk, prel + 6, (pa & 0xF000) | ((pa & 0xFFF) + alen_t))
+            blk[rel:rel + alen_t] = b"\x00" * alen_t
+        else:
+            struct.pack_into("<IBBH", blk, rel, 0, 0, 0, alen_t)
+            blk[rel + 8:rel + alen_t] = b"\x00" * (alen_t - 8)
+        self.dev.write_sectors(lba, bytes(blk))
+
+        # 2) free zones
+        bms = {}
+        for sub, zone, count in extents + [(s["subpart"], s["number"], 1) for s in segs]:
+            if sub not in bms:
+                bms[sub] = self._get_bitmap(partition_name, sub)
+            bms[sub].mark_free(zone, count)
+        for b in bms.values():
+            b.flush()
+        self.dev.sync()
+
     def pfs_write(self, partition_name, path, data):
         """Replace an existing file's content, supporting in-place, shrink AND
         grow (the grow path ports pfsshell's bitmap allocator + inode/segment
@@ -2066,7 +2270,8 @@ def _build_synthetic_pfs(path, part_zones=4096):
         return o
 
     # root dir: data[0]=self, data[1]=dir-data zone; number_data=2
-    rino = inode(root_zone, PFS_SEGD_MAGIC, PFS_FIO_ATTR_SUBDIR, zsize, 2, 1, 0)
+    # like a real PFS root: size is one 512-byte dentry block
+    rino = inode(root_zone, PFS_SEGD_MAGIC, PFS_FIO_ATTR_SUBDIR, 512, 2, 1, 0)
     rdir_zone = 536
     buf[bm_off + (rdir_zone // 8)] |= (1 << (rdir_zone % 8))  # reserve dir data
     wbi(rino + 0x28 + 1 * 8, rdir_zone, 0, 1)                 # data[1] -> dir data
@@ -2087,7 +2292,13 @@ def _build_synthetic_pfs(path, part_zones=4096):
     off = d
     off += dentry(off, root_zone, 0, ".")
     off += dentry(off, root_zone, 0, "..")
+    last = off
     off += dentry(off, file_zone, 0, "f.bin")
+    # the last record of a dentry block spans to the end of the 512-byte
+    # sector (as the PFS driver writes it); top nibble = type (1 dir, 2 file)
+    struct.pack_into("<H", buf, last + 6, 0x2000 | (d + SECTOR - last))
+    for o, t in ((d, 0x1000), (d + 12, 0x1000)):
+        struct.pack_into("<H", buf, o + 6, t | (_u16(buf, o + 6) & 0xFFF))
 
     # ---- file inode f.bin @ file_zone: data[0]=self, data[1]=1 data zone ----
     fino = inode(file_zone, PFS_SEGD_MAGIC, 0, zsize, 2, 1, 0)

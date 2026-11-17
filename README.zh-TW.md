@@ -32,6 +32,9 @@
   多款遊戲合併到同一顆硬碟、映像檔瘦身。
 - **執行檔修補**：解密並修補 T14 以後的 `taiko` ELF，例如提高歌曲數量上限、
   調整選歌倒數、跳過開機的 Notice 畫面。
+- **USB 鍵盤 patch（Taiko 14）**：用一般 USB 鍵盤遊玩，不需要 JVS I/O 板
+  （[KBD2EE](https://github.com/GanYiZhong/Taiko14-USB-Keyboard-Patch)）；
+  可以裝進硬碟映像（不動加密狗卡），或裝到加密狗卡映像。
 
 模組說明見 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，
 逆向出來的檔案格式見 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md)（皆為英文）。
@@ -97,6 +100,7 @@ Explorer 是整個工具的中心，`.bin` 編輯器和大部分工具都從它�
 python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # 提高歌曲上限（命令列）
 python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # 選歌倒數秒數（命令列）
 python -m taiko2x6.exe.taiko_exe --help                               # 所有執行檔修補選項
+python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB 鍵盤 patch
 python -m taiko2x6.charts.gen3_convert --help      # 虹版譜面 → SHT（命令列）
 ```
 
@@ -125,6 +129,17 @@ from taiko2x6.songs.song_manager import SongManager
   `graphics/songtex_all` 產生曲名貼圖。
 - **匯入虹版歌曲**：`charts/gen3_song` / `charts/gen3_convert` 負責解密、轉換譜面，
   並透過 `vgmstream-win64/` 解碼音訊。
+- **用 USB 鍵盤玩 Taiko 14**：Tools → *USB keyboard patch (T14)*（`exe/usb_keyboard`）。
+  按鍵：1P <kbd>D</kbd> <kbd>F</kbd> <kbd>J</kbd> <kbd>K</kbd>、
+  2P <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd>、投幣 <kbd>5</kbd>、
+  SERVICE <kbd>9</kbd>、TEST <kbd>F1</kbd>、選單 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>Enter</kbd>；
+  開機後要把鍵盤拔掉再插一次。
+  - *硬碟映像*（預設）：`taiko` 會先讀自己分區上的 `pfs0:IRXARC.BIN;1`，找不到才讀卡片的
+    `mc0:IRXARC.BIN`，所以工具會把「卡片原版 IRXARC + KBD2EE」寫進 `t14jp1400.0001`。
+    第一次安裝需要提供一次原版 IRXARC（加密狗卡映像或取出的 `IRXARC.BIN`），卡片本身不會被修改。
+    **尚未在實機上測試。** 按 *Remove* 會刪掉這些檔案，遊戲就會改回讀卡片。
+  - *卡片映像*：原本在實機測試過的做法，修改卡片上的 `IRXARC.BIN` 和 `T14LOAD`
+    （會先備份一份 `.bak`）。
 - **合併多款遊戲（Omnimix）**：Tools → *Omnimix Maker*（`songs/omnimix_maker`）。
   214 首以內已驗證可正常遊玩；超過 214 首時資料能寫入，但實機能否全部顯示與遊玩尚未測試，
   請先在備份上試。
@@ -139,7 +154,7 @@ from taiko2x6.songs.song_manager import SongManager
 | 寫入對象 | 保護方式 |
 |---|---|
 | `DATA.000` + `list.bin`（Explorer 存檔、Song Builder、封存 CLI、Omnimix 輸出到資料夾） | 兩個檔案一起成功或一起失敗。覆寫時會保留 `.bak`、`.bak.1`…。如果存檔中途程式掛掉，下次開啟封存時會自動完成或還原。 |
-| PS2 硬碟 `.img`（HDD Browser、HDD Song Wizard、Omnimix Maker、`taiko_exe`） | 覆寫任何磁區前，先把舊內容存進 **undo 日誌** `<img>.<日期-時間>.undo`（大小約等於寫入的資料量，不是整個映像檔）。寫入失敗會當場自動還原；寫入成功時日誌會保留，當作這次寫入的備份。 |
+| PS2 硬碟 `.img`（HDD Browser、HDD Song Wizard、Omnimix Maker、`taiko_exe`、USB 鍵盤 patch） | 覆寫任何磁區前，先把舊內容存進 **undo 日誌** `<img>.<日期-時間>.undo`（大小約等於寫入的資料量，不是整個映像檔）。寫入失敗會當場自動還原；寫入成功時日誌會保留，當作這次寫入的備份。 |
 | 記憶卡 `.ps2` | 以寫入模式開啟前先複製一份 `.bak`。 |
 | ISO 的 UDF 修復 | 舊的檔頭先存進 undo 日誌。 |
 

@@ -9,7 +9,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('taiko2x6/exe/data/KBD2EE.irx', 'taiko2x6/exe/data')],  # USB keyboard patch module
     hiddenimports=collect_submodules('taiko2x6'),
     hookspath=[],
     hooksconfig={},

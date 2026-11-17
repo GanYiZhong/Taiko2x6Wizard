@@ -38,6 +38,9 @@ one Explorer GUI.
   image slimming.
 - **Executable patching** — decrypt and patch the T14+ `taiko` ELF: raise the
   song-count ceiling, change the song-select timer, skip the boot Notice screen.
+- **USB keyboard patch (Taiko 14)** — play with a plain USB keyboard and no JVS
+  I/O board ([KBD2EE](https://github.com/GanYiZhong/Taiko14-USB-Keyboard-Patch)),
+  installed onto the HDD image (card untouched) or onto the dongle card image.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and
 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md) for the reverse-engineered
@@ -106,6 +109,7 @@ from its menus. Several modules also run standalone with `python -m`, e.g.:
 python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # raise the song limit — CLI
 python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # song-select timer — CLI
 python -m taiko2x6.exe.taiko_exe --help                               # all exe-patch options
+python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB keyboard patch
 python -m taiko2x6.charts.gen3_convert --help    # Gen3 (Nijiiro) fumen -> SHT — CLI
 ```
 
@@ -137,6 +141,19 @@ let the GUI fill it in as you browse.
   `graphics/songtex_all`.
 - **Import a Gen3 (Nijiiro) song** — `charts/gen3_song` / `charts/gen3_convert`
   decrypt and convert the fumen and decode the audio (via `vgmstream-win64/`).
+- **Play Taiko 14 with a USB keyboard** — Tools → *USB keyboard patch (T14)*
+  (`exe/usb_keyboard`). Keys: 1P <kbd>D</kbd> <kbd>F</kbd> <kbd>J</kbd> <kbd>K</kbd>,
+  2P <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd>, COIN <kbd>5</kbd>,
+  SERVICE <kbd>9</kbd>, TEST <kbd>F1</kbd>, SELECT <kbd>↑</kbd> <kbd>↓</kbd>
+  <kbd>Enter</kbd>; unplug and replug the keyboard once after boot.
+  - *HDD image* (default): `taiko` loads `pfs0:IRXARC.BIN;1` from its own
+    partition before falling back to the card's `mc0:IRXARC.BIN`, so the tool
+    writes "stock card IRXARC + KBD2EE" into `t14jp1400.0001`. The first
+    install needs the stock archive once (the dongle card image or a dumped
+    `IRXARC.BIN`); the card itself is not changed. **Not yet tested on
+    hardware.** *Remove* deletes the files and the game uses the card again.
+  - *Card image*: the original, hardware-tested method — patches the card's
+    `IRXARC.BIN` and `T14LOAD` (a `.bak` of the card is made first).
 - **Fuse several games into one (Omnimix)** — Tools → *Omnimix Maker*
   (`songs/omnimix_maker`). Up to 214 songs is proven in-game; above that the
   data is written correctly but whether the select wheel shows and plays every
@@ -153,7 +170,7 @@ Every tool that changes game files goes through `taiko2x6/safeio.py`:
 | What is written | Protection |
 |---|---|
 | `DATA.000` + `list.bin` (Explorer save, Song Builder, archive CLI, Omnimix to a folder) | Both files are committed together or not at all. Overwriting keeps a rolling `.bak`, `.bak.1`, …. If the app dies mid-save, the next open of the archive finishes or undoes the save automatically. |
-| PS2 HDD `.img` (HDD Browser, HDD Song Wizard, Omnimix Maker, `taiko_exe`) | Before any sector is overwritten, its old contents go to an **undo journal** `<img>.<date-time>.undo` (about the size of the data written, not the whole image). A failed write is rolled back on the spot; the journal is kept as the backup of a successful write. |
+| PS2 HDD `.img` (HDD Browser, HDD Song Wizard, Omnimix Maker, `taiko_exe`, USB keyboard patch) | Before any sector is overwritten, its old contents go to an **undo journal** `<img>.<date-time>.undo` (about the size of the data written, not the whole image). A failed write is rolled back on the spot; the journal is kept as the backup of a successful write. |
 | Memory card `.ps2` | A `.bak` copy is made before the card is opened for writing. |
 | ISO UDF repair | The old header is saved to an undo journal. |
 

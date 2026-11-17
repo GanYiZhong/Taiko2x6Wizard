@@ -544,6 +544,14 @@ class MainWindow(QMainWindow):
             "holding the image first.")
         self.act_taikotimer.triggered.connect(self.open_taiko_timer)
 
+        self.act_usbkbd = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
+                                  "USB keyboard patch (T14)…", self)
+        self.act_usbkbd.setToolTip(
+            "Play Taiko 14 with a USB keyboard and no JVS I/O board (KBD2EE.irx). "
+            "Installs into the HDD game partition (card untouched) or onto the "
+            "dongle card image. Close any emulator holding the image first.")
+        self.act_usbkbd.triggered.connect(self.open_usb_keyboard)
+
         self.act_imgslim = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
                                    "Slim PS2 HDD image…", self)
         self.act_imgslim.setToolTip(
@@ -617,6 +625,7 @@ class MainWindow(QMainWindow):
         tools.addAction(self.act_ps2mc)
         tools.addAction(self.act_taikoexe)
         tools.addAction(self.act_taikotimer)
+        tools.addAction(self.act_usbkbd)
         tools.addAction(self.act_imgslim)
         tools.addAction(self.act_apamerge)
         tools.addAction(self.act_omnimix)
@@ -1077,6 +1086,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Song-select timer", str(exc))
             return
         dlg = taiko_exe.TaikoTimerDialog(self, default_img=self._recent_hdd_img())
+        dlg.exec()
+
+    def open_usb_keyboard(self):
+        from taiko2x6.exe import usb_keyboard
+        dlg = usb_keyboard.UsbKeyboardDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
 
     def open_gen3_convert(self):

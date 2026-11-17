@@ -90,7 +90,7 @@ folder registers it with the Explorer.
 ### `ps2/` — PS2 storage I/O
 | Module | Role |
 |--------|------|
-| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine, incl. `grow_partition` / `grow_partition_reclaim`. Writable opens keep an undo journal; use `write_session()` for all-or-nothing edits. |
+| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine, incl. `pfs_create` / `pfs_delete` (files in an existing directory; directories are not grown), `grow_partition` / `grow_partition_reclaim`. Writable opens keep an undo journal; use `write_session()` for all-or-nothing edits. |
 | `pfsshell_tool.py` | Drive the native `pfsshell.exe` as an alternative PFS path. |
 | `apa_merge.py` | Merge multiple games' APA partitions onto one HDD image (swap-card-per-game setup). |
 | `img_slim.py` | Trim / slim a PS2 HDD image. |
@@ -103,6 +103,7 @@ folder registers it with the Explorer.
 | Module | Role |
 |--------|------|
 | `taiko_exe.py` | Decrypt/patch the T14+ `taiko` ELF (MIPS, EE). Needs `T14LOAD.bin` to derive the key. Song-count ceiling, select timer, boot Notice skip. |
+| `usb_keyboard.py` | Taiko 14 USB keyboard + dummy-JVS patch: puts the bundled `data/KBD2EE.irx` into an `IRXARC.BIN` module archive. HDD mode writes it as `IRXARC.BIN;1` / `IRXARC.BIN` into the partition holding `taiko` (`Game::LoadModules` at `0x101480` opens `pfs0:IRXARC.BIN;1` before `mc0:IRXARC.BIN` and loads every module in it); card mode patches the card's `IRXARC.BIN` + `T14LOAD` name list. |
 
 ## Dependency shape
 
