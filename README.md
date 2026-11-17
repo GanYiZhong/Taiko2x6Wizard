@@ -69,7 +69,7 @@ Core deps: `PySide6`, `numpy`, `Pillow`, `pycryptodome`. Audio import also wants
 ## What you must supply
 
 These are **not** in the repo (git-ignored) because they are third-party or
-game-derived. Place each next to the `.py` modules (the repo root):
+game-derived. Place each in the project root (next to `main.py`):
 
 | File / folder      | What it is                                         | Where to get it |
 |--------------------|----------------------------------------------------|-----------------|
@@ -85,24 +85,30 @@ is yours to provide and is git-ignored so it never lands in the repo.
 
 ## Quick start
 
-Run everything from the repo root (the modules use flat imports and load their
-assets from their own directory):
+Run everything from the project root:
 
 ```bash
 cd Taiko2x6Wizard
-python taiko256_explorer_gui6.py            # main Explorer GUI
+python main.py                       # main Explorer GUI
 # optionally pass a folder that holds DATA.000 + list.bin:
-python taiko256_explorer_gui6.py "D:/Taiko/extract"
+python main.py "D:/Taiko/extract"
 ```
 
 The Explorer is the hub — the per-song `.bin` editors and most tools are opened
-from its menus. Several modules also run standalone, e.g.:
+from its menus. Several modules also run standalone with `python -m`, e.g.:
 
 ```bash
-python taiko_exe.py            # T14 exe patcher (song-limit ceiling) — GUI
-python bineditor_musicinfo.py  # edit musicinfo.bin directly — GUI
-python tja2sht.py --help       # TJA -> SHT converter — CLI
-python gen3_convert.py --help  # Gen3 (Nijiiro) fumen -> SHT — CLI
+python -m taiko2x6.exe.taiko_exe                 # T14 exe patcher — GUI
+python -m taiko2x6.bineditors.bineditor_musicinfo  # edit musicinfo.bin — GUI
+python -m taiko2x6.charts.gen3_convert --help    # Gen3 (Nijiiro) fumen -> SHT — CLI
+```
+
+From your own scripts, import from the package (run them from the project root,
+or put it on `PYTHONPATH`):
+
+```python
+from taiko2x6.ps2 import ps2hdd
+from taiko2x6.songs.song_manager import SongManager
 ```
 
 `config.ini` (git-ignored) just remembers your last-used paths. Copy
@@ -114,14 +120,17 @@ let the GUI fill it in as you browse.
 ## Common workflows
 
 - **Add a song to a T14+ HDD image** — extract `list.bin`/`DATA.000` from the
-  image's game partition (`ps2hdd.py`), add the song with `song_builder`
-  (textures + charts + audio + DB rows), rebuild with `archive_builder`, write
-  back with `ps2hdd.py`. If you exceed the on-disc song ceiling, patch it first
-  with `taiko_exe.py`.
-- **Import a TJA chart** — `tja2sht.py` converts the chart; import the OGG/WAV as
-  VAG with `vagtool.py`; render the title texture with `songtex_all.py`.
-- **Import a Gen3 (Nijiiro) song** — `gen3_song.py` / `gen3_convert.py` decrypt
-  and convert the fumen and decode the audio (via `vgmstream-win64/`).
+  image's game partition (`ps2/ps2hdd`), add the song with `songs/song_builder`
+  (textures + charts + audio + DB rows), rebuild with `archive/archive_builder`,
+  write back with `ps2/ps2hdd`. If you exceed the on-disc song ceiling, patch it
+  first with `exe/taiko_exe`.
+- **Import a TJA chart** — `charts/tja2sht` converts the chart; import the
+  OGG/WAV as VAG with `audio/vagtool`; render the title texture with
+  `graphics/songtex_all`.
+- **Import a Gen3 (Nijiiro) song** — `charts/gen3_song` / `charts/gen3_convert`
+  decrypt and convert the fumen and decode the audio (via `vgmstream-win64/`).
+- **Fuse several games into one (Omnimix)** — Tools → *Omnimix Maker*
+  (`songs/omnimix_maker`).
 
 > ⚠️ **Safety.** When writing to a PS2 HDD `.img`, **close PCSX2 first** — it
 > locks the image for writing (reads are fine while it runs). Always work on
@@ -139,7 +148,19 @@ Taiko2x6Wizard/
 ├── requirements.txt           Python dependencies
 ├── .gitignore                 excludes game data + supplied binaries
 ├── config.ini.example         template for local path memory
-├── *.py                       38 toolkit modules (flat — see docs/ARCHITECTURE.md)
+├── main.py                    launcher — opens the Explorer GUI
+├── Taiko2x6Wizard.spec        PyInstaller build (single-file exe)
+├── taiko2x6/                  the toolkit package
+│   ├── app/                    Explorer GUI (hub), config + asset paths
+│   ├── archive/                DATA.000 + list.bin read / rebuild
+│   ├── songs/                  song add / replace / DB manager, Omnimix
+│   ├── bineditors/             per-song .bin table editors (auto-discovered)
+│   ├── charts/                 TJA / Gen3 -> SHT, SHT validator
+│   ├── audio/                  VAG, hd/bd sound banks, playback
+│   ├── graphics/               TIM2, title art, SWG sprites, flipbooks
+│   ├── ps2/                    PS2 HDD (APA/PFS), memory card, ISO, image tools
+│   └── exe/                    T14+ taiko executable patcher
+├── release/                   release notes
 └── docs/
     ├── ARCHITECTURE.md         module map + how the pieces fit
     ├── FILE_FORMATS.md         reverse-engineered on-disc formats
@@ -149,10 +170,10 @@ Taiko2x6Wizard/
     └── reviews/                internal design/code-review notes
 ```
 
-> The modules live flat at the repo root **on purpose**: the Explorer discovers
-> its `bineditor_*.py` tools by globbing its own directory, and modules load
-> `Font.ttf`, `T14LOAD.bin`, `vgmstream-win64/`, and `config.ini` relative to
-> themselves. Keep them together.
+> `Font.ttf`, `T14LOAD.bin`, `pfsshell.exe`, `vgmstream-win64/` and `config.ini`
+> are looked up in the project root (or next to the `.exe` in the frozen build)
+> via `taiko2x6/app/apppaths.py`. New `bineditor_*.py` files dropped into
+> `taiko2x6/bineditors/` are picked up by the Explorer automatically.
 
 ---
 

@@ -1,28 +1,45 @@
 # Architecture
 
-Taiko2x6Wizard is a flat collection of PySide6/CLI modules that all operate on
-the arcade _Taiko no Tatsujin_ data formats. The **Explorer GUI**
-(`taiko256_explorer_gui6.py`) is the hub: it opens a game archive and launches
-the rest. Modules use flat imports (`import ps2hdd`) and load bundled assets
-relative to their own directory, so they must stay in one folder.
+Taiko2x6Wizard is a Python package (`taiko2x6/`) of PySide6/CLI modules that
+all operate on the arcade _Taiko no Tatsujin_ data formats. The **Explorer GUI**
+(`taiko2x6/app/taiko256_explorer_gui6.py`, started by `main.py`) is the hub: it
+opens a game archive and launches the rest. Modules import each other with
+absolute package imports (`from taiko2x6.ps2 import ps2hdd`) and find
+user-supplied assets through `taiko2x6/app/apppaths.py`.
+
+```
+main.py                 launcher -> taiko2x6.app.taiko256_explorer_gui6.main()
+taiko2x6/
+  app/        archive/    songs/      bineditors/   charts/
+  audio/      graphics/   ps2/        exe/
+```
 
 ## Module map
 
-### Application / hub
+### `app/` — application hub
 | Module | Role |
 |--------|------|
-| `taiko256_explorer_gui6.py` | **Main GUI.** Opens `DATA.000` + `list.bin`, browses groups/files, previews textures/audio, and launches every other tool. Auto-discovers `bineditor_*.py` by globbing its own directory. |
-| `taiko256_archive_tool_v2.py` | Backend/CLI for the SYSTEM256/2x6 archive container (group table + file table + payload). |
+| `taiko256_explorer_gui6.py` | **Main GUI.** Opens `DATA.000` + `list.bin`, browses groups/files, previews textures/audio, and launches every other tool. Auto-discovers `bineditor_*.py` by globbing the `taiko2x6/bineditors/` package. |
+| `appconfig.py` | `config.ini` last-used-path store used by every file dialog. |
+| `apppaths.py` | Where user-supplied assets and `config.ini` live: the project root from source, or the `.exe`'s folder when frozen. |
 
-### Archive build & song assembly
+### `archive/` — container
 | Module | Role |
 |--------|------|
-| `archive_builder.py` | Rebuild `DATA.000` + `list.bin` with new/replaced groups (keeps the name-sorted group order the game binary-searches). |
+| `taiko256_archive_tool_v2.py` | Backend/CLI for the SYSTEM256/2x6 archive container (group table + file table + payload). |
+| `archive_builder.py` | Rebuild `DATA.000` + `list.bin` with new/replaced groups (keeps the name-sorted group order the game binary-searches). Append mode by default; `compact=True` re-lays groups densely so the archive can shrink. |
+
+### `songs/` — song assembly & databases
+| Module | Role |
+|--------|------|
 | `song_builder.py` | High-level "add/replace a full song": title textures + charts + audio + DB rows in one call. |
 | `song_manager.py` | Cross-`.bin` database editor — coordinated add/edit/remove across `musicinfo` / `tuning` / `streaminfo`. |
-| `song_replacer.py` | Swap one existing song's parts (chart/audio/texture) in place. |
+| `song_replacer.py` | Swap one existing song's parts (chart/audio/texture) in place; can source from a Gen3 folder. |
+| `omnimix_maker.py` | Fuse songs from several Taiko 8…14 images into one target (dedup by song id, verbatim asset copy, auto song-limit patch, partition grow). |
+| `omnimix_gui.py` | GUI for the Omnimix Maker (Tools menu). |
+| `generators.py` | Placeholder chart/audio generators (uses `tja2sht`, `vagtool`). |
 
-### Per-song database `.bin` editors (auto-discovered by the Explorer)
+### `bineditors/` — per-song database `.bin` editors (auto-discovered)
 | Module | Table |
 |--------|-------|
 | `bineditor_musicinfo.py` | `musicinfo.bin` — song metadata, genre, star ratings, display indices |
@@ -34,7 +51,10 @@ relative to their own directory, so they must stay in one folder.
 | `bineditor_hdbdinfo.py` | `hdbdinfo.bin` — hd/bd sound-bank index |
 | `bineditor_enso_parts.py` | `enso_parts.bin` — performance/"enso" part asset table |
 
-### Charts (fumen)
+Each exposes `FILENAME` and `Editor`; dropping a new `bineditor_*.py` into this
+folder registers it with the Explorer.
+
+### `charts/` — fumen
 | Module | Role |
 |--------|------|
 | `tja2sht.py` | Convert TJA → SHT (SYSTEM256 chart). Position grid is 1/48 of a measure (`POS_DIV=48`, an engine limit). |
@@ -42,7 +62,14 @@ relative to their own directory, so they must stay in one folder.
 | `gen3_convert.py` | Decrypt Gen3 (Nijiiro) fumen (AES-256-CBC + gzip) and convert to SHT; decodes audio via `vgmstream`. |
 | `gen3_song.py` | Load a Gen3 song directory and map it to `song_builder` kwargs (title, charts, stars, audio). |
 
-### Textures / graphics
+### `audio/`
+| Module | Role |
+|--------|------|
+| `vagtool.py` | VAG (PS2 ADPCM) encode/decode; OGG/WAV ↔ VAG (bit-exact with vgmstream's IIR). |
+| `hdbd.py` | hd/bd sound-bank (hddbd) parse + playback. |
+| `audioplayer.py` | In-GUI audio playback widget. |
+
+### `graphics/`
 | Module | Role |
 |--------|------|
 | `tim2.py` | TIM2 image encode/decode (incl. 4-bit indexed templates used for titles). |
@@ -52,18 +79,10 @@ relative to their own directory, so they must stay in one folder.
 | `swg_editor.py` | SWG visual editor (canvas + save-back). |
 | `flipbook_player.py` | Flipbook frame-animation player. |
 
-### Audio
+### `ps2/` — PS2 storage I/O
 | Module | Role |
 |--------|------|
-| `vagtool.py` | VAG (PS2 ADPCM) encode/decode; OGG/WAV ↔ VAG (bit-exact with vgmstream's IIR). |
-| `audioplayer.py` | In-GUI audio playback widget. |
-| `hdbd.py` | hd/bd sound-bank (hddbd) parse + playback. |
-| `generators.py` | Placeholder chart/audio generators (uses `tja2sht`, `vagtool`). |
-
-### PS2 storage I/O
-| Module | Role |
-|--------|------|
-| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine. |
+| `ps2hdd.py` | **Native** PS2 APA-partition + PFS filesystem read/write. The core HDD engine, incl. `grow_partition` / `grow_partition_reclaim`. |
 | `pfsshell_tool.py` | Drive the native `pfsshell.exe` as an alternative PFS path. |
 | `apa_merge.py` | Merge multiple games' APA partitions onto one HDD image (swap-card-per-game setup). |
 | `img_slim.py` | Trim / slim a PS2 HDD image. |
@@ -72,34 +91,35 @@ relative to their own directory, so they must stay in one folder.
 | `hdd_browser.py` | GUI HDD/partition browser. |
 | `hdd_song_wizard.py` | One-click "add a song to a T14 image" flow. |
 
-### Executable patching
+### `exe/` — executable patching
 | Module | Role |
 |--------|------|
-| `taiko_exe.py` | Decrypt/patch the T14+ `taiko` ELF (MIPS, EE). Needs `T14LOAD.bin` to derive the key. Includes the song-count ceiling patch. |
-
-### Shared utilities
-| Module | Role |
-|--------|------|
-| `appconfig.py` | `config.ini` last-used-path store used by every file dialog. |
+| `taiko_exe.py` | Decrypt/patch the T14+ `taiko` ELF (MIPS, EE). Needs `T14LOAD.bin` to derive the key. Song-count ceiling, select timer, boot Notice skip. |
 
 ## Dependency shape
 
-- **`taiko256_explorer_gui6.py`** imports ~22 of the modules — it is the top of
-  the graph and the single place most tools are wired together.
-- **`ps2hdd.py`** is the heaviest standalone engine (APA + PFS); `apa_merge`,
-  `img_slim`, `taiko_exe`, and the HDD GUIs build on it.
-- **`song_manager.py`** ties the three primary `.bin` editors together;
-  `song_builder.py` sits above it for full-song assembly.
-- The eight `bineditor_*.py` tools are independent standalone GUIs **and** are
-  discovered dynamically by the Explorer (directory glob) — hence they live
-  beside it.
+- **`app/taiko256_explorer_gui6`** imports most of the package — it is the top
+  of the graph and the single place most tools are wired together.
+- **`ps2/ps2hdd`** is the heaviest standalone engine (APA + PFS); `apa_merge`,
+  `img_slim`, `taiko_exe`, `omnimix_maker` and the HDD GUIs build on it.
+- **`songs/song_manager`** ties the three primary `.bin` editors together;
+  `song_builder` sits above it for full-song assembly, and `omnimix_maker`
+  above that for multi-game merges.
 
-## Assets loaded relative to the module directory
+## Running
 
-Keep these next to the `.py` files (all git-ignored — you supply them):
+- GUI: `python main.py [folder]`
+- A single tool: `python -m taiko2x6.<subpackage>.<module>` from the project root.
+- Frozen build: `pyinstaller Taiko2x6Wizard.spec` (entry `main.py`; every
+  package module is listed in `hiddenimports` because several are imported lazily).
 
-- `Font.ttf` — `songtex.py`, `songtex_all.py`
-- `vgmstream-win64/` — `gen3_convert.py`
-- `pfsshell.exe` — `pfsshell_tool.py`
-- `T14LOAD.bin` — `taiko_exe.py`
-- `config.ini` — `appconfig.py`
+## User-supplied assets
+
+Resolved by `apppaths.resource_dir()` — the project root from source, the
+`.exe`'s folder when frozen (all git-ignored — you supply them):
+
+- `Font.ttf` — `graphics/songtex`, `graphics/songtex_all`
+- `vgmstream-win64/` — `charts/gen3_convert`
+- `pfsshell.exe` — `ps2/pfsshell_tool`
+- `T14LOAD.bin` — `exe/taiko_exe`
+- `config.ini` — `app/appconfig`

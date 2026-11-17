@@ -2,11 +2,11 @@
 
 
 a = Analysis(
-    ['taiko256_explorer_gui6.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['apa_merge', 'appconfig', 'apppaths', 'archive_builder', 'audioplayer', 'bineditor_enso_parts', 'bineditor_fname', 'bineditor_hdbdinfo', 'bineditor_lamp', 'bineditor_musicinfo', 'bineditor_rank', 'bineditor_streaminfo', 'bineditor_tuning', 'flipbook_player', 'gen3_convert', 'gen3_song', 'generators', 'hdbd', 'hdd_browser', 'hdd_song_wizard', 'img_slim', 'iso_packer', 'omnimix_maker', 'omnimix_gui', 'pfsshell_tool', 'ps2hdd', 'ps2mc_card', 'sht_validator', 'song_builder', 'song_manager', 'song_replacer', 'songtex', 'songtex_all', 'swg', 'swg_editor', 'taiko256_archive_tool_v2', 'taiko_exe', 'tim2', 'tja2sht', 'vagtool'],
+    hiddenimports=['taiko2x6.app.appconfig', 'taiko2x6.app.apppaths', 'taiko2x6.app.taiko256_explorer_gui6', 'taiko2x6.archive.archive_builder', 'taiko2x6.archive.taiko256_archive_tool_v2', 'taiko2x6.audio.audioplayer', 'taiko2x6.audio.hdbd', 'taiko2x6.audio.vagtool', 'taiko2x6.bineditors.bineditor_enso_parts', 'taiko2x6.bineditors.bineditor_fname', 'taiko2x6.bineditors.bineditor_hdbdinfo', 'taiko2x6.bineditors.bineditor_lamp', 'taiko2x6.bineditors.bineditor_musicinfo', 'taiko2x6.bineditors.bineditor_rank', 'taiko2x6.bineditors.bineditor_streaminfo', 'taiko2x6.bineditors.bineditor_tuning', 'taiko2x6.charts.gen3_convert', 'taiko2x6.charts.gen3_song', 'taiko2x6.charts.sht_validator', 'taiko2x6.charts.tja2sht', 'taiko2x6.exe.taiko_exe', 'taiko2x6.graphics.flipbook_player', 'taiko2x6.graphics.songtex', 'taiko2x6.graphics.songtex_all', 'taiko2x6.graphics.swg', 'taiko2x6.graphics.swg_editor', 'taiko2x6.graphics.tim2', 'taiko2x6.ps2.apa_merge', 'taiko2x6.ps2.hdd_browser', 'taiko2x6.ps2.hdd_song_wizard', 'taiko2x6.ps2.img_slim', 'taiko2x6.ps2.iso_packer', 'taiko2x6.ps2.pfsshell_tool', 'taiko2x6.ps2.ps2hdd', 'taiko2x6.ps2.ps2mc_card', 'taiko2x6.songs.generators', 'taiko2x6.songs.omnimix_gui', 'taiko2x6.songs.omnimix_maker', 'taiko2x6.songs.song_builder', 'taiko2x6.songs.song_manager', 'taiko2x6.songs.song_replacer'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
