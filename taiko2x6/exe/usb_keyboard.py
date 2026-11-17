@@ -19,6 +19,12 @@ Two ways to get it loaded:
 * **Card (the original, hardware-tested method)** - append KBD2EE to the
   card's ``IRXARC.BIN`` and add its name to ``T14LOAD``'s module list.
 
+Before installing, the game executable ``taiko`` is decrypted (needs the
+``T14LOAD`` key material: taken from the card image, ``--t14load``, or
+``T14LOAD.bin`` as for taiko_exe) and checked: KBD2EE rewrites seven fixed
+16-byte code blocks and uses a fixed memory cave, so on any other ``taiko``
+build it would overwrite live code. A mismatch refuses the install.
+
 Keys: 1P D F J K, 2P Z X C V, COIN 5, SERVICE 9, TEST F1 (toggle), SELECT
 up/down/Enter. The keyboard must be unplugged and replugged once after boot.
 
@@ -27,7 +33,8 @@ CLI::
     python -m taiko2x6.exe.usb_keyboard status  TK14.img
     python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.bin
     python -m taiko2x6.exe.usb_keyboard remove  TK14.img
-    python -m taiko2x6.exe.usb_keyboard install NM00057.ps2      # card method
+    python -m taiko2x6.exe.usb_keyboard install NM00057.ps2 --img TK14.img  # card
+    python -m taiko2x6.exe.usb_keyboard check   TK14.img --t14load T14LOAD.bin
     python -m taiko2x6.exe.usb_keyboard files --in dumped/ --out out/
 """
 from __future__ import annotations
@@ -42,7 +49,7 @@ __all__ = [
     "KeyboardPatchError", "bundled_irx", "patch_irxarc", "unpatch_irxarc",
     "irxarc_modules", "patch_t14load", "unpatch_t14load", "t14load_has_kbd",
     "hdd_status", "hdd_install", "hdd_remove", "card_status", "card_install",
-    "card_remove", "KEYMAP",
+    "card_remove", "KEYMAP", "check_taiko", "check_hdd_taiko",
 ]
 
 MODULE = "KBD2EE"
@@ -50,6 +57,21 @@ IRX_SHA256_PREFIX = "34F1CC379FB27157"          # the hardware-validated build
 HDD_NAMES = ("IRXARC.BIN;1", "IRXARC.BIN")      # see module docstring
 # T14LOAD module-name list: one free slot + a zero run used as a string cave
 PTR_OFF, STR_OFF, STR_VA = 0x32664, 0x34AC4, 0x01033AC4
+
+# The seven 16-byte blocks KBD2EE DMAs over (VA -> the stock t14jp1400 words).
+# KBD2EE carries the three untouched words of each block along, so the WHOLE
+# block must match, not just the hooked instruction.
+HOOK_BLOCKS = {
+    0x00186A20: (0xDFB10008, 0xDFBF0010, 0x080629D0, 0x27BD0020),  # j 0x18A740 -> shim
+    0x00187070: (0x24100007, 0x1000FFBD, 0xADE0B188, 0x3C0E003D),  # li $s0,7 -> 10
+    0x001869D0: (0x00000000, 0x3C0F003D, 0x91EEE780, 0x51C00014),  # node-count gate
+    0x00188A50: (0x0000202D, 0x0C06338A, 0x00000000, 0x962F0042),  # jvswait
+    0x00188AC0: (0x0000202D, 0x0C06338A, 0x00000000, 0x962F0042),  # jvswait
+    0x0018BAF0: (0x26510300, 0x0C06339A, 0x0000202D, 0x0C06338A),  # jvswait
+    0x0018BB50: (0xA62F0010, 0x0C06339A, 0x0000202D, 0x0C06338A),  # jvswait
+}
+# mailbox 0x300000, shim code 0x300020 (2184 B), shim state 0x301000..0x301044
+CAVE = (0x00300000, 0x00301100)
 
 KEYMAP = [
     ("1P drum: Ka L / Don L / Don R / Ka R", "D  F  J  K"),
@@ -226,6 +248,108 @@ def unpatch_t14load(t: bytes) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
+#  taiko compatibility check
+# --------------------------------------------------------------------------- #
+def _va_reader(dec: bytes):
+    """VA -> file offset through the ELF PT_LOAD headers."""
+    if dec[:4] != b"\x7fELF":
+        raise KeyboardPatchError("taiko is not a decrypted ELF")
+    phoff, = struct.unpack_from("<I", dec, 0x1C)
+    phnum, = struct.unpack_from("<H", dec, 0x2C)
+    loads = []
+    for i in range(phnum):
+        typ, off, va, _pa, fsz, msz = struct.unpack_from("<6I", dec, phoff + 32 * i)
+        if typ == 1:
+            loads.append((va, off, fsz, msz))
+
+    def read(va, n):
+        for base, off, fsz, msz in loads:
+            if base <= va and va + n <= base + msz:
+                rel = va - base
+                file_part = dec[off + rel:off + min(rel + n, fsz)] if rel < fsz else b""
+                return file_part + b"\0" * (n - len(file_part))     # .bss is zero
+        raise KeyboardPatchError(f"VA {va:#x} is outside taiko's loaded image")
+    return read
+
+
+def check_taiko(dec: bytes) -> list[str]:
+    """Problems that make this decrypted ``taiko`` unsafe for KBD2EE
+    (empty list = compatible)."""
+    read = _va_reader(dec)
+    problems = []
+    for va, words in HOOK_BLOCKS.items():
+        got = struct.unpack("<4I", read(va, 16))
+        if got != words:
+            bad = [f"{va + 4 * i:#x}: {g:#010x} (expected {w:#010x})"
+                   for i, (g, w) in enumerate(zip(got, words)) if g != w]
+            problems.append("hook block " + "; ".join(bad))
+    cave = read(CAVE[0], CAVE[1] - CAVE[0])
+    if any(cave):
+        first = next(i for i, b in enumerate(cave) if b)
+        problems.append(f"memory cave is not empty (data at {CAVE[0] + first:#x})")
+    return problems
+
+
+def _t14load_path(t14load=None, card=None) -> tuple[str, object]:
+    """A T14LOAD file path for taiko_exe: explicit > the card's > T14LOAD.bin.
+    Returns (path, cleanup) - cleanup deletes a temp copy taken from a card."""
+    from taiko2x6.exe import taiko_exe
+    if t14load:
+        return taiko_exe.find_t14load(t14load), None
+    if card and Path(card).is_file() and _is_card(card):
+        import os
+        import tempfile
+        t = unpatch_t14load(read_card_files(card)[1])
+        fd, tmp = tempfile.mkstemp(prefix="T14LOAD.", suffix=".bin")
+        with os.fdopen(fd, "wb") as f:
+            f.write(t)
+        return tmp, lambda: os.unlink(tmp)
+    try:
+        return taiko_exe.find_t14load(), None
+    except taiko_exe.TaikoExeError:
+        raise KeyboardPatchError(
+            "cannot check taiko: need the T14LOAD key material - pass the dongle "
+            "card image, --t14load PATH, or put T14LOAD.bin next to the toolkit "
+            "(or skip the check with --no-check)") from None
+
+
+def check_hdd_taiko(img, partition: str | None = None, t14load=None, card=None,
+                    log=None) -> list[str]:
+    """Decrypt ``taiko`` from a T14 HDD image and run :func:`check_taiko`."""
+    from taiko2x6.exe import taiko_exe
+    from taiko2x6.ps2 import ps2hdd
+    path, cleanup = _t14load_path(t14load, card)
+    try:
+        h = ps2hdd.Ps2Hdd(str(img))
+        try:
+            part = partition or find_game_partition(h)
+            enc = h.pfs_read(part, "/taiko")
+        finally:
+            h.close()
+        try:
+            dec = taiko_exe.decrypt_taiko(enc, path)
+        except taiko_exe.TaikoExeError as exc:
+            raise KeyboardPatchError(f"cannot decrypt taiko: {exc}") from None
+    finally:
+        if cleanup:
+            cleanup()
+    problems = check_taiko(dec)
+    if log:
+        log("taiko check: " + ("OK - all 7 hook blocks and the memory cave match"
+                               if not problems else "FAILED"))
+        for p in problems:
+            log("  " + p)
+    return problems
+
+
+def _require_compatible(problems):
+    if problems:
+        raise KeyboardPatchError(
+            "this taiko does not match the build KBD2EE was made for; installing "
+            "would overwrite live game code:\n  " + "\n  ".join(problems))
+
+
+# --------------------------------------------------------------------------- #
 #  sources
 # --------------------------------------------------------------------------- #
 def _is_card(path) -> bool:
@@ -285,15 +409,20 @@ def hdd_status(img, partition: str | None = None) -> dict:
 
 
 def hdd_install(img, source=None, partition: str | None = None, irx=None,
-                log=print) -> dict:
+                log=print, check: bool = True, t14load=None) -> dict:
     """Write stock IRXARC + KBD2EE into the game partition of a T14 image.
 
     ``source`` (card image or IRXARC.BIN) is only needed the first time; a
     re-install reuses the archive already on the HDD. Undo-journaled
-    (ps2hdd.write_session): an error rolls the image back."""
+    (ps2hdd.write_session): an error rolls the image back. ``check`` first
+    verifies the image's ``taiko`` (see :func:`check_taiko`)."""
     from taiko2x6.ps2 import ps2hdd
     st = hdd_status(img, partition)
     part = st["partition"]
+    if check:
+        _require_compatible(check_hdd_taiko(img, part, t14load, source, log))
+    else:
+        log("taiko check SKIPPED")
     if source is not None:
         stock = stock_irxarc(source)
     elif st["files"]:
@@ -356,7 +485,13 @@ def _card_write(card, arc: bytes, t: bytes, log):
         raise KeyboardPatchError("card read-back mismatch - restore the .bak")
 
 
-def card_install(card, irx=None, log=print) -> dict:
+def card_install(card, irx=None, log=print, img=None, partition=None) -> dict:
+    """Patch the card. ``img`` (the T14 HDD image the card boots) lets the
+    install check that image's ``taiko`` first, using the card's T14LOAD."""
+    if img:
+        _require_compatible(check_hdd_taiko(img, partition, None, card, log))
+    else:
+        log("taiko not checked (no HDD image given)")
     arc, t = read_card_files(card)
     new_arc = patch_irxarc(arc, irx, log=log)
     new_t = patch_t14load(t)
@@ -399,13 +534,18 @@ def _main(argv=None) -> int:
         description="Taiko 14 USB keyboard (+ dummy JVS) patch. TARGET is a "
                     "T14 HDD .img (no card change) or a dongle card image.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("status", "install", "remove"):
+    for name in ("status", "install", "remove", "check"):
         sp = sub.add_parser(name)
         sp.add_argument("target", help="TK14 HDD .img, or dongle card .ps2/.bin")
         sp.add_argument("--partition", help="HDD partition (default: the one with `taiko`)")
+        if name in ("install", "check"):
+            sp.add_argument("--card", help="HDD target: card image (or IRXARC.BIN) "
+                                           "with the stock module archive + T14LOAD")
+            sp.add_argument("--t14load", help="T14LOAD key file for the taiko check")
+            sp.add_argument("--img", help="card target: the HDD image to check")
         if name == "install":
-            sp.add_argument("--card", help="HDD target: card image or IRXARC.BIN "
-                                           "with the stock module archive")
+            sp.add_argument("--no-check", action="store_true",
+                            help="skip the taiko compatibility check")
     fp = sub.add_parser("files", help="patch dumped IRXARC.BIN + T14LOAD")
     fp.add_argument("--in", dest="src", required=True)
     fp.add_argument("--out", dest="dst", required=True)
@@ -419,11 +559,22 @@ def _main(argv=None) -> int:
             st = card_status(a.target) if card else hdd_status(a.target, a.partition)
             for k, v in st.items():
                 print(f"{k:10s} {v}")
+        elif a.cmd == "check":
+            img = a.img if card else a.target
+            if not img:
+                raise KeyboardPatchError("card target: pass --img TK14.img to check")
+            problems = check_hdd_taiko(img, a.partition, a.t14load,
+                                       a.target if card else a.card, log=print)
+            return 1 if problems else 0
         elif a.cmd == "install":
             if card:
-                card_install(a.target)
+                if a.no_check:
+                    card_install(a.target)
+                else:
+                    card_install(a.target, img=a.img, partition=a.partition)
             else:
-                hdd_install(a.target, a.card, a.partition)
+                hdd_install(a.target, a.card, a.partition, check=not a.no_check,
+                            t14load=a.t14load)
             print("done. Unplug and replug the keyboard once after boot.")
         else:
             card_remove(a.target) if card else hdd_remove(a.target, a.partition)
@@ -492,10 +643,23 @@ else:
                 "(first HDD install only)")
             b2 = QPushButton("Browse…"); b2.clicked.connect(self._pick_card)
             self.lb_card = QLabel("Card / IRXARC.BIN:")
+            self.ed_img = QLineEdit()
+            self.ed_img.setPlaceholderText(
+                "card mode: the T14 HDD image this card boots (to check taiko)")
+            b3 = QPushButton("Browse…"); b3.clicked.connect(self._pick_img)
+            self.lb_img = QLabel("HDD image:")
+            self.ed_t14 = QLineEdit()
+            self.ed_t14.setPlaceholderText(
+                "optional: T14LOAD key file (otherwise taken from the card / T14LOAD.bin)")
+            b4 = QPushButton("Browse…"); b4.clicked.connect(self._pick_t14)
             grid.addWidget(QLabel("Target:"), 0, 0); grid.addWidget(self.ed_target, 0, 1)
             grid.addWidget(b1, 0, 2)
             grid.addWidget(self.lb_card, 1, 0); grid.addWidget(self.ed_card, 1, 1)
             grid.addWidget(b2, 1, 2)
+            grid.addWidget(self.lb_img, 2, 0); grid.addWidget(self.ed_img, 2, 1)
+            grid.addWidget(b3, 2, 2)
+            grid.addWidget(QLabel("T14LOAD:"), 3, 0); grid.addWidget(self.ed_t14, 3, 1)
+            grid.addWidget(b4, 3, 2)
             lay.addLayout(grid)
             self.rb_card.toggled.connect(self._mode_changed)
 
@@ -507,7 +671,7 @@ else:
             lay.addWidget(keys)
 
             row = QHBoxLayout()
-            self.b_status = QPushButton("Status"); self.b_status.clicked.connect(self._status)
+            self.b_status = QPushButton("Status + check"); self.b_status.clicked.connect(self._status)
             self.b_install = QPushButton("Install"); self.b_install.clicked.connect(self._install)
             self.b_remove = QPushButton("Remove"); self.b_remove.clicked.connect(self._remove)
             for b in (self.b_status, self.b_install, self.b_remove):
@@ -517,9 +681,27 @@ else:
             self.log = QPlainTextEdit(); self.log.setReadOnly(True)
             lay.addWidget(self.log, 1)
 
+            self._mode_changed()
+
         def _mode_changed(self):
             hdd = self.rb_hdd.isChecked()
             self.ed_card.setEnabled(hdd); self.lb_card.setEnabled(hdd)
+            self.ed_img.setEnabled(not hdd); self.lb_img.setEnabled(not hdd)
+
+        def _pick_img(self):
+            p = appconfig.pick_open(self, "hddimg", "T14 HDD image",
+                                    "HDD image (*.img);;All files (*)")
+            if p:
+                self.ed_img.setText(p)
+
+        def _pick_t14(self):
+            p = appconfig.pick_open(self, "t14load", "T14LOAD key file",
+                                    "T14LOAD (T14LOAD*);;All files (*)")
+            if p:
+                self.ed_t14.setText(p)
+
+        def _opt(self, ed):
+            return ed.text().strip() or None
 
         def _pick_target(self):
             if self.rb_hdd.isChecked():
@@ -564,9 +746,25 @@ else:
 
         def _status(self):
             t = self._target()
-            if t:
-                hdd = self.rb_hdd.isChecked()
-                self._run(lambda log: hdd_status(t) if hdd else card_status(t))
+            if not t:
+                return
+            hdd = self.rb_hdd.isChecked()
+            src, img, t14 = self._opt(self.ed_card), self._opt(self.ed_img), self._opt(self.ed_t14)
+
+            def job(log):
+                st = hdd_status(t) if hdd else card_status(t)
+                for k, v in st.items():
+                    log(f"  {k}: {v}")
+                hdd_img = t if hdd else img
+                if hdd_img:
+                    try:
+                        check_hdd_taiko(hdd_img, None, t14, src if hdd else t, log)
+                    except KeyboardPatchError as exc:
+                        log(f"taiko check not run: {exc}")
+                else:
+                    log("taiko not checked (choose the HDD image)")
+                return None
+            self._run(job)
 
         def _confirm(self, verb, t):
             what = ("The image is modified in place; everything overwritten is "
@@ -580,11 +778,18 @@ else:
             t = self._target()
             if not t or not self._confirm("Install", t):
                 return
+            t14 = self._opt(self.ed_t14)
             if self.rb_hdd.isChecked():
-                src = self.ed_card.text().strip() or None
-                self._run(lambda log: hdd_install(t, src, log=log))
+                src = self._opt(self.ed_card)
+                self._run(lambda log: hdd_install(t, src, log=log, t14load=t14))
             else:
-                self._run(lambda log: card_install(t, log=log))
+                img = self._opt(self.ed_img)
+                if not img and QMessageBox.question(
+                        self, "USB keyboard",
+                        "No HDD image chosen, so the game executable cannot be "
+                        "checked. Install on the card anyway?") != QMessageBox.Yes:
+                    return
+                self._run(lambda log: card_install(t, log=log, img=img))
 
         def _remove(self):
             t = self._target()

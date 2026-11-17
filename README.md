@@ -154,6 +154,14 @@ let the GUI fill it in as you browse.
     hardware.** *Remove* deletes the files and the game uses the card again.
   - *Card image*: the original, hardware-tested method — patches the card's
     `IRXARC.BIN` and `T14LOAD` (a `.bak` of the card is made first).
+  - Before installing, the image's `taiko` is decrypted and checked: KBD2EE
+    overwrites seven fixed code blocks and uses a fixed memory area, so on a
+    different `taiko` build it would corrupt live code. A mismatch refuses
+    the install. The key comes from the card image, `--t14load`, or
+    `T14LOAD.bin`; in card mode give the HDD image (`--img`) to check it.
+    The song-limit and Omnimix patches do not touch those blocks.
+    `python -m taiko2x6.exe.usb_keyboard check TK14.img --card NM00057.ps2`
+    runs the check alone.
 - **Fuse several games into one (Omnimix)** — Tools → *Omnimix Maker*
   (`songs/omnimix_maker`). Up to 214 songs is proven in-game; above that the
   data is written correctly but whether the select wheel shows and plays every

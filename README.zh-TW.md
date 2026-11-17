@@ -140,6 +140,11 @@ from taiko2x6.songs.song_manager import SongManager
     **尚未在實機上測試。** 按 *Remove* 會刪掉這些檔案，遊戲就會改回讀卡片。
   - *卡片映像*：原本在實機測試過的做法，修改卡片上的 `IRXARC.BIN` 和 `T14LOAD`
     （會先備份一份 `.bak`）。
+  - 安裝前會先解密映像裡的 `taiko` 並檢查：KBD2EE 會覆寫 7 段固定位址的程式碼、
+    使用一塊固定的記憶體，如果 `taiko` 版本不同就會蓋壞遊戲程式，所以不相符時會拒絕安裝。
+    解密用的金鑰取自卡片映像、`--t14load` 或 `T14LOAD.bin`；卡片模式請用 `--img`
+    指定要檢查的硬碟映像。歌曲上限和 Omnimix 的修補不會改到這些位置。
+    只想檢查可以執行 `python -m taiko2x6.exe.usb_keyboard check TK14.img --card NM00057.ps2`。
 - **合併多款遊戲（Omnimix）**：Tools → *Omnimix Maker*（`songs/omnimix_maker`）。
   214 首以內已驗證可正常遊玩；超過 214 首時資料能寫入，但實機能否全部顯示與遊玩尚未測試，
   請先在備份上試。

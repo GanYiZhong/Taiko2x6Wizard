@@ -83,12 +83,85 @@ def test_hdd_install_remove(pfs_image):
     src = img.parent / "IRXARC.BIN"
     src.write_bytes(_fake_irxarc())
     with pytest.raises(K.KeyboardPatchError):
-        K.hdd_install(img, log=lambda s: None)          # first install needs it
-    K.hdd_install(img, src, log=lambda s: None)
+        K.hdd_install(img, log=lambda s: None, check=False)          # first install needs it
+    K.hdd_install(img, src, log=lambda s: None, check=False)
     st = K.hdd_status(img)
     assert st["installed"] and st["files"] == list(K.HDD_NAMES) and st["count"] == 1
-    K.hdd_install(img, log=lambda s: None)              # reinstall from the HDD copy
+    K.hdd_install(img, log=lambda s: None, check=False)              # reinstall from the HDD copy
     assert K.hdd_status(img)["count"] == 1
     K.hdd_remove(img, log=lambda s: None)
     assert K.hdd_status(img) == {"partition": part, "files": [], "installed": False}
     assert K._main(["status", str(img)]) == 0
+
+
+# --------------------------------------------------------------------------- #
+#  taiko compatibility check
+# --------------------------------------------------------------------------- #
+def _fake_taiko(mutate=None):
+    """Minimal ELF32 with one PT_LOAD at 0x100000 holding the stock hook
+    blocks; the cave lies in its zero-filled .bss tail."""
+    base, off = 0x100000, 0x1000
+    fsz = 0x190000                       # covers the hook blocks
+    msz = 0x210000                       # .bss reaches past the cave
+    img = bytearray(off + fsz)
+    img[:4] = b"\x7fELF"
+    struct.pack_into("<I", img, 0x1C, 0x34)
+    struct.pack_into("<H", img, 0x2C, 1)
+    struct.pack_into("<8I", img, 0x34, 1, off, base, base, fsz, msz, 7, 0x10)
+    for va, words in K.HOOK_BLOCKS.items():
+        struct.pack_into("<4I", img, off + va - base, *words)
+    if mutate:
+        mutate(img, lambda va: off + va - base)
+    return bytes(img)
+
+
+def test_hook_blocks_match_bundled_irx():
+    """Each stock block must appear in KBD2EE.irx with exactly one word
+    replaced - i.e. the table is the one this IRX was built against."""
+    irx = K.bundled_irx()
+    for va, words in K.HOOK_BLOCKS.items():
+        found = False
+        for pos in range(0, len(irx) - 16, 4):
+            got = struct.unpack_from("<4I", irx, pos)
+            if sum(g != w for g, w in zip(got, words)) == 1 and \
+                    sum(g == w for g, w in zip(got, words)) == 3:
+                found = True
+                break
+        assert found, hex(va)
+
+
+def test_check_taiko_accepts_stock():
+    assert K.check_taiko(_fake_taiko()) == []
+
+
+def test_check_taiko_rejects_changed_hook():
+    def m(img, at):
+        struct.pack_into("<I", img, at(0x00186A28), 0x08000000)
+    probs = K.check_taiko(_fake_taiko(m))
+    assert len(probs) == 1 and "0x186a28" in probs[0]
+    with pytest.raises(K.KeyboardPatchError):
+        K._require_compatible(probs)
+
+
+def test_check_taiko_rejects_used_cave():
+    def m(img, at):                       # extend file data over the cave
+        img.extend(bytes(0x80000))
+        struct.pack_into("<8I", img, 0x34, 1, 0x1000, 0x100000, 0x100000,
+                         len(img) - 0x1000, 0x210000, 7, 0x10)
+        img[at(0x300800)] = 1
+    probs = K.check_taiko(_fake_taiko(m))
+    assert probs and "cave" in probs[0]
+
+
+def test_hdd_install_requires_key_for_check(pfs_image, monkeypatch):
+    img, part, _f = pfs_image
+    with ps2hdd.write_session(str(img)) as w:
+        w.pfs_create(part, "/taiko", b"\x7fELF" + bytes(60))
+    src = img.parent / "IRXARC.BIN"
+    src.write_bytes(_fake_irxarc())
+    from taiko2x6.exe import taiko_exe
+    monkeypatch.setattr(taiko_exe, "find_t14load", lambda hint=None: (_ for _ in ()).throw(
+        taiko_exe.TaikoExeError("missing")) if hint is None else hint)
+    with pytest.raises(K.KeyboardPatchError, match="T14LOAD"):
+        K.hdd_install(img, src, log=lambda s: None)          # check is on by default
+    assert K.hdd_status(img)["installed"] is False             # nothing written
