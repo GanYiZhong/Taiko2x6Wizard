@@ -30,10 +30,10 @@ zero immediately before it is punched, and --verify re-reads afterwards.
 Windows/NTFS only (uses FSCTL_SET_SPARSE / FSCTL_SET_ZERO_DATA).
 
 CLI:
-    python img_slim.py <image>                    analyze only (default; no writes)
-    python img_slim.py <image> --sparse           punch holes over zero runs
-    python img_slim.py <image> --truncate         cut the trailing zero tail
-    python img_slim.py <image> --extend <bytes>   undo a truncate
+    python -m taiko2x6.ps2.img_slim <image>                    analyze only (default; no writes)
+    python -m taiko2x6.ps2.img_slim <image> --sparse           punch holes over zero runs
+    python -m taiko2x6.ps2.img_slim <image> --truncate         cut the trailing zero tail
+    python -m taiko2x6.ps2.img_slim <image> --extend <bytes>   undo a truncate
 """
 
 import ctypes
@@ -620,7 +620,7 @@ class ImgSlimDialog(QDialog):
             self._say("FAILED: %s" % exc)
             return
         self._say("removed %s -- file is now %s" % (_gb(cut), _gb(os.path.getsize(p))))
-        self._say("undo:  python img_slim.py \"%s\" --extend %d" % (p, size))
+        self._say("undo:  python -m taiko2x6.ps2.img_slim \"%s\" --extend %d" % (p, size))
         self.btn_trunc.setEnabled(False)
 
     def reject(self):
@@ -665,7 +665,7 @@ def main(argv=None):
         print("\ntruncating to APA end (%s) ..." % _gb(end))
         cut = truncate_tail(path, end, scanned=sc)
         print("removed %s -> file is now %s" % (_gb(cut), _gb(os.path.getsize(path))))
-        print("undo with:  python img_slim.py %s --extend %d" % (path, size))
+        print("undo with:  python -m taiko2x6.ps2.img_slim %s --extend %d" % (path, size))
     if not (do_sparse or do_trunc):
         print("\n(analysis only -- pass --sparse or --truncate to act)")
     return 0

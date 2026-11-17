@@ -415,12 +415,13 @@ else:  # pragma: no cover
 # self-test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    from taiko2x6.app import apppaths
     import os
     import sys
 
     candidates = [
         os.environ.get("HDBDINFO_BIN"),
-        r"C:\Users\User\AppData\Local\Temp\claude\D--\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\bins\hdbdinfo.bin",
+        str(apppaths.samples_dir() / "bins" / "hdbdinfo.bin"),
         os.path.join(os.path.dirname(__file__), FILENAME),
         FILENAME,
     ]

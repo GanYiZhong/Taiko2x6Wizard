@@ -1089,6 +1089,14 @@ class Ps2Hdd:
         # headroom so a slightly bigger re-merge doesn't need another grow
         if margin is None:
             margin = max(256 * 1024 * 1024, extra_bytes // 2)
+        need_sectors = (extra_bytes + SECTOR - 1) // SECTOR
+        if need_sectors > max_sub_sectors:
+            # One sub can't hold it. Refuse BEFORE touching the image, instead of
+            # silently attaching a capped sub that the caller's retry overflows.
+            raise ValueError(
+                "grow %s: %.0f MiB requested but a single sub-partition is capped "
+                "at %.0f MiB" % (name, extra_bytes / 1048576,
+                                 max_sub_sectors * SECTOR / 1048576))
         want_sectors = (extra_bytes + margin + SECTOR - 1) // SECTOR
         sub_sectors = 1 << max(0, (want_sectors - 1)).bit_length()
         sub_sectors = max(sub_sectors, min_sub_sectors)  # ≥128 MiB (APA minimum)
@@ -1158,13 +1166,11 @@ class Ps2Hdd:
 
         # 1) unlink the victim from the main chain: pred.next -> victim.next
         self._patch_apa(pred.lba, {0x08: vic.next})
-        # 2) if the grown partition pointed back at the victim, fix its prev
-        if part.prev == vic.lba:
-            self._patch_apa(part.lba, {0x0C: pred.lba})
-        # 3) if the victim was the chain tail, move __mbr.prev to its predecessor
-        mbr = chain[0]
-        if mbr.id == "__mbr" and mbr.prev == vic.lba:
-            self._patch_apa(mbr.lba, {0x0C: pred.lba})
+        # 2) the victim's successor (any partition, or __mbr when the victim
+        #    was the chain tail) must point back at the predecessor now
+        succ = next((p for p in chain if p.lba == vic.next), None)
+        if succ is not None and succ.prev == vic.lba:
+            self._patch_apa(succ.lba, {0x0C: pred.lba})
 
         self._invalidate()
         self._mount(name)
@@ -1612,18 +1618,16 @@ def _print_tree(hdd, part, path, depth, max_depth, max_entries=12):
 
 
 def _find_test_image():
-    """Locate the Taiko14 test image.  L2: don't hardcode a single dead path --
-    accept $PS2HDD_TEST_IMG, then probe a few known locations."""
+    """Locate the Taiko14 test image: $PS2HDD_TEST_IMG, else any *.img in the
+    samples folder (apppaths.samples_dir(), i.e. $TAIKO_SAMPLES or ./samples)."""
+    from taiko2x6.app import apppaths
     cand = []
     env = os.environ.get("PS2HDD_TEST_IMG")
     if env:
         cand.append(env)
-    cand += [
-        r"E:\NM00057 T14100-1-NA-HDD0-A [Ver.B02] (HDD).img",
-        r"E:\system2x6_template_gamelibrary\system2x6_template_library"
-        r"\NM00057\NM00057 T14100-1-NA-HDD0-A [Ver.B02] (HDD).img",
-        r"E:\Taiko No Tatsujin 14+\tnt14plus.img",
-    ]
+    sdir = apppaths.samples_dir()
+    if sdir.is_dir():
+        cand += [str(p) for p in sorted(sdir.glob("*.img"))]
     for c in cand:
         if c and os.path.exists(c):
             # must be readable (a copy may be locked by another process)

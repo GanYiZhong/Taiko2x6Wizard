@@ -219,12 +219,12 @@ class Editor(QDialog):
 # Self-test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    from taiko2x6.app import apppaths
     import os
 
     path = os.environ.get(
         "FNAME_BIN",
-        r"C:\Users\User\AppData\Local\Temp\claude\D--"
-        r"\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\bins\fname.bin",
+        str(apppaths.samples_dir() / "bins" / "fname.bin"),
     )
     with open(path, "rb") as fh:
         data = fh.read()

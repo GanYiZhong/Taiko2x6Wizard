@@ -455,13 +455,14 @@ except ImportError:  # PySide6 not available — parse/serialize still usable
 # self-test
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
+    from taiko2x6.app import apppaths
     import os
     import sys
 
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(here, FILENAME),
-        r"C:\Users\User\AppData\Local\Temp\claude\D--\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\bins\tuning.bin",
+        str(apppaths.samples_dir() / "bins" / "tuning.bin"),
     ]
     path = next((p for p in candidates if os.path.exists(p)), None)
     if path is None:

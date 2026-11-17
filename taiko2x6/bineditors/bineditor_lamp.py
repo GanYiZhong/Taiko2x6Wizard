@@ -343,12 +343,12 @@ class Editor(QDialog):
 #  Self-test
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
+    from taiko2x6.app import apppaths
     import os
 
     path = os.environ.get("LAMP_BIN", os.path.join(os.path.dirname(__file__), "lamp.bin"))
     if not os.path.exists(path):
-        path = (r"C:\Users\User\AppData\Local\Temp\claude\D--"
-                r"\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\bins\lamp.bin")
+        path = (str(apppaths.samples_dir() / "bins" / "lamp.bin"))
 
     with open(path, "rb") as f:
         data = f.read()

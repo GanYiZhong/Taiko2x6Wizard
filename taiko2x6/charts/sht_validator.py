@@ -7,7 +7,7 @@ ALL of them satisfy are ERRORs when violated (the chart is not official and can
 crash / freeze the game at load); rules only most satisfy are WARNINGs.
 
 Usage:
-    python sht_validator.py <file.sht> [easy|normal|hard|oni]
+    python -m taiko2x6.charts.sht_validator <file.sht> [easy|normal|hard|oni]
     from taiko2x6.charts.sht_validator import validate_sht           # -> list[Issue]
 GUI: ShtValidatorDialog (also wired into the Explorer Tools menu).
 """
@@ -307,7 +307,7 @@ def main():
     import sys
     from pathlib import Path
     if len(sys.argv) < 2:
-        print("usage: python sht_validator.py <file.sht> [easy|normal|hard|oni]")
+        print("usage: python -m taiko2x6.charts.sht_validator <file.sht> [easy|normal|hard|oni]")
         return 2
     diff = sys.argv[2] if len(sys.argv) > 2 else None
     data = Path(sys.argv[1]).read_bytes()

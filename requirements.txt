@@ -4,7 +4,7 @@
 # --- Required ---------------------------------------------------------------
 PySide6>=6.5        # Qt GUI framework — every interactive tool
 numpy>=1.24         # binary parsing + audio/image number crunching
-Pillow>=9.0         # song-title texture rendering (needs Font.ttf)
+Pillow>=9.0         # song-title texture rendering (full title sets need Font.ttf)
 pycryptodome>=3.17  # AES for Gen3 (Nijiiro) encrypted fumen / datatable
 
 # --- Recommended (audio import: OGG/WAV -> VAG) -----------------------------

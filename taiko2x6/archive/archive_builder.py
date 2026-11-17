@@ -115,7 +115,8 @@ def build_archive(archive, new_group_specs=None, extra_files=None,
     pin_sectors: optional {group_name: sector} -- in compact mode, place these
     UNCHANGED groups at exactly these sectors instead of packing them (used to
     keep every non-song group at its retail position, which every known-working
-    image preserves). Overrides the PINNED_GROUPS default.
+    image preserves). Adds to the PINNED_GROUPS default; a PINNED_GROUPS name
+    listed here takes the given sector instead of its original one.
     ghosts: optional [(byte_offset, bytes)] -- raw byte ranges written into the
     output DATA at fixed offsets, NOT referenced by the table. Used to leave
     stale-but-well-formed copies of gamedata/soundinfo at the absolute
@@ -250,8 +251,10 @@ def build_archive(archive, new_group_specs=None, extra_files=None,
             # else packs sequentially (name order) around them (and around any
             # ghost byte-ranges).
             def _pin_sector(g):
-                if pin_sectors is not None:
-                    return pin_sectors.get(g["_name"])
+                # Explicit pins win, but PINNED_GROUPS (read by ABSOLUTE sector)
+                # always keep their original sector unless explicitly re-pinned.
+                if pin_sectors is not None and g["_name"] in pin_sectors:
+                    return pin_sectors[g["_name"]]
                 if g["_name"] in PINNED_GROUPS and g.get("orig_sector") is not None:
                     return g["orig_sector"]
                 return None

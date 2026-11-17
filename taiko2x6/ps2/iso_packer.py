@@ -2,7 +2,7 @@
 """
 ISO packer — inject modified DATA.000 + LIST.BIN back into the game ISO.
 
-The Taiko SYSTEM256 disc (E:\\Taiko No Tatsujin 8.iso) is a minimal ISO 9660 /
+The Taiko SYSTEM256 disc (e.g. the Taiko 8 .iso) is a minimal ISO 9660 /
 UDF-bridge image whose root contains exactly two files: DATA.000 (first, at
 LBA 268) and LIST.BIN (immediately after). The PS2/arcade CDVD reader resolves
 files by walking the ISO 9660 directory, so we only need to:
@@ -525,4 +525,4 @@ if __name__ == "__main__":
     if len(sys.argv) == 5:
         print(pack_iso(*sys.argv[1:5], progress=lambda d, t, m: None))
     else:
-        print("usage: python iso_packer.py <orig.iso> <DATA.000> <LIST.BIN> <out.iso>")
+        print("usage: python -m taiko2x6.ps2.iso_packer <orig.iso> <DATA.000> <LIST.BIN> <out.iso>")

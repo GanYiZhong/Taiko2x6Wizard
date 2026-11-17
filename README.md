@@ -23,7 +23,10 @@ one Explorer GUI.
   every group/file, preview textures, play audio, and edit in place.
 - **Add / replace songs** end-to-end: title textures, charts (fumen), audio
   (VAG), and all the per-song database rows, then rebuild the archive.
-- **Chart conversion** — TJA → SHT, and encrypted **Gen3 (Nijiiro)** fumen → SHT.
+- **Omnimix** — fuse the songs of several Taiko 8…14 images into one: dedup by
+  song id, auto song-limit patch, and partition grow when the data outgrows it.
+- **Chart conversion** — TJA → SHT, and encrypted **Gen3 (Nijiiro)** fumen → SHT
+  (keeps diverge branches, bpm-aware measure timing).
 - **Per-song `.bin` editors** — `musicinfo`, `tuning`, `streaminfo`, `rank`,
   `lamp`, `fname`, `hdbdinfo`, `enso_parts` — auto-discovered by the Explorer.
 - **Audio** — VAG (PS2 ADPCM) encode/decode, OGG/WAV import, `hd/bd` sound-bank
@@ -31,10 +34,10 @@ one Explorer GUI.
 - **Graphics** — TIM2 image encode/decode, 勘亭流 song-title texture generation,
   SWG sprite/animation editing, flipbook animation playback.
 - **PS2 storage I/O** — native APA-partition + PFS filesystem read/write
-  (`ps2hdd.py`), memory-card read/write, ISO packing, multi-game HDD merge, and
+  (`ps2/ps2hdd`), memory-card read/write, ISO packing, multi-game HDD merge, and
   image slimming.
-- **Executable patching** — decrypt and patch the T14+ `taiko` ELF (e.g. raise
-  the on-disc song-count ceiling).
+- **Executable patching** — decrypt and patch the T14+ `taiko` ELF: raise the
+  song-count ceiling, change the song-select timer, skip the boot Notice screen.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and
 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md) for the reverse-engineered
@@ -57,7 +60,7 @@ source can follow the sections below instead.
 
 ## Requirements
 
-- **Python 3.10+** (uses `sys.stdlib_module_names`, `str | None` syntax).
+- **Python 3.10+**.
 - Windows is the primary/tested platform (the PS2 tooling and native binaries
   are Windows-oriented), but the pure-Python parsers are cross-platform.
 
@@ -100,10 +103,13 @@ The Explorer is the hub — the per-song `.bin` editors and most tools are opene
 from its menus. Several modules also run standalone with `python -m`, e.g.:
 
 ```bash
-python -m taiko2x6.exe.taiko_exe                 # T14 exe patcher — GUI
-python -m taiko2x6.bineditors.bineditor_musicinfo  # edit musicinfo.bin — GUI
+python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # raise the song limit — CLI
+python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # song-select timer — CLI
+python -m taiko2x6.exe.taiko_exe --help                               # all exe-patch options
 python -m taiko2x6.charts.gen3_convert --help    # Gen3 (Nijiiro) fumen -> SHT — CLI
 ```
+
+(The exe patches also have GUI dialogs in the Explorer's Tools menu.)
 
 From your own scripts, import from the package (run them from the project root,
 or put it on `PYTHONPATH`):
@@ -132,12 +138,32 @@ let the GUI fill it in as you browse.
 - **Import a Gen3 (Nijiiro) song** — `charts/gen3_song` / `charts/gen3_convert`
   decrypt and convert the fumen and decode the audio (via `vgmstream-win64/`).
 - **Fuse several games into one (Omnimix)** — Tools → *Omnimix Maker*
-  (`songs/omnimix_maker`).
+  (`songs/omnimix_maker`). Up to 214 songs is proven in-game; above that the
+  data is written correctly but whether the select wheel shows and plays every
+  song is untested — try it on a copy first.
 
 > ⚠️ **Safety.** When writing to a PS2 HDD `.img`, **close PCSX2 first** — it
 > locks the image for writing (reads are fine while it runs). Always work on
 > **copies** of your game files and keep backups; several operations are
 > not reversible.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `T14LOAD.bin not found` | Put `T14LOAD.bin` in the project root (or next to the `.exe`), or set `T14LOAD_BIN` to its path. |
+| `vgmstream-cli not found` | Extract the vgmstream win64 build so `vgmstream-win64/vgmstream-cli.exe` exists, or pass `--vgmstream`. |
+| `pfsshell.exe not found` | Only needed for the pfsshell path; the built-in `ps2/ps2hdd` engine works without it. |
+| Song add fails mentioning `Font.ttf` | Supply the 勘亭流 font as `Font.ttf` (see above). |
+| Can't write the `.img` / permission error | Close PCSX2 — it locks the image for writing. |
+| A song freezes when picked (Taiko 8) | The group's `unknown2` hash is wrong; rebuild with `archive_builder` (see `docs/unknown2_report.md`). |
+| Song added but not visible (T14) | musicinfo self-index columns must point at the new row — use Song Manager / Song Builder, not a raw row copy. |
+| Need more detail | Start with `python main.py --debug` (or set `TAIKO_LOG=DEBUG`). |
+
+Developer self-tests (`python -m taiko2x6.<sub>.<module>`) look for sample files
+in `samples/` (git-ignored), or wherever `TAIKO_SAMPLES` points.
 
 ---
 

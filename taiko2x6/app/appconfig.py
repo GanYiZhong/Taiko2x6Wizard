@@ -4,7 +4,7 @@ Tiny shared settings store (config.ini) for the Taiko tools.
 
 Remembers the last-used path per picker ("tja", "audio", "archive_dir", …) so
 every QFileDialog opens where the user last was instead of the CWD. The ini
-lives next to the scripts:  E:\\Taiko No Tatsujin 8\\config.ini
+lives in the project root (next to main.py), or next to the .exe when frozen.
 
     [paths]
     tja = G:/Downloads/songs/BUTTERFLY.tja

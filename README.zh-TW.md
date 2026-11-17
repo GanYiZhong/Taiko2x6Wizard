@@ -94,10 +94,13 @@ Explorer 是整個工具的中心，`.bin` 編輯器和大部分工具都從它�
 部分模組也能用 `python -m` 單獨執行，例如：
 
 ```bash
-python -m taiko2x6.exe.taiko_exe                   # T14 執行檔修補工具（GUI）
-python -m taiko2x6.bineditors.bineditor_musicinfo  # 直接編輯 musicinfo.bin（GUI）
+python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # 提高歌曲上限（命令列）
+python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # 選歌倒數秒數（命令列）
+python -m taiko2x6.exe.taiko_exe --help                               # 所有執行檔修補選項
 python -m taiko2x6.charts.gen3_convert --help      # 虹版譜面 → SHT（命令列）
 ```
+
+（執行檔修補在 Explorer 的 Tools 選單裡也有圖形介面。）
 
 在自己的腳本裡使用時，從套件 import（在專案根目錄執行，或把根目錄加入 `PYTHONPATH`）：
 
@@ -128,6 +131,24 @@ from taiko2x6.songs.song_manager import SongManager
 
 > ⚠️ **安全須知**：寫入 PS2 硬碟 `.img` 前，**請先關閉 PCSX2**，它會鎖住映像檔不讓寫入
 > （只讀取的話不用關）。請一律在**副本**上操作並保留備份，有些操作無法復原。
+
+---
+
+## 疑難排解
+
+| 狀況 | 解法 |
+|---|---|
+| 出現 `T14LOAD.bin not found` | 把 `T14LOAD.bin` 放在專案根目錄（或 `.exe` 旁邊），或用環境變數 `T14LOAD_BIN` 指定路徑。 |
+| 出現 `vgmstream-cli not found` | 解壓 vgmstream 的 win64 版，讓 `vgmstream-win64/vgmstream-cli.exe` 存在，或加上 `--vgmstream` 參數。 |
+| 出現 `pfsshell.exe not found` | 只有走 pfsshell 路線才需要；內建的 `ps2/ps2hdd` 不需要它。 |
+| 加歌時出現 `Font.ttf` 錯誤 | 準備勘亭流字型並命名為 `Font.ttf`（見上方）。 |
+| 無法寫入 `.img`／權限錯誤 | 關閉 PCSX2，它會鎖住映像檔。 |
+| 選歌時卡住（Taiko 8） | 群組的 `unknown2` 雜湊錯誤，請用 `archive_builder` 重建（見 `docs/unknown2_report.md`）。 |
+| 歌加進去了但看不到（T14） | musicinfo 的自我索引欄位必須指向新的那一列，請用 Song Manager／Song Builder 加歌，不要直接複製原始資料列。 |
+| 需要更多訊息 | 用 `python main.py --debug` 啟動（或設定 `TAIKO_LOG=DEBUG`）。 |
+
+開發用的自我測試（`python -m taiko2x6.<子資料夾>.<模組>`）會到 `samples/`
+（已被 git 忽略）或環境變數 `TAIKO_SAMPLES` 指定的資料夾找範例檔。
 
 ---
 

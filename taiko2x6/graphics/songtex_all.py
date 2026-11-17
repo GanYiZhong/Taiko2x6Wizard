@@ -908,8 +908,7 @@ def _composite_on_dark(nut: bytes) -> Image.Image:
 if __name__ == "__main__":
     import sys
 
-    scratch = Path(r"C:\Users\User\AppData\Local\Temp\claude\D--"
-                   r"\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad")
+    scratch = Path(str(apppaths.samples_dir() / "out"))
     scratch.mkdir(parents=True, exist_ok=True)
 
     test_title = "新曲テスト"

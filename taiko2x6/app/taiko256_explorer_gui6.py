@@ -12,8 +12,8 @@ It reuses the proven core from taiko256_archive_tool_v2.py:
     (conservative slot-preserving patch, hardware safe; optional relayout)
 
 Run:
-    python taiko256_explorer_gui6.py
-    python taiko256_explorer_gui6.py "E:/Taiko No Tatsujin 8"
+    python main.py
+    python main.py "D:/path/to/extract"
 """
 from __future__ import annotations
 

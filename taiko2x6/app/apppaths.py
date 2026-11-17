@@ -11,6 +11,7 @@ player drops their own copies and where ``config.ini`` should be written.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,16 @@ def resource_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return PROJECT_DIR
+
+
+def samples_dir() -> Path:
+    """Folder of developer sample files used by the modules' ``__main__``
+    self-tests (e.g. ``bins/musicinfo.bin``) and where they write output.
+
+    ``$TAIKO_SAMPLES`` if set, else ``<project root>/samples`` (git-ignored).
+    """
+    env = os.environ.get("TAIKO_SAMPLES")
+    return Path(env) if env else resource_dir() / "samples"
 
 
 def is_frozen() -> bool:

@@ -831,12 +831,13 @@ def main():
               % (diff, ntracks, nnotes, bpms, monotonic, rt,
                  "OK" if sane else "BAD"))
 
-    # write a sample tja to scratchpad (allowed)
+    # write a sample tja to the samples output folder
     try:
         import os
+        from taiko2x6.app import apppaths
         scratch = os.environ.get(
             "TMP",
-            r"C:\Users\User\AppData\Local\Temp\claude\D--\scratchpad")
+            str(apppaths.samples_dir() / "out"))
         path = os.path.join(scratch, "sample.tja")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:

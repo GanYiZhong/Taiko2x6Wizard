@@ -643,7 +643,9 @@ if _HAVE_QT:
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     import sys
-    img = sys.argv[1] if len(sys.argv) > 1 else r"E:/mymc-alpha-2.7/NM00057.bin"
+    if len(sys.argv) < 2:
+        sys.exit("usage: python -m taiko2x6.ps2.ps2mc_card <card image>")
+    img = sys.argv[1]
     with Ps2mcCard(img) as c:
         for k, v in c.info().items():
             print(f"  {k:20s} {v}")

@@ -25,7 +25,7 @@ self.result is a dict mapping ONLY changed filenames to new bytes (or None if
 cancelled / nothing changed). A no-op save is byte-exact for every file.
 
 Run the self-test:
-    QT_QPA_PLATFORM=offscreen python song_manager.py
+    QT_QPA_PLATFORM=offscreen python -m taiko2x6.songs.song_manager
 """
 from __future__ import annotations
 
@@ -745,11 +745,21 @@ class SongManager(QDialog):
             n += 1
             new_id = f"{src.id}_copy{n}"
 
+        # Duplicating a song added in this session: it has no original row
+        # (k is None), so clone from the ORIGINAL row it was itself cloned from.
+        if getattr(src, "_is_new", False):
+            src_spec = self._new_songs.get(src._token, {})
+            tmpl_k = src._template_k
+            tmpl_id = src_spec.get("template_id", src.id)
+        else:
+            tmpl_k = src.k
+            tmpl_id = src.id
+
         token = f"+{self._new_counter}"
         self._new_counter += 1
         self._new_songs[token] = {
-            "template_k": src.k,
-            "template_id": src.id,   # used by the T14 tuning rebuild (order differs)
+            "template_k": tmpl_k,
+            "template_id": tmpl_id,  # used by the T14 tuning rebuild (order differs)
             "id": new_id,
             "stars": list(src.stars),
         }
@@ -767,7 +777,7 @@ class SongManager(QDialog):
             stream_rec=src.stream_rec,   # template for fields; name overridden
         )
         # tag the source musicinfo/stream template index for save-time cloning
-        new_song._template_k = src.k          # type: ignore[attr-defined]
+        new_song._template_k = tmpl_k         # type: ignore[attr-defined]
         new_song._is_new = True               # type: ignore[attr-defined]
         new_song._token = token               # type: ignore[attr-defined]
         self._songs.append(new_song)
@@ -1106,13 +1116,13 @@ class SongManager(QDialog):
 # self-test
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
+    from taiko2x6.app import apppaths
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
     BINS = os.environ.get(
         "TAIKO_BINS",
-        r"C:\Users\User\AppData\Local\Temp\claude\D--"
-        r"\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\bins",
+        str(apppaths.samples_dir() / "bins"),
     )
     mi = open(os.path.join(BINS, "musicinfo.bin"), "rb").read()
     tu = open(os.path.join(BINS, "tuning.bin"), "rb").read()

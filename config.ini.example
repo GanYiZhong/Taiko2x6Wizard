@@ -5,30 +5,43 @@
 ; it on first use. The real config.ini is git-ignored because these paths are
 ; specific to your machine.
 ;
-; Copy this file to `config.ini` (next to the .py modules) and edit the paths,
-; or just let the GUI fill them in as you browse.
+; Copy this file to `config.ini` in the project root (next to main.py), or next
+; to Taiko2x6Wizard.exe for the packaged build, and edit the paths — or just let
+; the GUI fill them in as you browse. Keys you leave out are simply unset.
 
 [paths]
 ; where you extract / keep game archives
 archive_dir  = D:/Taiko/archives
 extract_dir  = D:/Taiko/extract
 
+; Explorer: replace a file / export the current file
+replace      = D:/Taiko/extract
+export       = D:/Taiko/out
+
 ; a TJA chart + its audio (for the TJA -> SHT importer)
 tja          = D:/Taiko/songs/MySong/MySong.tja
 wav          = D:/Taiko/songs/MySong/MySong.ogg
 
-; SYSTEM256 disc in/out (iso_packer)
+; audio player: export decoded audio / encoded VAG
+wav_export   = D:/Taiko/out/song.wav
+vag_export   = D:/Taiko/out/song.vag
+
+; SYSTEM256 disc in/out (iso_packer) and game ISO sources (Omnimix Maker)
 iso          = D:/Taiko/disc/tk8.iso
 iso_out      = D:/Taiko/disc/tk8_patched.iso
+gameiso      = D:/Taiko/disc/tk8.iso
 
 ; PS2 HDD image (T14+ SYSTEM2x6) — worked on with PCSX2 CLOSED
 hddimg       = D:/Taiko/images/TK14.img
 hdd_replace  = D:/Taiko/extract/DATA.000
 hdd_extract  = D:/Taiko/extract/DATA.000
+; backup of the `taiko` executable (exe patcher / select timer)
+taiko_backup = D:/Taiko/backup/taiko.bak
 
 ; PS2 memory card (arcade COH)
 ps2mc         = D:/Taiko/memcards/CARD.ps2
 ps2mc_extract = D:/Taiko/extract/GAMEFILE
+ps2mc_replace = D:/Taiko/extract/GAMEFILE
 
 ; single-chart / output scratch
 sht          = D:/Taiko/extract/fumen/song1p_m/sht

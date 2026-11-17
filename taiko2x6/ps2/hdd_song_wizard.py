@@ -249,10 +249,11 @@ class HddSongWizard(QDialog):
                         len(data), len(lb), part)
             h = ps2hdd.Ps2Hdd(img, writable=True)
             try:
-                # Write DATA.000 first, then list.bin. If the big DATA write
-                # fails, the partition still has the OLD list.bin pointing at the
-                # OLD data (self-consistent / bootable). Writing list.bin first
-                # would leave a new index pointing at stale data on partial fail.
+                # Write DATA.000 first, then list.bin, so the index is only
+                # updated once the data is fully written. This is NOT crash-safe:
+                # pfs_write may overwrite DATA.000 in place, so a failure part
+                # way through leaves the OLD list.bin over MIXED old/new data
+                # (the game may freeze on it). Keep a backup of the image.
                 h.pfs_write(part, "/DATA.000", data)
                 h.pfs_write(part, "/list.bin", lb)
             finally:

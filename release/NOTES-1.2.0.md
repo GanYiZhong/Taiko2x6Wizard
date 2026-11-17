@@ -12,7 +12,8 @@ for the optional files you place next to the `.exe`.
     choose the seconds (quick buttons for 120 / 300 / 999), Apply. Includes
     Check / Back-up / Restore, and the write is round-trip-verified before the
     image is touched.
-  - CLI: `python taiko_exe.py <img> --select-timer 999`.
+  - CLI: `python taiko_exe.py <img> --select-timer 999` (since the package
+    restructure: `python -m taiko2x6.exe.taiko_exe <img> --select-timer 999`).
   - Reverse-engineered from the encrypted EE executable: the timer lives in
     three `.sbss` globals all initialised to 120 and counting down to the same
     attract-mode call, so the patch sets all three to keep the whole

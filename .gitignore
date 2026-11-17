@@ -20,6 +20,8 @@ dist2/
 
 # ── Local settings (machine-specific paths) ────────────────────────────────
 config.ini
+# Developer sample files for the module self-tests (apppaths.samples_dir())
+samples/
 
 # ── Bundled runtime deps you must supply yourself (NOT redistributed) ───────
 # Commercial font (DFPKanTeiRyu-XB / 勘亭流) — supply your own, see README.

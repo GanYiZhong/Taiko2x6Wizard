@@ -243,7 +243,7 @@ except ImportError:
 if __name__ == "__main__":
     import sys
     # self-test: round-trip a real kenri nut as template, then render new text
-    tpl_path = Path(r"C:\Users\User\AppData\Local\Temp\claude\D--\ee6b327c-e139-4924-9604-a691103f5eaa\scratchpad\template_kenri.nut")
+    tpl_path = Path(str(apppaths.samples_dir() / "template_kenri.nut"))
     if tpl_path.exists():
         tpl = tpl_path.read_bytes()
         nut = make_kenri_nut(tpl, "テスト曲", "作曲者テスト", "作詞者テスト", "© 2024 TEST")

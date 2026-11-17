@@ -33,8 +33,8 @@ APA layout rules honoured here, read off real images rather than assumed:
 Nothing here writes to a source image; the output is always a new file.
 
 CLI:
-    python apa_merge.py --list <img> [<img> ...]
-    python apa_merge.py -o merged.img <img> [<img> ...] [--verify]
+    python -m taiko2x6.ps2.apa_merge --list <img> [<img> ...]
+    python -m taiko2x6.ps2.apa_merge -o merged.img <img> [<img> ...] [--verify]
 """
 
 import hashlib

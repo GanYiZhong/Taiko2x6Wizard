@@ -23,7 +23,9 @@ looks for them in its own folder.
   1. Font.ttf
        The 勘亭流 brush font (DFPKanTeiRyu-XB) used to draw song-title art.
        Supply your own licensed copy and rename it exactly "Font.ttf".
-       (Without it, title-texture rendering is disabled; everything else works.)
+       Without it, generating a new song's title art (Custom Song Builder,
+       song add) stops with a "Font.ttf" error, and the single-texture editor
+       falls back to a system Japanese font. Everything else works.
 
   2. vgmstream-win64\   (a folder)
        Needed only to import Gen3 / Nijiiro songs (decodes their .nus3bank

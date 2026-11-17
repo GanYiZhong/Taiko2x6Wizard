@@ -11,11 +11,11 @@ Confirmed properties for Taiko 7-style LIST.BIN:
   - compression type 6 = raw/stored.
 
 Typical usage:
-  python taiko256_archive_tool_v2.py parse --list LIST.BIN --format 2
-  python taiko256_archive_tool_v2.py extract --list LIST.BIN --data DATA.000 --out extracted --format 2
+  python -m taiko2x6.archive.taiko256_archive_tool_v2 parse --list LIST.BIN --format 2
+  python -m taiko2x6.archive.taiko256_archive_tool_v2 extract --list LIST.BIN --data DATA.000 --out extracted --format 2
 
 Recommended for real hardware after editing files:
-  python taiko256_archive_tool_v2.py patch --list LIST.BIN --data DATA.000 --src extracted --out-list LIST.new.BIN --out-data DATA.new.000 --format 2
+  python -m taiko2x6.archive.taiko256_archive_tool_v2 patch --list LIST.BIN --data DATA.000 --src extracted --out-list LIST.new.BIN --out-data DATA.new.000 --format 2
 
 The patch command:
   - copies original DATA.000 first;
