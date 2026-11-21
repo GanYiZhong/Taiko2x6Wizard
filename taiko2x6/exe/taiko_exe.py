@@ -349,7 +349,12 @@ _ALLOC_VA = 0x001012D0     # addiu $a0,$zero,SIZE  operator new(ctx) size
 # arrayA occupies [0x4A90, 0x4A90 + N*4); the alloc size and the base offset are
 # both 16-bit signed immediates, so N is capped where 0x4A90 + N*4 would reach
 # 0x8000 (a negative addiu immediate). ~3419 songs — far more than the library.
-MAX_SONGS_BIG = (0x8000 - ARRAYA_NEW) // 4 - 1     # 3419
+MAX_SONGS_BIG = (0x8000 - ARRAYA_NEW) // 4 - 1     # 3419 (arrayA alone)
+# With the per-song record tables grown as well (song_tables.patch_records,
+# which patch_hdd applies above 214) the ctx allocation holds 72 B per song,
+# so the usable ceiling is lower:
+from taiko2x6.exe import song_tables  # noqa: E402
+MAX_SONGS_BIG = min(MAX_SONGS_BIG, song_tables.MAX_SONGS)   # 644
 
 
 def is_arraya_relocated(dec: bytes) -> bool:
@@ -395,13 +400,17 @@ def patch_arraya(dec: bytes, songs: int, log=print) -> bytes:
     alloc_off = _ALLOC_VA - DELTA
     alloc_cur = struct.unpack_from('<H', buf, alloc_off)[0]
     alloc_new = ARRAYA_NEW + songs * 4
-    if not (0x4A80 <= alloc_cur <= 0x7FFF):
+    if song_tables.alloc_owned(buf):
+        # the record-table patch sized the ctx; patch_records re-sizes it
+        log(f'{_ALLOC_VA:08X}  ctx alloc left to the record-table patch')
+    elif not (0x4A80 <= alloc_cur <= 0x7FFF):
         raise TaikoExeError(
             f'{_ALLOC_VA:08X}: ctx alloc size is {alloc_cur:#06x}, not a value I '
             f'recognise (0x4A80 pristine / 0x4A90 arrayB / prior big patch)')
-    struct.pack_into('<H', buf, alloc_off, alloc_new)
-    log(f'{_ALLOC_VA:08X}  {alloc_cur:#06x} -> {alloc_new:#06x}  '
-        f'addiu $a0,$zero,SIZE   ctx alloc grown for arrayA[{songs}]')
+    else:
+        struct.pack_into('<H', buf, alloc_off, alloc_new)
+        log(f'{_ALLOC_VA:08X}  {alloc_cur:#06x} -> {alloc_new:#06x}  '
+            f'addiu $a0,$zero,SIZE   ctx alloc grown for arrayA[{songs}]')
 
     # arrayA init count (fills N entries with -1); full 16-bit immediate.
     off = BOUND_FILE_OFF
@@ -629,9 +638,16 @@ def patch_hdd(img: str | Path, songs: int, partition: str = PARTITION,
         f'arrayA {"relocated" if is_arraya_relocated(dec) else "at ctx+0x88"}')
 
     if songs > MAX_SONGS:
-        log(f'ceiling {songs} > {MAX_SONGS}: relocating arrayA (experimental path)')
+        log(f'ceiling {songs} > {MAX_SONGS}: relocating arrayA and growing the '
+            f'per-song record tables')
         out = patch_arraya(dec, songs, log)
+        out = song_tables.patch_records(out, songs, log)
     else:
+        if song_tables.is_patched(dec):
+            raise TaikoExeError(
+                'this `taiko` has the grown record tables; a ceiling of '
+                f'{songs} (<= {MAX_SONGS}) needs the original `taiko` - restore '
+                'it first')
         out = patch_arrayb(dec, songs, log)
     new_enc = encrypt_taiko(out, t14load, progress)
     if decrypt_taiko(new_enc, t14load) != out:

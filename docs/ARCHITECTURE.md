@@ -104,6 +104,7 @@ folder registers it with the Explorer.
 | Module | Role |
 |--------|------|
 | `taiko_exe.py` | Decrypt/patch the T14+ `taiko` ELF (MIPS, EE). Needs `T14LOAD.bin` to derive the key. Song-count ceiling, select timer, boot Notice skip. |
+| `song_tables.py` | Above 214 songs: moves the 210-entry per-song record tables to a larger area of the select context (17 access sites), raises the loop bounds, grows the ranking stack frame, and adds a code cave that keeps the first 210 records in the SRAM save image. |
 | `usb_keyboard.py` | Taiko 14 USB keyboard + dummy-JVS patch: puts the bundled `data/KBD2EE.irx` into an `IRXARC.BIN` module archive. HDD mode writes it as `IRXARC.BIN;1` / `IRXARC.BIN` into the partition holding `taiko` (`Game::LoadModules` at `0x101480` opens `pfs0:IRXARC.BIN;1` before `mc0:IRXARC.BIN` and loads every module in it); card mode patches the card's `IRXARC.BIN` + `T14LOAD` name list. Installs first decrypt `taiko` (via `taiko_exe`) and verify the 7 stock hook blocks (`HOOK_BLOCKS`) and the empty cave at `0x300000`. |
 
 ## Dependency shape

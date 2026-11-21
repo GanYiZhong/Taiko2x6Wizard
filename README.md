@@ -163,9 +163,16 @@ let the GUI fill it in as you browse.
     `python -m taiko2x6.exe.usb_keyboard check TK14.img --card NM00057.ps2`
     runs the check alone.
 - **Fuse several games into one (Omnimix)** — Tools → *Omnimix Maker*
-  (`songs/omnimix_maker`). Up to 214 songs is proven in-game; above that the
-  data is written correctly but whether the select wheel shows and plays every
-  song is untested — try it on a copy first.
+  (`songs/omnimix_maker`). Up to 214 songs uses the original, proven patch.
+  Above 214 (up to 644) the per-song record tables are grown too
+  (`exe/song_tables`): the game keeps scores, crowns, play counts and the
+  popularity ranking in fixed 210-entry tables, and every song past 210 used
+  to write past them. The tables now hold every song; the first 210 records
+  are still saved to the board's SRAM exactly as before, while records of the
+  songs past 210 last until the machine is switched off (the 32 KB SRAM has
+  no room left). Checked in PCSX2x6 on a 331-song image: songs 210 and 214
+  play, their records and the ranking update, and the first 210 records
+  survive a reboot.
   Taiko 7 sources are converted on the way in: its charts use an older layout
   that Taiko 8+ misreads (integer time/BPM, no scroll speeds), so they are
   rewritten to the Gen2 layout (notes unchanged; all 645 T7 charts pass the

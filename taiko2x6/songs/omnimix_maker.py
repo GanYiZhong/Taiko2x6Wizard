@@ -26,10 +26,12 @@ Why this works with what we already proved:
     bins stay consistent (musicinfo == tuning == streaminfo song count).
   * taiko_exe.patch_hdd raises the executable's song ceiling to the new count.
 
-Song-count reality (see taiko_exe): ≤214 is fully proven and safe; 215-~3419 the
-data layer holds fine (deployed to 300) but whether the select wheel RENDERS and
-plays past 214 is not yet game-tested — Stage-2 UI-table bounds may still cap it.
-The planner reports the count so the caller can choose to cap at 214 or go past.
+Song-count reality (see taiko_exe / song_tables): ≤214 uses the arrayB patch,
+proven in-game. Above 214 taiko_exe relocates arrayA AND song_tables grows the
+per-song record tables (score/crown/play-count data, popularity ranking) that
+are otherwise fixed at 210 and get overrun by every song id ≥ 210. Max 644.
+Records of songs past 210 work in play but are not kept across a reboot (the
+SRAM save is full); the first 210 are saved exactly as before.
 """
 from __future__ import annotations
 
