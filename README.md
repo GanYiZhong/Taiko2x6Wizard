@@ -23,7 +23,7 @@ one Explorer GUI.
   every group/file, preview textures, play audio, and edit in place.
 - **Add / replace songs** end-to-end: title textures, charts (fumen), audio
   (VAG), and all the per-song database rows, then rebuild the archive.
-- **Omnimix** — fuse the songs of several Taiko 8…14 images into one: dedup by
+- **Omnimix** — fuse the songs of several Taiko 7…14 images into one: dedup by
   song id, auto song-limit patch, and partition grow when the data outgrows it.
 - **Chart conversion** — TJA → SHT, and encrypted **Gen3 (Nijiiro)** fumen → SHT
   (keeps diverge branches, bpm-aware measure timing).
@@ -166,6 +166,11 @@ let the GUI fill it in as you browse.
   (`songs/omnimix_maker`). Up to 214 songs is proven in-game; above that the
   data is written correctly but whether the select wheel shows and plays every
   song is untested — try it on a copy first.
+  Taiko 7 sources are converted on the way in: its charts use an older layout
+  that Taiko 8+ misreads (integer time/BPM, no scroll speeds), so they are
+  rewritten to the Gen2 layout (notes unchanged; all 645 T7 charts pass the
+  chart validator), and its difficulty stars are read with T7's own
+  `tuning.bin` layout. Not yet played in-game.
 
 > ⚠️ **Safety.** When writing to a PS2 HDD `.img`, **close PCSX2 first** — it
 > locks the image for writing (reads are fine while it runs). Working on

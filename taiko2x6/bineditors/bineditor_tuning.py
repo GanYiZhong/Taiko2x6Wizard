@@ -144,7 +144,53 @@ def _pool_is_printable_to_eof(data: bytes, pool_offset: int) -> bool:
     return True
 
 
-def _scan_blocks(data: bytes, pool_offset: int):
+# --------------------------------------------------------------------------- #
+# Taiko 7 variant (read-only)
+# --------------------------------------------------------------------------- #
+# Taiko 7's chart record is 26 int32: the T8 record without its index-9 field,
+# so the small-negative anchor sits at index 14. The star rating stays at [5].
+# Blocks are fixed-size and start at offset 0 (record[0] = song count):
+# 1P = 936 bytes, 2P = 948, i.e. 1884 per song; the last block absorbs the
+# pool's alignment slack. Tiled directly - the marker scan used for T8 breaks
+# on songs whose easy slot is empty (all -1, no marker).
+T7_RECORD_INTS = 26
+T7_MARKER_INDEX = 14
+T7_BLOCK_1P = 936
+T7_BLOCK_2P = 948
+
+
+def is_t7_layout(data: bytes) -> bool:
+    """True for a Taiko 7 tuning.bin (26-int records, anchor at index 14)."""
+    if len(data) < 4 * (NEG_MARKER_INDEX + 1):
+        return False
+    w = struct.unpack_from("<%di" % (NEG_MARKER_INDEX + 1), data, 0)
+    return -300 < w[T7_MARKER_INDEX] < -1 and not (-300 < w[NEG_MARKER_INDEX] < -1)
+
+
+def t7_stars(data: bytes) -> list:
+    """[[easy, normal, hard, oni], ...] per song, in block (song) order.
+
+    Taiko 7 has no oni on some songs: that slot is -1 there, as in T8.
+    """
+    if not is_t7_layout(data):
+        raise ValueError("not a Taiko 7 tuning.bin")
+    song = T7_BLOCK_1P + T7_BLOCK_2P
+    pool = _find_pool_offset(data)
+    count = struct.unpack_from("<i", data, 0)[0]
+    if count <= 0 or not (0 <= pool - count * song < T7_RECORD_INTS * 4):
+        raise ValueError(
+            "Taiko 7 tuning.bin: %d songs x %d bytes does not reach the string "
+            "pool at 0x%x" % (count, song, pool))
+    rs = T7_RECORD_INTS * 4
+    out = []
+    for k in range(count):                           # 1P block; 2P mirrors it
+        base = k * song
+        out.append([struct.unpack_from("<i", data, base + r * rs + 5 * 4)[0]
+                    for r in range(RECORDS_PER_BLOCK)])
+    return out
+
+
+def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_INDEX):
     """Tile [0, pool_offset) into song-player blocks.
 
     Blocks are delimited by the small-negative marker (-300 < v < -1) that sits
@@ -174,7 +220,7 @@ def _scan_blocks(data: bytes, pool_offset: int):
             cur.append(negs[k])
     groups.append(cur)
 
-    marker_byte = NEG_MARKER_INDEX * 4
+    marker_byte = marker_index * 4
     # A marker cluster whose first marker sits before index 15 (offset < 60) would
     # imply a negative block start — that's a spurious match in a header/preamble
     # (seen on Taiko 7's tuning), not a real block. Drop it. T8's first real block

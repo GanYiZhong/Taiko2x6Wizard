@@ -3,7 +3,7 @@
 Omnimix Maker — GUI front-end for omnimix_maker.
 
 Pick a TARGET (a Taiko 14+ HDD .img, or a loose DATA.000+list.bin folder) and a
-list of SOURCES (Taiko 8…14 images/folders). It harvests every song the target
+list of SOURCES (Taiko 7…14 images/folders). It harvests every song the target
 lacks — charts, name textures, audio, stars — appends them in one rebuild, and
 (for an .img target) lifts the executable's song ceiling so they are reachable.
 

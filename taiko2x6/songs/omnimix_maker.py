@@ -2,7 +2,7 @@
 """
 Omnimix Maker — fuse the songs of several Taiko images into one target.
 
-Point it at N source archives (Taiko 8 … 14+) and a target (e.g. Taiko 14). It
+Point it at N source archives (Taiko 7 … 14+) and a target (e.g. Taiko 14). It
 harvests every song the target does NOT already have — charts, name textures,
 audio and difficulty stars — and appends them into the target's DATA.000 in one
 rebuild, then (for an HDD .img target) lifts the song-count ceiling in the game
@@ -14,6 +14,11 @@ Why this works with what we already proved:
     groups can be copied VERBATIM between versions — no re-encoding, no loss of
     the original art. Only the song-DB bins (musicinfo/tuning/streaminfo) differ
     per generation, and SongManager already reads/writes each variant.
+  * Taiko 7 is the exception: its charts use an older 112-byte measure record
+    (integer time/BPM, no scroll speeds) that T8+ misreads, so harvest_song
+    converts them (charts.sht_t7; notes are unchanged), and its tuning.bin
+    stars are read with the T7 record layout (bineditor_tuning.t7_stars).
+    Audio, textures and the container are copied as-is.
   * We only ever add ids the target lacks (dedup by song id, "14 is the base"),
     so group names never collide and nothing existing is touched.
   * The DB add is the proven batch path: one SongManager takes every add, one
@@ -254,11 +259,21 @@ def read_song_meta(archive) -> dict:
     """
     from taiko2x6.songs import song_builder
     from taiko2x6.songs.song_manager import SongManager
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    tuning = song_builder._read_named(archive, "tuning.bin")
     sm = SongManager(
         song_builder._read_named(archive, "musicinfo.bin"),
-        song_builder._read_named(archive, "tuning.bin"),
+        tuning,
         song_builder._read_named(archive, "streaminfo.bin"))
-    return {s.id: {"stars": list(s.stars), "genre": s.genre} for s in sm._songs}
+    meta = {s.id: {"stars": list(s.stars), "genre": s.genre} for s in sm._songs}
+    if TU.is_t7_layout(tuning):
+        # Taiko 7's 26-int tuning records: SongManager's T8 reader lands on
+        # the wrong fields, so read the stars with the T7 layout instead.
+        stars = TU.t7_stars(tuning)
+        for s in sm._songs:
+            if s.k < len(stars):
+                meta[s.id]["stars"] = stars[s.k]
+    return meta
 
 
 # --------------------------------------------------------------------------- #
@@ -275,11 +290,14 @@ def harvest_song(archive, sid: str) -> tuple:
     Returns (new_groups, extra_files):
       * new_groups: per-song groups (charts, name textures, audio) as
         [{name, files:[(fname, raw_bytes)], compression}] — decompressed on read,
-        recompressed by build_archive.
+        recompressed by build_archive. Taiko 7 charts (an older measure-record
+        layout) are converted to the Gen2 layout here; such groups carry
+        "converted": True.
       * extra_files: this song's files that live inside SHARED groups
         (music_texture.music_select*, holding select_full/short/non) as
         {group_name: [(fname, raw_bytes)]}.
     """
+    from taiko2x6.charts import sht_t7
     new_groups = []
     extra_files = {}
     want_select = {f"select_full_{sid}", f"select_short_{sid}"}
@@ -294,7 +312,13 @@ def harvest_song(archive, sid: str) -> tuple:
         if per_song:
             files = [(e["name"], archive.read_file(grp, e))
                      for e in archive.layout.files_for_group(grp)]
-            new_groups.append({"name": gn, "files": files, "compression": comp})
+            g = {"name": gn, "files": files, "compression": comp}
+            if gn.startswith("fumen."):
+                conv = [sht_t7.ensure_gen2(d) for _n, d in files]
+                if any(c for _d, c in conv):
+                    g["files"] = [(n, d) for (n, _o), (d, _c) in zip(files, conv)]
+                    g["converted"] = True
+            new_groups.append(g)
         elif gn == "music_texture.music_select":
             for e in archive.layout.files_for_group(grp):
                 if e["name"] in want_select:
@@ -313,8 +337,12 @@ def song_asset_summary(new_groups, extra_files) -> dict:
     texg = sum(1 for g in new_groups if g["name"].startswith("music_texture."))
     audio = any(g["name"].startswith("sound.stream.") for g in new_groups)
     selfiles = sum(len(v) for v in extra_files.values())
-    return {"chart_groups": charts, "texture_groups": texg,
-            "audio": audio, "select_files": selfiles}
+    out = {"chart_groups": charts, "texture_groups": texg,
+           "audio": audio, "select_files": selfiles}
+    conv = sum(1 for g in new_groups if g.get("converted"))
+    if conv:
+        out["t7_charts_converted"] = conv
+    return out
 
 
 # --------------------------------------------------------------------------- #

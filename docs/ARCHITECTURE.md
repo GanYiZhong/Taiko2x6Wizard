@@ -43,7 +43,7 @@ taiko2x6/
 | `song_builder.py` | High-level "add/replace a full song": title textures + charts + audio + DB rows in one call. |
 | `song_manager.py` | Cross-`.bin` database editor — coordinated add/edit/remove across `musicinfo` / `tuning` / `streaminfo`. |
 | `song_replacer.py` | Swap one existing song's parts (chart/audio/texture) in place; can source from a Gen3 folder. |
-| `omnimix_maker.py` | Fuse songs from several Taiko 8…14 images into one target (dedup by song id, verbatim asset copy, auto song-limit patch, partition grow). |
+| `omnimix_maker.py` | Fuse songs from several Taiko 7…14 images into one target (dedup by song id, verbatim asset copy — Taiko 7 charts converted via `sht_t7`, auto song-limit patch, partition grow). |
 | `omnimix_gui.py` | GUI for the Omnimix Maker (Tools menu). |
 | `generators.py` | Placeholder chart/audio generators (uses `tja2sht`, `vagtool`). |
 
@@ -67,6 +67,7 @@ folder registers it with the Explorer.
 |--------|------|
 | `tja2sht.py` | Convert TJA → SHT (SYSTEM256 chart). Position grid is 1/48 of a measure (`POS_DIV=48`, an engine limit). |
 | `sht_validator.py` | Validate / sanity-check SHT charts. |
+| `sht_t7.py` | Convert Taiko 7 charts (112-byte measure records, integer time/BPM) to the Gen2 136-byte layout. |
 | `gen3_convert.py` | Decrypt Gen3 (Nijiiro) fumen (AES-256-CBC + gzip) and convert to SHT; decodes audio via `vgmstream`. |
 | `gen3_song.py` | Load a Gen3 song directory and map it to `song_builder` kwargs (title, charts, stars, audio). |
 
