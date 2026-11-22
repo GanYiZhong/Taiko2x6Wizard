@@ -91,3 +91,26 @@ def test_group_rows_by_genre_remaps_row_indices():
     assert m.sec1 == [0, 3] and m.sec4 == [(3, 0, 1)]
     assert m.sec6[4] == 2 and m.sec6[5] == 5 and m.sec6[11] == 1
     assert m.sec7 == [6, 5]
+
+
+def test_set_t14_stars_by_id():
+    data = _t14_tuning([("aaa", [4, 7, 8, 10]), ("bbb", [4, 7, 8, 10])])
+    out = TU.set_t14_stars_by_id(data, {"bbb": [2, 4, 6, 6]})
+    assert TU.t14_stars(out) == {"aaa": [4, 7, 8, 10], "bbb": [2, 4, 6, 6]}
+    assert len(out) == len(data)
+
+
+def test_target_star_fixes_only_template_clones(monkeypatch):
+    from types import SimpleNamespace
+    tmpl = [4, 7, 8, 10]
+    tuning = _t14_tuning([("10jiku", tmpl), ("a12c01", tmpl), ("rot3", [5, 7, 8, 10]),
+                          ("lonely", tmpl)])
+    from taiko2x6.songs import song_builder
+    monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: tuning)
+    monkeypatch.setattr(O, "pick_template_id", lambda target: "10jiku")
+    spec = SimpleNamespace(label="SRC")
+    metas = {"SRC": {"a12c01": {"stars": [2, 4, 6, 6]},       # clone -> fixed
+                     "rot3": {"stars": [5, 6, 7, 9]},         # real rating: kept
+                     "10jiku": {"stars": [1, 1, 1, 1]}}}      # template itself: kept
+    fixes = O._target_star_fixes(object(), [(spec, None)], metas)
+    assert fixes == {"a12c01": [2, 4, 6, 6]}                 # 'lonely': no source

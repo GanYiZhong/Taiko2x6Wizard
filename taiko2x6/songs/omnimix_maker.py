@@ -479,6 +479,8 @@ class MergePlan:
     skipped_titles: dict = field(default_factory=dict)
     # target rows whose genre is corrected in place: sid -> genre
     genre_fixes: dict = field(default_factory=dict)
+    # target rows whose stars are corrected in place: sid -> [e, n, h, o]
+    star_fixes: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
@@ -582,13 +584,15 @@ def plan_merge(target, sources, log=lambda s: None,
                 seen_new.add(sid)
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
         fixes = _vote_genres(target, opened, items, log, metas)
+        star_fixes = _target_star_fixes(target, opened, metas, log)
     finally:
         for _spec, src in opened:
             src.close()
     if skipped_titles:
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
-                     skipped_titles=skipped_titles, genre_fixes=fixes)
+                     skipped_titles=skipped_titles, genre_fixes=fixes,
+                     star_fixes=star_fixes)
 
 
 def _valid_stars(st) -> bool:
@@ -666,6 +670,45 @@ def _ordered_ids(archive):
 # --------------------------------------------------------------------------- #
 #  choosing a DB template row in the target
 # --------------------------------------------------------------------------- #
+def _target_star_fixes(target, opened, metas, log=lambda s: None) -> dict:
+    """Correct target songs that carry the DB template's stars.
+
+    Songs added to the target by an earlier build were cloned from its
+    template row; if that build had no stars for them they kept the
+    template's difficulty (TK14: 10jiku's [4, 7, 8, 10], so dozens of songs
+    showed 10 stars). Target songs are kept as-is otherwise, so repair just
+    those: a song whose stars equal the template's, when a source has a
+    different valid rating for it. Real ratings that differ from the
+    template's are never touched.
+    """
+    from taiko2x6.songs import song_builder
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    try:
+        tuning = song_builder._read_named(target, "tuning.bin")
+        if not TU.is_t14_layout(tuning):
+            return {}
+        tgt = TU.t14_stars(tuning)
+        tmpl = pick_template_id(target)
+    except Exception:
+        return {}
+    tstars = tgt.get(tmpl)
+    if not _valid_stars(tstars):
+        return {}
+    fixes = {}
+    for sid, st in tgt.items():
+        if sid == tmpl or st != tstars:
+            continue
+        for spec, _src in opened:
+            cand = metas.get(spec.label, {}).get(sid, {}).get("stars")
+            if _valid_stars(cand) and list(cand) != tstars:
+                fixes[sid] = list(cand)
+                break
+    if fixes:
+        log(f"stars: {len(fixes)} target songs had the template's {tstars}, "
+            f"restored from their source")
+    return fixes
+
+
 def pick_template_id(target) -> str:
     """A real (non-header) target song to clone the DB record shape from.
 
@@ -725,6 +768,13 @@ def precompute_db(target, plan, template_id=None) -> dict:
     out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {})
     if out != mi:
         res[MUSICINFO] = out
+    star_fixes = getattr(plan, "star_fixes", None) or {}
+    if star_fixes:
+        from taiko2x6.songs.song_manager import TUNING
+        from taiko2x6.bineditors import bineditor_tuning as TU
+        tu = res.get(TUNING) or song_builder._read_named(target, "tuning.bin")
+        if TU.is_t14_layout(tu):
+            res[TUNING] = TU.set_t14_stars_by_id(tu, star_fixes)
     return res
 
 

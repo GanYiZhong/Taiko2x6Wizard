@@ -264,6 +264,23 @@ def set_t14_stars(rec: bytearray, stars) -> None:
         struct.pack_into("<i", rec, 4 * c, int(v))
 
 
+def set_t14_stars_by_id(data: bytes, stars: dict) -> bytes:
+    """Copy of a Taiko 14 tuning.bin with {song id: [e, n, h, o]} applied."""
+    if not is_t14_layout(data):
+        raise ValueError("not a Taiko 14 tuning.bin")
+    out = bytearray(data)
+    cnt = struct.unpack_from("<I", data, 0)[0]
+    ps = 4 + cnt * T14_REC
+    for i in range(cnt):
+        rec = 4 + i * T14_REC
+        off = ps + struct.unpack_from("<i", data, rec)[0]
+        sid = data[off:data.find(b"\0", off)].decode("ascii", "replace")
+        if sid in stars:
+            view = memoryview(out)[rec:rec + T14_REC]
+            set_t14_stars(view, stars[sid])
+    return bytes(out)
+
+
 def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_INDEX):
     """Tile [0, pool_offset) into song-player blocks.
 
