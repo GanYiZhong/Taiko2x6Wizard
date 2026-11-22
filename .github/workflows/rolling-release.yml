@@ -1,0 +1,126 @@
+name: rolling release
+
+# Every push to main rebuilds the Windows and Linux binaries and replaces the
+# assets of the single "rolling" pre-release. Versioned releases (v1.x) are
+# untouched.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win64
+          # The oldest supported Ubuntu runner: the binary needs a glibc at
+          # least this old on the user's machine.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 \
+            libdbus-1-3 libpulse0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 \
+            libxcb-shape0 libxcb-xinerama0 libsndfile1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 numpy Pillow pycryptodome soundfile pytest pyinstaller
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean Taiko2x6Wizard.spec
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $d = "Taiko2x6Wizard-rolling-${{ matrix.platform }}"
+          New-Item -ItemType Directory $d | Out-Null
+          Copy-Item dist/Taiko2x6Wizard.exe, release/README_FIRST.txt, config.ini.example $d
+          Compress-Archive -Path $d -DestinationPath "$d.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          d="Taiko2x6Wizard-rolling-${{ matrix.platform }}"
+          mkdir "$d"
+          cp dist/Taiko2x6Wizard release/README_FIRST-linux.txt config.ini.example "$d"
+          chmod +x "$d/Taiko2x6Wizard"
+          tar -czf "$d.tar.gz" "$d"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            Taiko2x6Wizard-rolling-*.zip
+            Taiko2x6Wizard-rolling-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Replace the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(git rev-parse --short HEAD)
+          {
+            echo "Automatic build of \`main\` at ${short} ($(date -u '+%Y-%m-%d %H:%M UTC'))."
+            echo
+            echo "Rebuilt on every push, so it may be less tested than the numbered releases."
+            echo
+            echo "| File | Platform |"
+            echo "|------|----------|"
+            echo "| \`Taiko2x6Wizard-rolling-win64.zip\` | 64-bit Windows: unzip and run \`Taiko2x6Wizard.exe\` |"
+            echo "| \`Taiko2x6Wizard-rolling-linux-x86_64.tar.gz\` | 64-bit Linux (glibc 2.35+): extract and run \`./Taiko2x6Wizard\` |"
+            echo
+            echo "See README_FIRST in the archive for the files you add yourself (Font.ttf, T14LOAD.bin, …)."
+            echo
+            echo "### Recent commits"
+            git log -15 --pretty='- %s (%h)'
+          } > notes.md
+          gh release delete rolling --cleanup-tag --yes || true
+          gh release create rolling dist/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Rolling build (${short})" \
+            --notes-file notes.md
