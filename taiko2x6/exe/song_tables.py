@@ -150,6 +150,23 @@ HOOKS = [
     (0x00176DB4, 0x0040302D, 'genre'),
 ]
 GENRE_CPOP = 8
+# "genre%d" board for every genre value a card can carry: song genres 0..6,
+# C-POP (8) on the J-POP board, and the folder headers (7, 9..15) on the board
+# of the folder they open (song_select_song.swg only has genre0..6).
+GENRE_BOARD = bytes([0, 1, 2, 3, 4, 5, 6,    # J-POP .. game
+                     4,                      # 7  Namco header
+                     0,                      # 8  C-POP songs
+                     0, 6, 3, 2, 1, 5,       # 9..14 headers
+                     0])                     # 15 C-POP header
+# Song-select row filter (sub_138688): a row is skipped when bit <genre> of
+# the mask is set. Stock hides every folder header except Namco's in the
+# normal song list and all of them in the all-songs list; showing them turns
+# each header into a divider card at the start of its genre block (picking
+# one jumps to that folder, as the Namco header always did).
+MASK_SITES = [
+    (0x001386C4, 0x3410FE10, 0x34100010),   # li s0,0xFE10 -> 0x0010 (Namco songs only)
+    (0x001386D0, 0x3410FE80, 0x34100000),   # li s0,0xFE80 -> 0x0000 (nothing)
+]
 F_LOAD = 0x0017CC50                 # copy SRAM image into ctx+2752
 F_SAVE = 0x0017CC88                 # checksum ctx+2752 (then the caller copies out)
 F_HIST = 0x001393E8                 # musicID -> history byte
@@ -312,16 +329,33 @@ def _cave(songs: int, rec: int) -> tuple[bytes, dict]:
     a.jr('ra')
     a.addiu('sp', 'sp', 0x10)                           # delay
 
-    # cave_genre(v0 = genre): a2 = genre for the "genre%d" card label, with
-    # C-POP (8) shown on the J-POP board - song_select_song.swg only has
-    # genre0..6 and stock TK14 never filed a song under 8.
+    # cave_genre(v0 = genre): a2 = board for the "genre%d" card label
+    # (GENRE_BOARD), unknown values passed through.
     a.label('genre')
     a.move('a2', 'v0')
-    a.emit(_i(0x0E, 'v0', 't9', GENRE_CPOP))            # xori t9, v0, 8
+    a.sltiu('t9', 'v0', len(GENRE_BOARD))
+    a.beqz('t9', 'genre_out')
+    a.nop()
+    a.emit(_r('t9', 'v0', 't9', 0x2D))                  # daddu t9, t9(=1), v0
+    a.lui('t8', 0)                                      # patched below: hi(table)
+    a.emit(_r('t8', 't9', 't8', 0x2D))                  # daddu t8, t8, t9
+    a.lbu('a2', 0, 't8')                                # patched below: lo(table) - 1
+    a.label('genre_out')
     a.jr('ra')
-    a.emit(_r('zero', 't9', 'a2', 0x0A))                # delay: movz a2, zero, t9
+    a.nop()
 
     code = a.finish()
+    # board table right after the code; fix up the lui/lbu that address it
+    table_va = CAVE_VA + len(code)
+    words = list(struct.unpack('<%dI' % (len(code) // 4), code))
+    gi = (a.labels['genre'] - CAVE_VA) // 4
+    lui_i, lbu_i = gi + 5, gi + 7
+    addr = table_va - 1                                 # t9 = 1 + genre
+    hi, lo = (addr + 0x8000) >> 16, addr & 0xFFFF
+    words[lui_i] = (words[lui_i] & 0xFFFF0000) | hi
+    words[lbu_i] = (words[lbu_i] & 0xFFFF0000) | lo
+    code = b''.join(struct.pack('<I', w) for w in words) + GENRE_BOARD
+    code += bytes(-len(code) % 4)
     if len(code) > CAVE_LEN:
         raise SongTablesError(f'cave code {len(code)} B > {CAVE_LEN} B')
     return code, {k: a.labels[k] for k in ('load', 'save', 'hist', 'genre')}
@@ -460,7 +494,15 @@ def patch_records(dec: bytes, songs: int, log=print) -> bytes:
             raise SongTablesError(f'{va:08X}: unexpected call {w:08x}')
         _put(buf, va, want)
     log(f'cave {len(code)} B at {CAVE_VA:08X}: SRAM load/save sync of the first '
-        f'{STOCK_SONGS} records, history clamp, C-POP card boards')
+        f'{STOCK_SONGS} records, history clamp, C-POP / header card boards')
+
+    # folder headers as divider cards in the song list
+    for va, stock, new in MASK_SITES:
+        w = _w(buf, va)
+        if w not in (stock, new):
+            raise SongTablesError(f'{va:08X}: unexpected instruction {w:08x}')
+        _put(buf, va, new)
+    log('song list: folder headers shown as divider cards')
 
     # texture manager capacity: li $a1, CAP
     w = _w(buf, TEX_CAP_VA)

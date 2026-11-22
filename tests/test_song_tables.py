@@ -39,6 +39,8 @@ def _stock(monkeypatch):
     _put(buf, S.ALLOC_VA, 0x24040000 | (0x4A90 + 4 * 331))
     _put(buf, S.TEX_CAP_VA, 0x24050000 | S.TEX_CAP_STOCK)
     _put(buf, S.TEX_MEM_VA, 0x3C04100C)       # lui a0,0x100C (stock heap)
+    for va, stock, _new in S.MASK_SITES:
+        _put(buf, va, stock)
     cave = bytes(range(256)) * 4
     buf[S.CAVE_VA - S.DELTA:S.CAVE_VA - S.DELTA + S.CAVE_LEN] = cave[:S.CAVE_LEN]
     monkeypatch.setattr(S, "CAVE_SHA1", hashlib.sha1(cave[:S.CAVE_LEN]).hexdigest())
@@ -127,19 +129,25 @@ def test_cave_code_shape():
 
 
 def test_genre_label_routine():
-    """cave_genre: a2 = v0, except C-POP (8) -> 0 (no genre8 board in the swf)."""
+    """cave_genre: a2 = GENRE_BOARD[v0] for 0..15, v0 otherwise."""
     code, labels = S._cave(331, S.layout(331)["rec"])
+    assert len(code) <= S.CAVE_LEN
     off = (labels["genre"] - S.CAVE_VA) // 4
-    words = struct.unpack("<4I", code[4 * off:4 * off + 16])
-    assert words[0] == 0x0040302D                                # move a2, v0
-    assert words[1] == (0x0E << 26) | (2 << 21) | (25 << 16) | 8  # xori t9, v0, 8
-    assert words[2] == 0x03E00008                                # jr ra
-    assert words[3] == (25 << 16) | (6 << 11) | 0x0A             # movz a2, zero, t9
+    w = struct.unpack("<10I", code[4 * off:4 * off + 40])
+    assert w[0] == 0x0040302D                                  # move a2, v0
+    # decode the table address from lui/lbu and check the table bytes
+    hi, lo = w[5] & 0xFFFF, w[7] & 0xFFFF
+    addr = (hi << 16) + (lo - 0x10000 if lo & 0x8000 else lo) + 1   # + (1 + genre)
+    tab = code[addr - S.CAVE_VA:addr - S.CAVE_VA + len(S.GENRE_BOARD)]
+    assert tab == S.GENRE_BOARD
 
-    def run(v0):                     # tiny interpreter for the 4 words
-        a2 = v0
-        t9 = v0 ^ 8
-        return 0 if t9 == 0 else a2
-    assert [run(g) for g in range(9)] == [0, 1, 2, 3, 4, 5, 6, 7, 0]
+    def run(v0):
+        return tab[v0] if 0 <= v0 < len(tab) else v0
+    assert [run(g) for g in range(17)] == [0, 1, 2, 3, 4, 5, 6, 4, 0, 0, 6, 3, 2, 1, 5, 0, 16]
     genre_hooks = [h for h in S.HOOKS if h[2] == "genre"]
     assert len(genre_hooks) == 5 and all(h[1] == 0x0040302D for h in genre_hooks)
+
+
+def test_header_masks():
+    assert [(s, n) for _va, s, n in S.MASK_SITES] == [(0x3410FE10, 0x34100010),
+                                                     (0x3410FE80, 0x34100000)]

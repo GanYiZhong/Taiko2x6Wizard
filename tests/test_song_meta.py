@@ -82,15 +82,17 @@ def test_group_rows_by_genre_remaps_row_indices():
     m = SimpleNamespace(variant="t14", sec0=rows, sec1=[0, 3], sec4=[(3, 0, 1)],
                         sec6=[0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 6], sec7=[5, 2])
     O.group_rows_by_genre(m)
-    assert [r[2] for r in m.sec0] == [9, 15, 4, 4, 4, 0, 0]
+    # each header opens its block: J-POP header + J-POP, C-POP header (no
+    # songs), then Namco, which has no header here
+    assert [r[2] for r in m.sec0] == [9, 0, 0, 15, 4, 4, 4]
     assert [r[13] for r in m.sec0] == list(range(7))
     assert [r[14] for r in m.sec0] == list(range(7))
     assert sorted(r[15] for r in m.sec0) == list(range(7))
-    # old 3 -> new 3 (namco: 1,3,4 -> 2,3,4), its ura old 4 -> new 4
-    assert m.sec0[3][10] == 4
-    assert m.sec1 == [0, 3] and m.sec4 == [(3, 0, 1)]
-    assert m.sec6[4] == 2 and m.sec6[5] == 5 and m.sec6[11] == 1
-    assert m.sec7 == [6, 5]
+    # old 0,2,5,6,1,3,4 -> new 0..6: the ura pair old 3 -> 5 links old 4 -> 6
+    assert m.sec0[5][10] == 6
+    assert m.sec1 == [0, 5] and m.sec4 == [(5, 0, 1)]
+    assert m.sec6[4] == 4 and m.sec6[5] == 1 and m.sec6[11] == 3
+    assert m.sec7 == [2, 1]
 
 
 def test_set_t14_stars_by_id():
@@ -169,3 +171,30 @@ def test_resolve_trusted_same_format_mod_is_untrusted(monkeypatch):
     opened = [(SimpleNamespace(label=k), arcs[k]) for k in ("base", "pack", "t13")]
     gfix, _sfix, rank = O._resolve_trusted(arcs["tgt"], opened, [], {})
     assert gfix == {"x": 3} and rank["x"] == (2, 0)
+
+
+def test_musicinfo_ids_includes_headers_and_songs():
+    raw = _t8_musicinfo([("seljpp", "J-POP", 9), ("song1", "a", 0), ("cpop1", "c", 8)])
+    assert O.musicinfo_ids(raw) == {"seljpp", "song1", "cpop1"}
+    assert O.musicinfo_genres(raw) == {"song1": 0, "cpop1": 8}
+
+
+def test_plan_skips_ids_missing_from_song_list(monkeypatch):
+    """'origin' is the old games' Namco folder header row: not a song."""
+    from types import SimpleNamespace
+    from taiko2x6.songs import song_builder
+    tgt, src = SimpleNamespace(name="tgt"), SimpleNamespace(name="src", close=lambda: None)
+    ids = {"tgt": ["a"], "src": ["a", "b", "origin"]}
+    mi = {"tgt": _t8_musicinfo([("a", "A", 4)]),
+          "src": _t8_musicinfo([("a", "A", 4), ("b", "B", 0),
+                                ("origin", "ナムコオリジナル", 7)])}
+    monkeypatch.setattr(O, "open_pair", lambda *a, **k: src)
+    monkeypatch.setattr(O, "_ordered_ids", lambda arc: ids[arc.name])
+    monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: mi[arc.name])
+    monkeypatch.setattr(O, "read_song_meta", lambda arc: {})
+    monkeypatch.setattr(O, "song_titles", lambda arc: {})
+    monkeypatch.setattr(O, "_target_star_fixes", lambda *a, **k: {})
+    monkeypatch.setattr(O, "_resolve_trusted", lambda *a, **k: ({}, {}, {}))
+    spec = SimpleNamespace(label="src", list_path="l", data_path="d", fmt=2)
+    plan = O.plan_merge(tgt, [spec])
+    assert [it.sid for it in plan.items] == ["b"]

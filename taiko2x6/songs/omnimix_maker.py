@@ -287,7 +287,18 @@ CPOP_HEADER = 15         # its folder header row ("selcpp")
 
 
 def musicinfo_genres(raw: bytes) -> dict:
-    """{song id: genre} straight from musicinfo.bin's own rows.
+    """{song id: genre} for the song rows of musicinfo.bin (headers left out)."""
+    return {sid: g for sid, g in _musicinfo_rows(raw)
+            if 0 <= g <= 6 or g == CPOP}       # 8 = C-POP (T11T/T12T, TK14 .0001)
+
+
+def musicinfo_ids(raw: bytes) -> set:
+    """Every id that has a row in musicinfo.bin (songs and folder headers)."""
+    return {sid for sid, _g in _musicinfo_rows(raw)}
+
+
+def _musicinfo_rows(raw: bytes) -> list:
+    """[(id, genre)] straight from musicinfo.bin's own rows.
 
     Each SEC0 row starts with two pool offsets (id, title) and the genre in
     column 2, so this needs no row-to-id pairing. Genre numbers are the same
@@ -299,22 +310,22 @@ def musicinfo_genres(raw: bytes) -> dict:
     import struct
     from taiko2x6.bineditors import bineditor_musicinfo as MI
     if len(raw) < 0x34:
-        return {}
+        return []
     t14 = struct.unpack_from("<I", raw, 0x20)[0] == MI.HEADER_SIZE_T14
     if t14:
         try:
             m = MI.parse(raw)
             rows, pool_b = m.sec0, m.pool
         except Exception:
-            return {}
+            return []
     else:
         hdr = struct.unpack_from("<13I", raw, 0)
         count, o0, o5 = hdr[0], hdr[7], hdr[12]
         if not count or (o0 - 0x34) % count or o5 > len(raw):
-            return {}
+            return []
         rs = (o0 - 0x34) // count
         if rs < 12:
-            return {}
+            return []
         rows = [struct.unpack_from("<3i", raw, 0x34 + i * rs) for i in range(count)]
         pool_b = raw[o5:]
 
@@ -324,14 +335,11 @@ def musicinfo_genres(raw: bytes) -> dict:
         end = pool_b.find(b"\0", off)
         return pool_b[off:end].decode("ascii", "replace") if end > off else None
 
-    out = {}
+    out = []
     for r in rows:
         sid = cs(r[0])
-        if not sid:
-            continue
-        g = r[2]
-        if 0 <= g <= 6 or g == CPOP:    # 8 = C-POP (T11T/T12T, TK14 .0001)
-            out[sid] = g
+        if sid:
+            out.append((sid, r[2]))
     return out
 
 
@@ -540,6 +548,7 @@ def plan_merge(target, sources, log=lambda s: None,
     every archive involved, so a target song with a placeholder title still
     gets its real one from the game it was taken from.
     """
+    from taiko2x6.songs import song_builder
     target_ids = list(_ordered_ids(target))
     have = set(target_ids)
     items = []
@@ -565,12 +574,25 @@ def plan_merge(target, sources, log=lambda s: None,
                 seen_titles.setdefault(_title_key(sid, titles[sid]), sid)
 
         metas = {}
+        unlisted = {}
         for spec, src in opened:
             meta = read_song_meta(src)
             metas[spec.label] = meta
+            try:
+                rows = _musicinfo_rows(song_builder._read_named(src, "musicinfo.bin"))
+            except Exception:
+                rows = []
+            # song rows only: a folder header is not a song either (the old
+            # games' Namco header is "origin", TK14's is "selorg")
+            listed = {sid for sid, g in rows if 0 <= g <= 6 or g == CPOP}
             for sid in _ordered_ids(src):
                 if sid in have:
                     continue                    # already in target (14 wins)
+                if rows and sid not in listed:
+                    # a folder header row (T9..T11T's "origin") or an id song
+                    # select does not list at all: not a song
+                    unlisted.setdefault(sid, []).append(spec.label)
+                    continue
                 if sid in seen_new:
                     skipped.setdefault(sid, []).append(spec.label)
                     continue                    # an earlier source already added it
@@ -594,6 +616,8 @@ def plan_merge(target, sources, log=lambda s: None,
     finally:
         for _spec, src in opened:
             src.close()
+    if unlisted:
+        log(f"not in the source's song list, skipped: {', '.join(sorted(unlisted))}")
     if skipped_titles:
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
@@ -891,6 +915,8 @@ def set_musicinfo_genres(raw: bytes, genres: dict, order: dict = None) -> bytes:
 
 
 SONG_GENRES = (0, 1, 2, 3, 4, 5, 6, CPOP)
+# folder header genre -> the song genre its folder holds
+HEADER_GENRE = {7: 4, 9: 0, 10: 6, 11: 3, 12: 2, 13: 1, 14: 5, CPOP_HEADER: CPOP}
 
 
 def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
@@ -899,12 +925,15 @@ def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
     After a folder is picked, song select walks the rows in file order (only
     the optional re-sort uses the col13..16 orders). Stock TK14 stores its
     rows grouped by genre; rows appended by the merge land at the end in id
-    order, which scatters genres inside each folder. The layout becomes:
-    folder headers, then one block per genre in the order the genres first
-    appear (C-POP last if new). Inside a block rows follow `order_by_sid`
-    (sid -> sort key, e.g. (source, row) from _resolve_trusted); rows without
-    a key go last, and ties keep the existing order. Every row index stored in the file is remapped: col10 (ura row), col13
-    and col14 (own index), SEC1, SEC4 field 0, SEC6 and SEC7.
+    order, which scatters genres inside each folder. The layout becomes: each
+    folder header followed by its genre's block (with the exe's header masks
+    off, the header shows as a divider card in the song list), in the
+    headers' order; genres without a header follow in first-seen order.
+    Inside a block rows follow `order_by_sid` (sid -> sort key, e.g.
+    (source, row) from _resolve_trusted); rows without a key go last, and
+    ties keep the existing order. Every row index stored in the file is
+    remapped: col10 (ura row), col13 and col14 (own index), SEC1, SEC4
+    field 0, SEC6 and SEC7.
     """
     if getattr(m, "variant", "") != "t14" or not m.sec0:
         return
@@ -922,9 +951,28 @@ def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
         for i, r in enumerate(rows):
             sid = pool[r[0]:pool.find(bytes(1), r[0])].decode("ascii", "replace")
             key[i] = order_by_sid.get(sid, last) + (i,)
-    new = headers + [i for g in order
-                     for i in sorted((i for i, r in enumerate(rows) if r[2] == g),
-                                     key=lambda i: key.get(i, (i,)))]
+
+    def block(g):
+        return sorted((i for i, r in enumerate(rows) if r[2] == g),
+                      key=lambda i: key.get(i, (i,)))
+
+    # each folder header opens its own block (a divider card in the song
+    # list), blocks in the headers' order; headers of unknown kind go first
+    new, done = [], set()
+    lone = [h for h in headers if HEADER_GENRE.get(rows[h][2]) is None]
+    new += lone
+    for h in headers:
+        g = HEADER_GENRE.get(rows[h][2])
+        if g is None:
+            continue
+        new.append(h)
+        if g not in done:
+            new += block(g)
+            done.add(g)
+    for g in order:
+        if g not in done:
+            new += block(g)
+            done.add(g)
     if new == list(range(len(rows))):
         return
     old2new = {o: n for n, o in enumerate(new)}
