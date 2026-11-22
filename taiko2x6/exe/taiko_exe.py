@@ -855,6 +855,106 @@ def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
     return {'applied': applied, 'md5': md5}
 
 
+# --------------------------------------------------------------------------- #
+#  Boot / select patches as on-off switches (for the GUI checkboxes)
+# --------------------------------------------------------------------------- #
+def unpatch_skip_notice(dec: bytes, log=print) -> bytes:
+    buf = bytearray(dec)
+    o = _NOTICE_INIT - DELTA
+    if struct.unpack_from('<I', buf, o)[0] == _NOTICE_J:
+        struct.pack_into('<II', buf, o, *_NOTICE_GUARD)
+        log(f'{_NOTICE_INIT:08X}  NoticeInit restored (Notice screen shown)')
+    return bytes(buf)
+
+
+def unpatch_skip_copyright(dec: bytes, log=print) -> bytes:
+    buf = bytearray(dec)
+    for va, word in _OLD_COPYRIGHT:
+        if struct.unpack_from('<I', buf, va - DELTA)[0] == 0:
+            struct.pack_into('<I', buf, va - DELTA, word)
+            log(f'{va:08X}  restored (old credits-skip patch)')
+    o = _COPYRIGHT_SLOT - DELTA
+    if struct.unpack_from('<I', buf, o)[0] == _COPYRIGHT_NEW:
+        struct.pack_into('<I', buf, o, _COPYRIGHT_ORIG)
+        log(f'{_COPYRIGHT_SLOT:08X}  LicenseAdvertiseInit restored (credits shown)')
+    return bytes(buf)
+
+
+def unpatch_difficulty_timer(dec: bytes, log=print) -> bytes:
+    buf = bytearray(dec)
+    for va, imm in _DIFF_TIMER_SITES.items():
+        o = va - DELTA
+        if struct.unpack_from('<I', buf, o)[0] == _LI_V16:
+            struct.pack_into('<I', buf, o, 0x284F0000 | imm)     # slti $15,$2,imm
+            log(f'{va:08X}  li $15,1 -> slti $15,$2,{imm}   (difficulty timer on)')
+    return bytes(buf)
+
+
+def unpatch_freeze_select_timer(dec: bytes, log=print) -> bytes:
+    buf = bytearray(dec)
+    o = _SELECT_STATE - DELTA
+    if struct.unpack_from('<I', buf, o)[0] in (_FREEZE_VA, _FREEZE_VA_V1):
+        struct.pack_into('<I', buf, o, _SELECT_UPDATE)
+        log(f'{_SELECT_STATE:08X}  select update restored (countdown runs)')
+    return bytes(buf)
+
+
+# key -> (label, is_on, turn_on, turn_off)
+BOOT_PATCHES = {
+    'skip_notice': ('Skip the boot Notice screen',
+                    is_notice_skipped, patch_skip_notice, unpatch_skip_notice),
+    'skip_copyright': ('Skip the attract credits (協力) screen',
+                       is_copyright_skipped, patch_skip_copyright,
+                       unpatch_skip_copyright),
+    'freeze_select_timer': ('Freeze the song-select countdown',
+                            is_select_timer_frozen, patch_freeze_select_timer,
+                            unpatch_freeze_select_timer),
+    'disable_diff_timer': ('Disable the difficulty-select 30 s timeout',
+                           is_diff_timer_disabled, patch_difficulty_timer,
+                           unpatch_difficulty_timer),
+}
+
+
+def boot_patch_state(dec: bytes) -> dict:
+    return {k: bool(v[1](dec)) for k, v in BOOT_PATCHES.items()}
+
+
+def set_boot_patches(dec: bytes, wanted: dict, log=print) -> bytes:
+    """Turn each patch named in `wanted` on (True) or off (False)."""
+    out = dec
+    for key, on in wanted.items():
+        _label, is_on, turn_on, turn_off = BOOT_PATCHES[key]
+        if bool(is_on(out)) == bool(on):
+            continue
+        out = (turn_on if on else turn_off)(out, log)
+    return out
+
+
+def read_boot_state(img: str | Path, partition: str = PARTITION,
+                    t14load=None) -> dict:
+    return boot_patch_state(decrypt_taiko(read_from_hdd(img, partition), t14load))
+
+
+def set_hdd_boot(img: str | Path, wanted: dict, partition: str = PARTITION,
+                 t14load=None, log=print, progress=None) -> dict:
+    """Apply set_boot_patches to /taiko in place (round-trip checked first)."""
+    import hashlib
+    enc = read_from_hdd(img, partition)
+    dec = decrypt_taiko(enc, t14load, progress)
+    out = set_boot_patches(dec, wanted, log)
+    if out == dec:
+        log('nothing to change')
+        return {'changed': False, 'state': boot_patch_state(dec),
+                'md5': hashlib.md5(enc).hexdigest()}
+    new_enc = encrypt_taiko(out, t14load, progress)
+    if decrypt_taiko(new_enc, t14load) != out:
+        raise TaikoExeError('repack failed its round-trip self-check — not writing')
+    write_to_hdd(img, new_enc, partition)
+    md5 = hashlib.md5(new_enc).hexdigest()
+    log(f'written and read back OK — md5 {md5}')
+    return {'changed': True, 'state': boot_patch_state(out), 'md5': md5}
+
+
 def restore_hdd(img: str | Path, pristine: str | Path,
                 partition: str = PARTITION, log=print) -> None:
     """Put a pristine `taiko` back (keep a copy before your first patch!)."""
@@ -874,7 +974,7 @@ try:
     from PySide6.QtCore import Qt, QThread, Signal
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QSpinBox, QLabel,
-        QMessageBox, QPlainTextEdit, QLineEdit,
+        QMessageBox, QPlainTextEdit, QLineEdit, QCheckBox, QGroupBox,
     )
 except ImportError:                     # CLI-only environment
     pass
@@ -1268,6 +1368,214 @@ else:
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
                     QMessageBox.critical(self, 'Song-select timer', str(r[1]))
+                    self.status.setText('failed — image untouched')
+                    return
+                on_ok(r)
+
+            w.line.connect(self._say)
+            w.done.connect(done)
+            w.finished.connect(finished)
+            w.start()
+
+        def done(self, r):
+            for w in list(self._workers):
+                if w.isRunning():
+                    w.wait()
+            super().done(r)
+
+    class TaikoBootDialog(QDialog):
+        """Boot and select-screen switches in `taiko` (T14+), as checkboxes."""
+
+        TITLE = 'Boot & select patches (T14+)'
+        TIPS = {
+            'skip_notice': 'Boot straight past the 10 s NOTICE / copyright screen.',
+            'skip_copyright': 'The attract loop moves on instead of showing the '
+                              '協力 license list.',
+            'freeze_select_timer': 'The song-select countdown stays on screen but '
+                                   'never runs out.',
+            'disable_diff_timer': 'The difficulty (course) select never '
+                                  'auto-starts after 30 s.',
+        }
+
+        def __init__(self, parent=None, default_img=''):
+            super().__init__(parent)
+            self.setWindowTitle(self.TITLE)
+            self.resize(640, 440)
+            self._workers: list[_Worker] = []
+            self._state: dict | None = None
+            self._build_ui()
+            if default_img:
+                self.ed_img.setText(default_img)
+                self._check()
+
+        def _build_ui(self):
+            lay = QVBoxLayout(self)
+
+            row = QHBoxLayout()
+            b = QPushButton('HDD .img…'); b.clicked.connect(self._pick)
+            self.ed_img = QLineEdit(); self.ed_img.setReadOnly(True)
+            row.addWidget(b); row.addWidget(self.ed_img, 1)
+            lay.addLayout(row)
+
+            box = QGroupBox('Patches (ticked = on)')
+            bl = QVBoxLayout(box)
+            self.cbs: dict[str, QCheckBox] = {}
+            for key, (label, *_fns) in BOOT_PATCHES.items():
+                cb = QCheckBox(label)
+                cb.setToolTip(self.TIPS.get(key, ''))
+                cb.setEnabled(False)
+                cb.toggled.connect(self._dirty)
+                bl.addWidget(cb)
+                self.cbs[key] = cb
+            lay.addWidget(box)
+
+            row = QHBoxLayout()
+            self.b_check = QPushButton('Read current'); self.b_check.clicked.connect(self._check)
+            self.b_backup = QPushButton('Back up taiko…'); self.b_backup.clicked.connect(self._backup)
+            self.b_patch = QPushButton('Apply'); self.b_patch.clicked.connect(self._patch)
+            self.b_restore = QPushButton('Restore…'); self.b_restore.clicked.connect(self._restore)
+            self.b_patch.setEnabled(False)
+            for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
+                row.addWidget(w)
+            lay.addLayout(row)
+
+            self.log = QPlainTextEdit(); self.log.setReadOnly(True)
+            self.log.setStyleSheet('font-family: Consolas, monospace;')
+            lay.addWidget(self.log, 1)
+
+            self.status = QLabel(
+                'Pick an image; its current patches are read in. Tick what you '
+                'want and Apply. Unticking a patch restores the stock code. Close '
+                'PCSX2 first — it locks the .img.')
+            self.status.setWordWrap(True)
+            self.status.setStyleSheet('color:#999;')
+            lay.addWidget(self.status)
+
+        def _pick(self):
+            p = appconfig.pick_open(self, 'hddimg', 'Open PS2 HDD image',
+                                    'HDD image (*.img *.raw *.bin);;All files (*)')
+            if p:
+                self.ed_img.setText(p)
+                self._check()
+
+        def _img(self):
+            p = self.ed_img.text().strip()
+            if not p:
+                QMessageBox.information(self, self.TITLE, 'Pick an HDD image first.')
+                return None
+            return p
+
+        def _changes(self) -> dict:
+            if self._state is None:
+                return {}
+            return {k: cb.isChecked() for k, cb in self.cbs.items()
+                    if cb.isChecked() != self._state[k]}
+
+        def _dirty(self, *_):
+            ch = self._changes()
+            self.b_patch.setEnabled(bool(ch) and not self._workers)
+            if self._state is not None:
+                self.status.setText(f'{len(ch)} change(s) to apply' if ch
+                                    else 'matches the image')
+
+        def _show_state(self, state):
+            self._state = dict(state)
+            for k, cb in self.cbs.items():
+                cb.blockSignals(True)
+                cb.setChecked(state[k])
+                cb.setEnabled(True)
+                cb.blockSignals(False)
+            for k, on in state.items():
+                self._say(f'  {"[x]" if on else "[ ]"} {BOOT_PATCHES[k][0]}')
+            self._dirty()
+
+        def _check(self):
+            img = self._img()
+            if not img:
+                return
+
+            def task(log):
+                enc = read_from_hdd(img)
+                log(f'read /taiko: {len(enc):,} B')
+                return boot_patch_state(decrypt_taiko(enc, progress=lambda s, n: None))
+
+            self._run(task, self._show_state, 'Reading + decrypting…')
+
+        def _backup(self):
+            img = self._img()
+            if not img:
+                return
+            dest = appconfig.pick_save(self, 'taiko_backup', 'Back up taiko to', 'taiko.bin')
+            if not dest:
+                return
+            self._run(lambda log: (Path(dest).write_bytes(read_from_hdd(img)) or
+                                   Path(dest).stat().st_size),
+                      lambda n: self._say(f'backed up {n:,} B -> {dest}'),
+                      'Extracting /taiko…')
+
+        def _patch(self):
+            img = self._img()
+            ch = self._changes()
+            if not img or not ch:
+                return
+            lines = '\n'.join(f'  {"ON " if on else "OFF"}  {BOOT_PATCHES[k][0]}'
+                              for k, on in ch.items())
+            if QMessageBox.warning(
+                    self, self.TITLE,
+                    f'Change these in {Path(img).name}?\n\n{lines}\n\n'
+                    f'The image is modified in place; {UNDO_NOTE}. '
+                    f'Make sure PCSX2 is closed. Continue?',
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+            self._run(lambda log: set_hdd_boot(img, ch, log=log),
+                      self._done_patch, 'Applying…')
+
+        def _done_patch(self, r):
+            self._say('')
+            self._say(f'DONE — md5 {r["md5"]}')
+            self._show_state(r['state'])
+            self.status.setText('applied ✓')
+
+        def _restore(self):
+            img = self._img()
+            if not img:
+                return
+            src = appconfig.pick_open(self, 'taiko_backup', 'Restore taiko from (your backup)')
+            if not src:
+                return
+            self._run(lambda log: restore_hdd(img, src, log=log),
+                      lambda r: (self.status.setText('restored ✓'), self._check()),
+                      'Restoring /taiko…')
+
+        # -- worker plumbing (same pattern as TaikoExeDialog) --
+        def _say(self, s):
+            self.log.appendPlainText(s)
+
+        def _buttons(self, on):
+            for b in (self.b_check, self.b_backup, self.b_restore):
+                b.setEnabled(on)
+            for cb in self.cbs.values():
+                cb.setEnabled(on and self._state is not None)
+            self.b_patch.setEnabled(on and bool(self._changes()))
+
+        def _run(self, fn, on_ok, msg):
+            self._say(f'--- {msg}')
+            w = _Worker(fn)
+            self._workers.append(w)
+            self._buttons(False)
+
+            def finished():
+                w.deleteLater()
+                try:
+                    self._workers.remove(w)
+                except ValueError:
+                    pass
+                self._buttons(True)
+
+            def done(r):
+                if isinstance(r, tuple) and r and r[0] == 'ERROR':
+                    self._say(f'FAILED: {r[1]}')
+                    QMessageBox.critical(self, self.TITLE, str(r[1]))
                     self.status.setText('failed — image untouched')
                     return
                 on_ok(r)

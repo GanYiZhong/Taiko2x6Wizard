@@ -544,6 +544,15 @@ class MainWindow(QMainWindow):
             "holding the image first.")
         self.act_taikotimer.triggered.connect(self.open_taiko_timer)
 
+        self.act_taikoboot = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
+                                     "Boot & select patches (T14+)…", self)
+        self.act_taikoboot.setToolTip(
+            "Checkboxes for `taiko`: skip the boot Notice screen, skip the attract "
+            "credits (協力) screen, freeze the song-select countdown, disable the "
+            "difficulty-select timeout. Unticking restores the stock code. Close "
+            "any emulator holding the image first.")
+        self.act_taikoboot.triggered.connect(self.open_taiko_boot)
+
         self.act_usbkbd = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
                                   "USB keyboard patch (T14)…", self)
         self.act_usbkbd.setToolTip(
@@ -625,6 +634,7 @@ class MainWindow(QMainWindow):
         tools.addAction(self.act_ps2mc)
         tools.addAction(self.act_taikoexe)
         tools.addAction(self.act_taikotimer)
+        tools.addAction(self.act_taikoboot)
         tools.addAction(self.act_usbkbd)
         tools.addAction(self.act_imgslim)
         tools.addAction(self.act_apamerge)
@@ -1086,6 +1096,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Song-select timer", str(exc))
             return
         dlg = taiko_exe.TaikoTimerDialog(self, default_img=self._recent_hdd_img())
+        dlg.exec()
+
+    def open_taiko_boot(self):
+        from taiko2x6.exe import taiko_exe
+        try:
+            taiko_exe.find_t14load()
+        except taiko_exe.TaikoExeError as exc:
+            QMessageBox.warning(self, "Boot & select patches", str(exc))
+            return
+        dlg = taiko_exe.TaikoBootDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
 
     def open_usb_keyboard(self):
