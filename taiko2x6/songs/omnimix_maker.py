@@ -481,6 +481,8 @@ class MergePlan:
     genre_fixes: dict = field(default_factory=dict)
     # target rows whose stars are corrected in place: sid -> [e, n, h, o]
     star_fixes: dict = field(default_factory=dict)
+    # sid -> sort key inside its genre block (see _resolve_trusted)
+    order: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
@@ -585,6 +587,10 @@ def plan_merge(target, sources, log=lambda s: None,
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
         fixes = _vote_genres(target, opened, items, log, metas)
         star_fixes = _target_star_fixes(target, opened, metas, log)
+        gfix, sfix, order = _resolve_trusted(target, opened, items, metas, log)
+        for sid, g in gfix.items():
+            fixes.setdefault(sid, g)          # the C-POP refiling wins
+        star_fixes.update(sfix)
     finally:
         for _spec, src in opened:
             src.close()
@@ -592,7 +598,7 @@ def plan_merge(target, sources, log=lambda s: None,
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
                      skipped_titles=skipped_titles, genre_fixes=fixes,
-                     star_fixes=star_fixes)
+                     star_fixes=star_fixes, order=order)
 
 
 def _valid_stars(st) -> bool:
@@ -660,6 +666,96 @@ def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
     if fixes:
         log(f"genres: C-POP folder ({len(cpop)} songs), {len(fixes)} target rows refiled")
     return fixes
+
+
+def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
+    """Genre, stars and folder order of every song from its first trusted source.
+
+    The first source is the base release (stock TK14). Any other archive in
+    the base's own format (TK14 tuning layout), or one that holds every base
+    song, is a mod built on it (an earlier Omnimix, a hand-made pack): the
+    songs it adds on top of the base got their folder and stars from that
+    merge, which filed dozens under Namco original or copied one template's
+    difficulty, so those rows are not evidence. Older releases are.
+
+    For each song the first source in `opened` order (newest first) that
+    holds it as trusted data decides its genre and stars; songs no trusted
+    source knows keep what they have. Returns (target genre fixes, target
+    star fixes, rank) where rank[sid] = (source index, row in that source)
+    orders each genre block like the games it came from. C-POP songs are
+    left to the C-POP rule.
+    """
+    from taiko2x6.songs import song_builder
+
+    from taiko2x6.bineditors import bineditor_tuning as TU
+
+    def info(arc):
+        try:
+            ids = list(_ordered_ids(arc))
+            g = musicinfo_genres(song_builder._read_named(arc, "musicinfo.bin"))
+        except Exception:
+            return [], {}, False
+        try:
+            t14 = TU.is_t14_layout(song_builder._read_named(arc, "tuning.bin"))
+        except Exception:
+            t14 = False
+        return ids, g, t14
+
+    if not opened:
+        return {}, {}, {}
+    srcs = [(spec.label, *info(src)) for spec, src in opened]
+    base_ids = set(srcs[0][1])
+    base_t14 = srcs[0][3]
+    tgt_ids, tgt_g, tgt_t14 = info(target)
+
+    def derived(ids, t14):
+        return bool(base_ids) and ((base_t14 and t14) or base_ids <= set(ids))
+
+    trusted = []
+    for n, (label, ids, g, t14) in enumerate(srcs):
+        mod = n > 0 and derived(ids, t14)
+        keep = set(ids) & base_ids if mod else set(ids)
+        trusted.append((label, {sid: i for i, sid in enumerate(ids) if sid in keep}, g))
+        if mod:
+            log(f"trust: {label} is built on {srcs[0][0]}; its added songs are not used")
+    tgt_derived = derived(tgt_ids, tgt_t14)
+
+    def first(sid):
+        for n, (label, pos, g) in enumerate(trusted):
+            if sid in pos and sid in g:
+                return n, label, pos[sid], g[sid]
+        return None
+
+    rank, gfix, sfix = {}, {}, {}
+    for sid in tgt_ids:
+        hit = first(sid)
+        if not hit:
+            continue
+        n, label, p, genre = hit
+        rank[sid] = (n, p)
+        if not tgt_derived or sid in base_ids:
+            continue                      # an untouched release: keep its rows
+        if sid in tgt_g and tgt_g[sid] != genre and tgt_g[sid] != CPOP:
+            gfix[sid] = genre
+        st = metas.get(label, {}).get(sid, {}).get("stars")
+        if _valid_stars(st):
+            sfix[sid] = list(st)
+    regenre = 0
+    for it in items:
+        hit = first(it.sid)
+        if not hit:
+            continue
+        n, label, p, genre = hit
+        rank[it.sid] = (n, p)
+        if it.genre != CPOP and it.genre != genre:
+            it.genre = genre
+            regenre += 1
+        st = metas.get(label, {}).get(it.sid, {}).get("stars")
+        if _valid_stars(st):
+            it.stars = list(st)
+    log(f"trust: {len(gfix)} target songs refiled, {len(sfix)} target ratings and "
+        f"{regenre} added songs' folders taken from their first trusted source")
+    return gfix, sfix, rank
 
 
 def _ordered_ids(archive):
@@ -765,7 +861,8 @@ def precompute_db(target, plan, template_id=None) -> dict:
     # by genre and repoints the folder jump table (T14 only; no-op otherwise).
     from taiko2x6.songs.song_manager import MUSICINFO
     mi = res.get(MUSICINFO) or song_builder._read_named(target, "musicinfo.bin")
-    out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {})
+    out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {},
+                               getattr(plan, "order", None) or {})
     if out != mi:
         res[MUSICINFO] = out
     star_fixes = getattr(plan, "star_fixes", None) or {}
@@ -778,7 +875,7 @@ def precompute_db(target, plan, template_id=None) -> dict:
     return res
 
 
-def set_musicinfo_genres(raw: bytes, genres: dict) -> bytes:
+def set_musicinfo_genres(raw: bytes, genres: dict, order: dict = None) -> bytes:
     """Set column 2 (genre) of the musicinfo rows whose id is in `genres`."""
     from taiko2x6.bineditors import bineditor_musicinfo as MI
     m = MI.parse(raw)
@@ -788,7 +885,7 @@ def set_musicinfo_genres(raw: bytes, genres: dict) -> bytes:
         sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
         if sid in genres:
             rec[2] = int(genres[sid])
-    group_rows_by_genre(m)
+    group_rows_by_genre(m, order)
     fix_genre_jumps(m)
     return MI.serialize(m)
 
@@ -796,7 +893,7 @@ def set_musicinfo_genres(raw: bytes, genres: dict) -> bytes:
 SONG_GENRES = (0, 1, 2, 3, 4, 5, 6, CPOP)
 
 
-def group_rows_by_genre(m) -> None:
+def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
     """Reorder T14 musicinfo rows so every genre is one contiguous block.
 
     After a folder is picked, song select walks the rows in file order (only
@@ -804,8 +901,9 @@ def group_rows_by_genre(m) -> None:
     rows grouped by genre; rows appended by the merge land at the end in id
     order, which scatters genres inside each folder. The layout becomes:
     folder headers, then one block per genre in the order the genres first
-    appear (C-POP last if new), keeping the existing order inside a block.
-    Every row index stored in the file is remapped: col10 (ura row), col13
+    appear (C-POP last if new). Inside a block rows follow `order_by_sid`
+    (sid -> sort key, e.g. (source, row) from _resolve_trusted); rows without
+    a key go last, and ties keep the existing order. Every row index stored in the file is remapped: col10 (ura row), col13
     and col14 (own index), SEC1, SEC4 field 0, SEC6 and SEC7.
     """
     if getattr(m, "variant", "") != "t14" or not m.sec0:
@@ -817,7 +915,16 @@ def group_rows_by_genre(m) -> None:
         g = r[2]
         if g in SONG_GENRES and g not in order:
             order.append(g)
-    new = headers + [i for g in order for i, r in enumerate(rows) if r[2] == g]
+    key = {}
+    if order_by_sid:
+        pool = m.pool
+        last = (1 << 30,)
+        for i, r in enumerate(rows):
+            sid = pool[r[0]:pool.find(bytes(1), r[0])].decode("ascii", "replace")
+            key[i] = order_by_sid.get(sid, last) + (i,)
+    new = headers + [i for g in order
+                     for i in sorted((i for i, r in enumerate(rows) if r[2] == g),
+                                     key=lambda i: key.get(i, (i,)))]
     if new == list(range(len(rows))):
         return
     old2new = {o: n for n, o in enumerate(new)}

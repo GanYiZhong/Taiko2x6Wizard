@@ -114,3 +114,58 @@ def test_target_star_fixes_only_template_clones(monkeypatch):
                      "10jiku": {"stars": [1, 1, 1, 1]}}}      # template itself: kept
     fixes = O._target_star_fixes(object(), [(spec, None)], metas)
     assert fixes == {"a12c01": [2, 4, 6, 6]}                 # 'lonely': no source
+
+
+def test_resolve_trusted_ignores_songs_a_mod_added(monkeypatch):
+    from types import SimpleNamespace
+    # base: stock (a, b); mod = base + x filed under Namco (4); official T13 has x as J-POP
+    ids = {"base": ["a", "b"], "mod": ["a", "b", "x", "y"], "t13": ["x", "z"],
+           "tgt": ["a", "b", "x", "y"]}
+    gen = {"base": {"a": 4, "b": 1}, "mod": {"a": 4, "b": 1, "x": 4, "y": 4},
+           "t13": {"x": 0, "z": 6}, "tgt": {"a": 4, "b": 1, "x": 4, "y": 4}}
+    arcs = {k: SimpleNamespace(name=k) for k in ids}
+    monkeypatch.setattr(O, "_ordered_ids", lambda arc: ids[arc.name])
+    monkeypatch.setattr(O, "musicinfo_genres", lambda raw: gen[raw])
+    from taiko2x6.songs import song_builder
+    monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: arc.name)
+    monkeypatch.setattr(TU, "is_t14_layout", lambda raw: False)
+    opened = [(SimpleNamespace(label=k), arcs[k]) for k in ("base", "mod", "t13")]
+    metas = {"t13": {"x": {"stars": [2, 3, 4, 5]}, "z": {"stars": [1, 2, 3, 4]}},
+             "mod": {"x": {"stars": [4, 7, 8, 10]}}}
+    z = O.PlanItem(sid="z", source_label="t13", stars=[1, 1, 1, 1], genre=4)
+    gfix, sfix, rank = O._resolve_trusted(arcs["tgt"], opened, [z], metas)
+    assert gfix == {"x": 0} and sfix == {"x": [2, 3, 4, 5]}   # y: no trusted source
+    assert z.genre == 6 and z.stars == [1, 2, 3, 4]
+    assert rank["a"] == (0, 0) and rank["x"] == (2, 0) and "y" not in rank
+
+
+def test_group_rows_orders_blocks_by_source():
+    from types import SimpleNamespace
+    pool = b""
+    rows = []
+    for sid, g in [("h", 9), ("late", 0), ("stock", 0), ("t13", 0)]:
+        rows.append([len(pool), 0, g] + [0] * 7 + [-1, 0, 0, 0, 0, 0, 0] + [0] * 9)
+        pool += sid.encode() + bytes(1)
+    for i, r in enumerate(rows):
+        r[13] = r[14] = i
+    m = SimpleNamespace(variant="t14", sec0=rows, sec1=[], sec4=[], sec6=[], sec7=[], pool=pool)
+    O.group_rows_by_genre(m, {"stock": (0, 5), "t13": (2, 1)})
+    names = [pool[r[0]:pool.find(bytes(1), r[0])].decode() for r in m.sec0]
+    assert names == ["h", "stock", "t13", "late"]
+
+
+def test_resolve_trusted_same_format_mod_is_untrusted(monkeypatch):
+    """A TK14-format pack that dropped some stock songs is still a mod."""
+    from types import SimpleNamespace
+    ids = {"base": ["a", "b"], "pack": ["a", "x"], "t13": ["x"], "tgt": ["a", "b", "x"]}
+    gen = {"base": {"a": 4, "b": 1}, "pack": {"a": 4, "x": 4}, "t13": {"x": 3},
+           "tgt": {"a": 4, "b": 1, "x": 4}}
+    arcs = {k: SimpleNamespace(name=k) for k in ids}
+    monkeypatch.setattr(O, "_ordered_ids", lambda arc: ids[arc.name])
+    monkeypatch.setattr(O, "musicinfo_genres", lambda raw: gen[raw])
+    from taiko2x6.songs import song_builder
+    monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: arc.name)
+    monkeypatch.setattr(TU, "is_t14_layout", lambda raw: raw in ("base", "pack", "tgt"))
+    opened = [(SimpleNamespace(label=k), arcs[k]) for k in ("base", "pack", "t13")]
+    gfix, _sfix, rank = O._resolve_trusted(arcs["tgt"], opened, [], {})
+    assert gfix == {"x": 3} and rank["x"] == (2, 0)
