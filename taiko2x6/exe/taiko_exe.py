@@ -653,28 +653,65 @@ def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
     return bytes(buf)
 
 
-# Attract-loop license/credits screen ("協力" + McDonald's/Nintendo/Capcom/… roll)
-# is a separate state from the boot Notice. LicenseAdvertiseWait (sub_146CB8) waits
-# on `bnezl $v0, loc_146DB4` @0x146CDC — branch-likely: while the credits controller
-# is still displaying it returns (stays). NOP that branch so the Wait always falls
-# through to its own cleanup (sub_14C3F0) + transition on frame 1 -> credits dismissed
-# immediately, WITH proper teardown (no lingering image).
-_COPYRIGHT_BNEZL = 0x00146CDC
-_COPYRIGHT_ORIG  = 0x54400035   # bnezl $v0, loc_146DB4
+# Attract-loop license/credits screen ("協力" list, attract_kenri.swf) is a
+# separate state from the boot Notice. Four attract states (sub_1462E0,
+# sub_146488, sub_147378, sub_1476A8) move to it through the handler slot
+# qword_3A6AB8 (LicenseAdvertiseInit = sub_146C00). Point that slot at the
+# LoopAttract handler (sub_146E30) instead, so the attract loop never enters
+# the credits state. sub_1462E0 and sub_147378 already take that LoopAttract
+# branch in the stock game, so the next state runs from a known context.
+#
+# Older versions NOPed branches inside the credits state itself: 0x146CDC tore
+# the SWF controller down while it was still loading and crashed the EE, and
+# 0x14CA18 / 0x14CF3C did not shorten the screen. They are restored here.
+_COPYRIGHT_SLOT = 0x003A6AB8
+_COPYRIGHT_ORIG = 0x00146C00   # LicenseAdvertiseInit
+_COPYRIGHT_NEW  = 0x00146E30   # LoopAttract
+_OLD_COPYRIGHT  = ((0x00146CDC, 0x54400035),    # bnezl $v0, loc_146DB4
+                   (0x0014CA18, 0x104F001B),    # beq $v0, $t7, loc_14CA88
+                   (0x0014CF3C, 0x50400009))    # beqzl $v0, loc_14CF64
 
 
 def is_copyright_skipped(dec: bytes) -> bool:
-    return struct.unpack_from('<I', dec, _COPYRIGHT_BNEZL - DELTA)[0] == 0
+    return (struct.unpack_from('<I', dec, _COPYRIGHT_SLOT - DELTA)[0] == _COPYRIGHT_NEW
+            and all(struct.unpack_from('<I', dec, va - DELTA)[0] == w
+                    for va, w in _OLD_COPYRIGHT))
 
 
 def patch_skip_copyright(dec: bytes, log=print) -> bytes:
     """Skip the attract-loop license/credits (協力) screen."""
     buf = bytearray(dec)
-    o = _COPYRIGHT_BNEZL - DELTA
+    for va, word in _OLD_COPYRIGHT:
+        if struct.unpack_from('<I', buf, va - DELTA)[0] == 0:
+            struct.pack_into('<I', buf, va - DELTA, word)
+            log(f'{va:08X}  restored (old credits-skip patch)')
+    o = _COPYRIGHT_SLOT - DELTA
     cur = struct.unpack_from('<I', buf, o)[0]
-    if cur == 0:
-        log(f'{_COPYRIGHT_BNEZL:08X}  credits screen already skipped')
+    if cur == _COPYRIGHT_NEW:
+        log(f'{_COPYRIGHT_SLOT:08X}  credits screen already skipped')
         return bytes(buf)
+    if cur != _COPYRIGHT_ORIG:
+        raise TaikoExeError(
+            f'{_COPYRIGHT_SLOT:08X}: expected the LicenseAdvertiseInit handler '
+            f'({_COPYRIGHT_ORIG:#010x}, got {cur:#010x}) — refusing')
+    struct.pack_into('<I', buf, o, _COPYRIGHT_NEW)
+    log(f'{_COPYRIGHT_SLOT:08X}  LicenseAdvertiseInit -> LoopAttract   '
+        f'(License/credits screen skipped)')
+    return bytes(buf)
+    if cur != _COPYRIGHT_ORIG:
+        raise TaikoExeError(
+            f'{_COPYRIGHT_SITE:08X}: expected `beqzl $v0` ({_COPYRIGHT_ORIG:#010x}, '
+            f'got {cur:#010x}) — refusing')
+    struct.pack_into('<I', buf, o, 0)   # nop
+    log(f'{_COPYRIGHT_SITE:08X}  beqzl -> nop   (License/credits screen skipped)')
+    return bytes(buf)
+    if cur != _COPYRIGHT_ORIG:
+        raise TaikoExeError(
+            f'{_COPYRIGHT_BEQ:08X}: expected `beq $v0,$t7` ({_COPYRIGHT_ORIG:#010x}, '
+            f'got {cur:#010x}) — refusing')
+    struct.pack_into('<I', buf, o, 0)   # nop
+    log(f'{_COPYRIGHT_BEQ:08X}  beq -> nop   (License/credits screen skipped)')
+    return bytes(buf)
     if cur != _COPYRIGHT_ORIG:
         raise TaikoExeError(
             f'{_COPYRIGHT_BNEZL:08X}: expected `bnezl $v0` ({_COPYRIGHT_ORIG:#010x}, '
