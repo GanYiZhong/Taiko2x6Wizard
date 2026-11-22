@@ -179,11 +179,34 @@ def write_partition(img, partition, list_bytes, data_bytes, log=lambda s: None,
     skips the journal when a full image backup was just taken.
     """
     from taiko2x6.ps2 import ps2hdd
+    check_data_size(data_bytes, log)
     with ps2hdd.write_session(str(img), undo=undo, log=log) as h:
         log(f"writing DATA.000 {len(data_bytes):,} B → {partition}…")
         h.pfs_write(partition, "/DATA.000", data_bytes)
         log(f"writing list.bin {len(list_bytes):,} B → {partition}…")
         h.pfs_write(partition, "/list.bin", list_bytes)
+
+
+# The game opens PFS:DATA.000 in a retry loop (sub_104998) that never gives
+# up; the PS2 PFS driver refuses a file of 2 GiB or more, so the game hangs on
+# its LOADING screen forever. In PCSX2x6 2,131,183,680 B boots and
+# 2,145,599,552 B already hangs, so the real limit sits a little below 2 GiB;
+# the largest size seen booting is used as the cap.
+MAX_DATA_SIZE = 2_131_183_680
+
+
+class DataTooLargeError(ValueError):
+    pass
+
+
+def check_data_size(data_bytes, log=lambda s: None):
+    n = len(data_bytes)
+    if n > MAX_DATA_SIZE:
+        raise DataTooLargeError(
+            f"DATA.000 would be {n:,} B — above {MAX_DATA_SIZE:,} B the game "
+            f"cannot open DATA.000 (limit just under 2 GiB) and hangs on "
+            f"LOADING. Add fewer songs or re-encode the audio smaller.")
+    log(f"DATA.000 {n:,} B ({n / MAX_DATA_SIZE:.1%} of the {MAX_DATA_SIZE:,} B limit)")
 
 
 _ENOSPC_RE = re.compile(r"need up to (\d+) zones.*?only (\d+) free")
@@ -198,6 +221,7 @@ def write_partition_growing(img, partition, list_bytes, data_bytes,
     safe. Enlarges the .img file when it grows.
     """
     from taiko2x6.ps2 import ps2hdd
+    check_data_size(data_bytes, log)
     for attempt in (1, 2):
         # each attempt is its own undo-journaled session: an error in the
         # final attempt rolls that attempt back (a grow from attempt 1 stays;
@@ -244,6 +268,12 @@ def patch_song_limit(img, count, cap_safe=False, log=print) -> int:
     return target
 
 
+def taiko_exe_max() -> int:
+    """Highest song ceiling the `taiko` patch supports."""
+    from taiko2x6.exe import taiko_exe
+    return taiko_exe.MAX_SONGS_BIG
+
+
 def song_id_set(archive) -> set:
     from taiko2x6.songs import song_builder
     return set(song_builder.song_ids(archive))
@@ -252,6 +282,57 @@ def song_id_set(archive) -> set:
 # --------------------------------------------------------------------------- #
 #  reading per-song metadata (stars / genre) in the source's own DB variant
 # --------------------------------------------------------------------------- #
+def musicinfo_genres(raw: bytes) -> dict:
+    """{song id: genre} straight from musicinfo.bin's own rows.
+
+    Each SEC0 row starts with two pool offsets (id, title) and the genre in
+    column 2, so this needs no row-to-id pairing. Genre numbers are the same
+    from Taiko 7 to 14 (0 J-POP, 1 anime, 2 variety, 3 classic, 4 Namco
+    original, 5 children's songs, 6 game music); 7..15 mark the folder header
+    rows. Works for the T8 and T14 layouts and for T11T/T12T, whose 100/104-byte
+    rows sit behind a T8-style header.
+    """
+    import struct
+    from taiko2x6.bineditors import bineditor_musicinfo as MI
+    if len(raw) < 0x34:
+        return {}
+    t14 = struct.unpack_from("<I", raw, 0x20)[0] == MI.HEADER_SIZE_T14
+    if t14:
+        try:
+            m = MI.parse(raw)
+            rows, pool_b = m.sec0, m.pool
+        except Exception:
+            return {}
+    else:
+        hdr = struct.unpack_from("<13I", raw, 0)
+        count, o0, o5 = hdr[0], hdr[7], hdr[12]
+        if not count or (o0 - 0x34) % count or o5 > len(raw):
+            return {}
+        rs = (o0 - 0x34) // count
+        if rs < 12:
+            return {}
+        rows = [struct.unpack_from("<3i", raw, 0x34 + i * rs) for i in range(count)]
+        pool_b = raw[o5:]
+
+    def cs(off):
+        if not 0 <= off < len(pool_b):
+            return None
+        end = pool_b.find(b"\0", off)
+        return pool_b[off:end].decode("ascii", "replace") if end > off else None
+
+    out = {}
+    for r in rows:
+        sid = cs(r[0])
+        if not sid:
+            continue
+        g = r[2]
+        if g == 8:                      # C-POP (T11T/T12T): no such folder in T14
+            g = 0                       # -> J-POP
+        if 0 <= g <= 6:
+            out[sid] = g
+    return out
+
+
 def read_song_meta(archive) -> dict:
     """{sid: {"stars":[e,n,h,o], "genre":int}} read via SongManager.
 
@@ -268,6 +349,25 @@ def read_song_meta(archive) -> dict:
         tuning,
         song_builder._read_named(archive, "streaminfo.bin"))
     meta = {s.id: {"stars": list(s.stars), "genre": s.genre} for s in sm._songs}
+    # SongManager pairs musicinfo rows with ids by position, which drifts on
+    # other builds; take each song's genre from its own musicinfo row instead.
+    genres = musicinfo_genres(song_builder._read_named(archive, "musicinfo.bin"))
+    for sid, g in genres.items():
+        meta.setdefault(sid, {"stars": [1, 1, 1, 1], "genre": g})["genre"] = g
+    if TU.is_t14_layout(tuning):
+        # Taiko 14's normal/hard/oni records are one int longer than T8's, so
+        # SongManager's T8 reader picks up a score field instead of the stars.
+        for sid, st in TU.t14_stars(tuning).items():
+            if sid in meta:
+                meta[sid]["stars"] = st
+    elif not TU.is_t7_layout(tuning):
+        # T8..T13 / T11T / T12T: read by id (SongManager can't list T11T/T12T
+        # songs, and pairs rows by position elsewhere).
+        try:
+            for sid, st in TU.t8_stars(tuning).items():
+                meta.setdefault(sid, {"stars": st, "genre": 0})["stars"] = st
+        except ValueError:
+            pass
     if TU.is_t7_layout(tuning):
         # Taiko 7's 26-int tuning records: SongManager's T8 reader lands on
         # the wrong fields, so read the stars with the T7 layout instead.
@@ -373,41 +473,171 @@ class MergePlan:
     target_ids: list                # ids already in the target (kept as-is)
     items: list                     # PlanItem, in add order
     skipped_dupes: dict = field(default_factory=dict)   # sid -> [labels]
+    # sid -> (source label, title, id it duplicates) for same-title skips
+    skipped_titles: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
         return len(self.target_ids) + len(self.items)
 
 
-def plan_merge(target, sources, log=lambda s: None) -> MergePlan:
+# --------------------------------------------------------------------------- #
+#  song titles (for same-song-different-id dedup)
+# --------------------------------------------------------------------------- #
+PLACEHOLDER_SHARE = 5   # a title used by this many ids in one archive is a placeholder
+
+
+def _norm_title(title: str) -> str:
+    """Comparable form: NFKC, no whitespace, case-folded."""
+    import unicodedata
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", title)).casefold()
+
+
+def song_titles(archive) -> dict:
+    """{sid: title} from tuning.bin's string pool ("<id> music_<id> <title> ...").
+
+    Titles shared by PLACEHOLDER_SHARE or more ids are dropped: songs added by
+    older builders all carry their template's title, so it says nothing.
+    """
+    from collections import Counter
+    from taiko2x6.songs import song_builder
+    tu = song_builder._read_named(archive, "tuning.bin")
+    toks = tu.split(b"\0")
+    out = {}
+    for i in range(len(toks) - 1):
+        t = toks[i]
+        if t.startswith(b"music_") and len(t) > 6:
+            out.setdefault(t[6:].decode("latin-1"),
+                           toks[i + 1].decode("utf-8", "replace"))
+    count = Counter(_norm_title(v) for v in out.values())
+    return {k: v for k, v in out.items()
+            if v.strip() and count[_norm_title(v)] < PLACEHOLDER_SHARE}
+
+
+def _title_key(sid: str, title: str):
+    """Same-song key. `ex*` ids are the ura / long variants; some share the
+    base song's title exactly (e.g. Tank!), so they only match each other."""
+    return _norm_title(title), sid.startswith("ex")
+
+
+def plan_merge(target, sources, log=lambda s: None,
+               dedupe_titles: bool = True) -> MergePlan:
     """Decide which songs to add. 14 is the base: keep every target song, and
     from the sources add only ids the target does not already have. If the same
     new id appears in several sources, the FIRST source in `sources` order wins
     (put the newest/most-complete version first).
+
+    dedupe_titles: also skip a song whose title is already present under a
+    different id (the same song renamed between versions). Titles come from
+    every archive involved, so a target song with a placeholder title still
+    gets its real one from the game it was taken from.
     """
     target_ids = list(_ordered_ids(target))
     have = set(target_ids)
     items = []
     skipped = {}
+    skipped_titles = {}
     seen_new = set()
-    for spec in sources:
-        src = open_pair(spec.list_path, spec.data_path, spec.fmt)
-        try:
+
+    opened = []
+    titles = {}
+    try:
+        for spec in sources:
+            src = open_pair(spec.list_path, spec.data_path, spec.fmt)
+            opened.append((spec, src))
+            if dedupe_titles:
+                for k, v in song_titles(src).items():
+                    titles.setdefault(k, v)
+        if dedupe_titles:
+            for k, v in song_titles(target).items():
+                titles.setdefault(k, v)
+        seen_titles = {}
+        for sid in target_ids:
+            if sid in titles:
+                seen_titles.setdefault(_title_key(sid, titles[sid]), sid)
+
+        metas = {}
+        for spec, src in opened:
             meta = read_song_meta(src)
+            metas[spec.label] = meta
             for sid in _ordered_ids(src):
                 if sid in have:
                     continue                    # already in target (14 wins)
                 if sid in seen_new:
                     skipped.setdefault(sid, []).append(spec.label)
                     continue                    # an earlier source already added it
+                if dedupe_titles and sid in titles:
+                    key = _title_key(sid, titles[sid])
+                    if key in seen_titles:
+                        skipped_titles[sid] = (spec.label, titles[sid], seen_titles[key])
+                        continue
+                    seen_titles[key] = sid
                 m = meta.get(sid, {"stars": [1, 1, 1, 1], "genre": 0})
                 items.append(PlanItem(sid=sid, source_label=spec.label,
                                       stars=m["stars"], genre=m["genre"]))
                 seen_new.add(sid)
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
-        finally:
+        _vote_genres(target, opened, items, log, metas)
+    finally:
+        for _spec, src in opened:
             src.close()
-    return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped)
+    if skipped_titles:
+        log(f"same title under another id, skipped: {len(skipped_titles)}")
+    return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
+                     skipped_titles=skipped_titles)
+
+
+def _valid_stars(st) -> bool:
+    return (isinstance(st, list) and len(st) == 4
+            and all(1 <= v <= 10 for v in st[:3]) and (st[3] == -1 or 1 <= st[3] <= 10))
+
+
+def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
+    """Pick each added song's genre and stars from every source that has it.
+
+    Sources are weighted by how often their genre agrees with the target's for
+    the songs they share, so a hand-made Omnimix that filed songs under the
+    wrong folder (or copied one template's difficulty onto every song) is
+    outvoted by the official releases. Genre: weighted vote. Stars: taken from
+    the most trusted source with a valid rating.
+    """
+    metas = metas or {}
+    from taiko2x6.songs import song_builder
+    def genres(arc):
+        try:
+            return musicinfo_genres(song_builder._read_named(arc, "musicinfo.bin"))
+        except Exception:
+            return {}
+    tgt = genres(target)
+    per = []
+    for spec, src in opened:
+        g = genres(src)
+        shared = [k for k in g if k in tgt]
+        agree = sum(g[k] == tgt[k] for k in shared)
+        weight = (agree + 1) / (len(shared) + 2)          # unknown source ~ 0.5
+        per.append((spec.label, g, weight))
+        log(f"genres {spec.label}: {agree}/{len(shared)} agree with the target")
+    changed = restar = 0
+    for it in items:
+        best_st, best_w = None, -1.0
+        for label, _g, w in per:
+            st = metas.get(label, {}).get(it.sid, {}).get("stars")
+            if _valid_stars(st) and w > best_w:
+                best_st, best_w = list(st), w
+        if best_st and best_st != it.stars:
+            it.stars = best_st
+            restar += 1
+        votes = {}
+        for _label, g, w in per:
+            if it.sid in g:
+                votes[g[it.sid]] = votes.get(g[it.sid], 0.0) + w
+        if votes:
+            best = max(votes, key=lambda k: votes[k])
+            if best != it.genre:
+                changed += 1
+            it.genre = best
+    log(f"genres: {changed} added songs refiled by the cross-version vote, "
+        f"{restar} took their stars from a more trusted source")
 
 
 def _ordered_ids(archive):
@@ -466,12 +696,86 @@ def precompute_db(target, plan, template_id=None) -> dict:
         stars = [max(1, min(10, int(v))) for v in (it.stars or [1, 1, 1, 1])[:4]]
         while len(stars) < 4:
             stars.append(1)
-        song_builder._db_add_song(sm, it.sid, k_template, stars)
+        # Without the source genre every added song copies the template's
+        # folder, piling hundreds into one genre, which freezes song select.
+        song_builder._db_add_song(sm, it.sid, k_template, stars, genre=it.genre)
     return sm._build_result()
 
 
+def _resample_job(args):
+    raw, rate, cache, mono = args
+    import hashlib, os
+    from taiko2x6.audio import vagtool
+    path = None
+    if cache:
+        path = os.path.join(cache, "%s_%d%s.vag" % (hashlib.sha1(raw).hexdigest(),
+                                                    rate or 0, "m" if mono else ""))
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return f.read()
+    out = vagtool.resample_vag(raw, rate, mono=mono)
+    if path:
+        with open(path + ".tmp", "wb") as f:
+            f.write(out)
+        os.replace(path + ".tmp", path)
+    return out
+
+
+def _map_parallel(func, items, workers=None, log=lambda s: None):
+    """func over items in worker processes (ordered); serial if that fails
+    (e.g. a frozen build without multiprocessing support)."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+    n = len(items)
+    try:
+        out = []
+        with ProcessPoolExecutor(max_workers=workers or os.cpu_count() or 2) as ex:
+            for i, r in enumerate(ex.map(func, items, chunksize=1), 1):
+                out.append(r)
+                if i % 25 == 0 or i == n:
+                    log(f"  audio {i}/{n}")
+        return out
+    except Exception as exc:                     # pragma: no cover - fallback
+        log(f"  parallel audio failed ({exc}); continuing in one process")
+        return [func(x) for x in items]
+
+
+def _is_song_group(name: str) -> bool:
+    return (name.startswith(("fumen.", "sound.stream.music_"))
+            or any(name.startswith(f"music_texture.{t}_") for t in _TEX_TYPES))
+
+
+def _retail_layout(target, extra_files, keep_songs=True):
+    """pin_sectors + ghosts that keep a compact rebuild as close to retail as
+    an append build: every unchanged non-song group stays at its original
+    sector, and every edited non-song group (DB bins, shared select textures)
+    leaves its original bytes at the original sector - T14 reads some data by
+    absolute sector outside LIST.BIN (see archive_builder). Only song groups
+    (charts, audio, per-song textures), which are always table-driven, move.
+    """
+    edited = {gi for gi, _fi in target.replacements} | {
+        g["index"] for g in target.layout.groups if g["name"] in extra_files}
+    pins, ghosts = {}, []
+    with open(target.data_path, "rb") as f:
+        for g in target.layout.groups:
+            if _is_song_group(g["name"]):
+                # keep_songs: an existing song's charts/textures stay put;
+                # only the (re-encoded) audio streams are re-packed.
+                if keep_songs and not g["name"].startswith("sound.stream.music_"):
+                    pins[g["name"]] = g["sector"]
+                continue
+            if g["index"] in edited:
+                f.seek(g["sector"] * 2048)
+                ghosts.append((g["sector"] * 2048, f.read(g["packed_size"])))
+            else:
+                pins[g["name"]] = g["sector"]
+    return pins, ghosts
+
+
 def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
-             audio_override=None) -> dict:
+             audio_override=None, audio_rate=None, workers=None,
+             audio_cache=None, keep_layout=True, repack=True,
+             audio_mono=False, audio_added_only=False) -> dict:
     """WORKER-THREAD step: harvest every added song and emit the merged archive.
 
     Copies each planned song's chart/texture/audio groups (and its shared-group
@@ -484,6 +788,11 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
     is the only way a smaller stream actually shrinks the output: build_archive
     appends new groups and never shrinks, so post-rebuild replacement of an
     already-appended stream would only leave padding.
+
+    audio_rate: re-encode EVERY song stream (target and added) at this rate
+    (e.g. 32000) and repack the archive densely. The game takes the rate from
+    each stream's header, so songs keep their speed and pitch; this is what
+    lets more songs fit under the 2 GiB DATA.000 limit (MAX_DATA_SIZE).
     """
     from taiko2x6.songs import song_builder
     from taiko2x6.archive import archive_builder
@@ -526,14 +835,53 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
         finally:
             src.close()
 
+    compact = False
+    if audio_rate or audio_mono:
+        jobs = []
+        for grp in target.layout.groups:
+            if grp["name"].startswith("sound.stream.music_") and not audio_added_only:
+                for e in target.layout.files_for_group(grp):
+                    jobs.append(("t", (grp["index"], e["index"]), target.read_file(grp, e)))
+        for gi, gg in enumerate(new_groups):
+            if gg["name"].startswith("sound.stream.music_"):
+                for fi, (_fn, data) in enumerate(gg["files"]):
+                    jobs.append(("n", (gi, fi), data))
+        before = sum(len(j[2]) for j in jobs)
+        log(f"re-encoding {len(jobs)} song streams "
+            f"({'mono' if audio_mono else 'stereo'}, {audio_rate or 'original'} Hz) "
+            f"({before / 2**30:.2f} GiB)…")
+        if audio_cache:
+            import os
+            os.makedirs(audio_cache, exist_ok=True)
+        outs = _map_parallel(_resample_job,
+                             [(j[2], audio_rate, audio_cache, audio_mono) for j in jobs],
+                             workers, log)
+        for (kind, ref, raw), new in zip(jobs, outs):
+            if new is raw or new == raw:
+                continue
+            if kind == "t":
+                target.stage_replace(ref[0], ref[1], new)
+            else:
+                gi, fi = ref
+                fn = new_groups[gi]["files"][fi][0]
+                new_groups[gi]["files"][fi] = (fn, new)
+        after = sum(len(o) for o in outs)
+        log(f"song audio {before / 2**30:.2f} -> {after / 2**30:.2f} GiB")
+        result["audio_saved"] = before - after
+        compact = repack
+
     for fn, data in precomputed_db.items():
         ent = song_builder.find_named_entry(target, fn)
         if ent:
             target.stage_replace(ent[0]["index"], ent[1]["index"], data)
     log(f"rebuilding merged DATA.000 (+{len(new_groups)} groups, "
-        f"{sum(len(v) for v in extra_files.values())} select files)…")
+        f"{sum(len(v) for v in extra_files.values())} select files"
+        f"{', repacked' if compact else ''})…")
+    pins, ghosts = ((_retail_layout(target, extra_files, keep_layout)
+                     if compact else (None, None)))
     list_bytes, data_bytes = archive_builder.build_archive(
-        target, new_groups, extra_files)
+        target, new_groups, extra_files, compact=compact,
+        pin_sectors=pins, ghosts=ghosts)
     result["list"] = list_bytes
     result["data"] = data_bytes
     result["total"] = len(tgt_ids) + result["added"]

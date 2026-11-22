@@ -89,6 +89,22 @@ def test_t7_tuning_rejects_bad_size():
         TU.t7_stars(bad)
 
 
+def test_title_keys():
+    assert O._title_key("abc", "Don't　Cut") == O._title_key("xyz", "don't cut")
+    # ura/long variants never match the base song, even with the same title
+    assert O._title_key("cbebop", "Tank!") != O._title_key("exbbop", "Tank!")
+    assert O._title_key("exa", "Tank!") == O._title_key("exb", "TANK!")
+
+
+def test_song_titles_drop_placeholders(tmp_path, monkeypatch):
+    pool = b"".join(b"s%d\0music_s%d\0%s\0" % (i, i, b"PH" if i < 6 else b"Real%d" % i)
+                    for i in range(8))
+    from taiko2x6.songs import song_builder
+    monkeypatch.setattr(song_builder, "_read_named", lambda a, n: b"\xff\xff" + pool)
+    t = O.song_titles(object())
+    assert t == {"s6": "Real6", "s7": "Real7"}
+
+
 def test_harvest_converts_t7_charts(tmp_path):
     chart = _t7_chart()
     groups = [("fumen.abc1p_m", [("sht", chart)]),
@@ -106,3 +122,12 @@ def test_harvest_converts_t7_charts(tmp_path):
     audio = [gg for gg in g if gg["name"].startswith("sound.")][0]
     assert "converted" not in audio and audio["files"][0][1] == b"V" * 64
     assert O.song_asset_summary(g, x)["t7_charts_converted"] == 1
+
+
+def test_data_size_limit():
+    O.check_data_size(b"x" * 10)
+    class Big:
+        def __len__(self):
+            return 2**31
+    with pytest.raises(O.DataTooLargeError):
+        O.check_data_size(Big())

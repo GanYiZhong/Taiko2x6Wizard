@@ -256,7 +256,12 @@ def build_archive(archive, new_group_specs=None, extra_files=None,
                 if pin_sectors is not None and g["_name"] in pin_sectors:
                     return pin_sectors[g["_name"]]
                 if g["_name"] in PINNED_GROUPS and g.get("orig_sector") is not None:
-                    return g["orig_sector"]
+                    # Only if it still fits: an edited pinned group that grew
+                    # would overwrite the group after it. It moves instead
+                    # (table-driven reads find it), and the caller leaves the
+                    # original bytes as a ghost for the absolute-sector reads.
+                    if g["enc"] is None or g["length"] <= g["orig_cap"]:
+                        return g["orig_sector"]
                 return None
             pinned_extents = [(off, len(data)) for off, data in (ghosts or [])]
             for g in assembled:
@@ -268,23 +273,31 @@ def build_archive(archive, new_group_specs=None, extra_files=None,
             pinned_extents.sort()
             start = min((g["src_off"] for g in assembled
                          if g["src_off"] is not None), default=0)
-            cursor = start
-            for g in sorted(assembled, key=lambda x: x["_name"].encode("latin-1")):
-                if _pin_sector(g) is not None:
-                    continue
+            # Free gaps between the pinned extents (and ghosts), then place the
+            # movable groups largest-first into the lowest gap that fits
+            # (first-fit decreasing), so space freed by shrunken groups between
+            # pinned ones is reused. Anything that fits nowhere goes at the end.
+            gaps = []
+            cursor = core.align(start, SECTOR)
+            for po, pl in pinned_extents:
+                if po > cursor:
+                    gaps.append([cursor, po])
+                cursor = max(cursor, core.align(po + pl, SECTOR))
+            tail = cursor
+            movable = [g for g in assembled if _pin_sector(g) is None]
+            movable.sort(key=lambda x: (-x["length"], x["_name"].encode("latin-1")))
+            for g in movable:
                 length = g["length"]
-                pos = core.align(cursor, SECTOR)
-                # skip over any pinned/ghost extent we'd overlap
-                moved = True
-                while moved:
-                    moved = False
-                    for po, pl in pinned_extents:
-                        if pos < po + pl and po < pos + length:
-                            pos = core.align(po + pl, SECTOR)
-                            moved = True
+                for gap in gaps:
+                    pos = core.align(gap[0], SECTOR)
+                    if pos + length <= gap[1]:
+                        gap[0] = core.align(pos + length, SECTOR)
+                        break
+                else:
+                    pos = tail
+                    tail = core.align(pos + length, SECTOR)
                 g["out_off"] = pos
                 g["sector"] = pos // SECTOR
-                cursor = pos + length
             total = max(g["out_off"] + g["length"] for g in assembled)
             for off, data in (ghosts or []):
                 total = max(total, off + len(data))
@@ -345,14 +358,16 @@ def build_archive(archive, new_group_specs=None, extra_files=None,
             # Unchanged groups' encoded blocks are copied verbatim from source;
             # inter-group padding becomes zeros (reads are (sector,length)
             # bounded via LIST.BIN, padding content is never read).
+            # Ghosts first: a group that still fits in place lands on top of
+            # its own ghost, so real group data always wins.
+            for off, data in (ghosts or []):     # untabled absolute-read copies
+                dst[off:off + len(data)] = data
             for g in assembled:
                 o, length = g["out_off"], g["length"]
                 if g["enc"] is not None:
                     dst[o:o + length] = g["enc"]
                 else:
                     dst[o:o + length] = src_mv[g["src_off"]:g["src_off"] + length]
-            for off, data in (ghosts or []):     # untabled absolute-read copies
-                dst[off:off + len(data)] = data
         else:
             # Copy the entire original data region in one shot: this keeps every
             # unchanged group byte-identical at its original sector (including any

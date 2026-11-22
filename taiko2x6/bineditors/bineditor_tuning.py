@@ -190,6 +190,80 @@ def t7_stars(data: bytes) -> list:
     return out
 
 
+# Taiko 14 (and Omnimix images built on it): u32 song count, then one fixed
+# 2028-byte record per song, sorted by id, then the string pool. Each chart's
+# star rating follows its chart-file offset: columns 4 / 32 / 60 / 88 for
+# easy / normal / hard / oni (column 0 = id offset into the pool).
+T14_REC = 2028
+T14_STAR_COLS = (4, 32, 60, 88)
+
+
+def is_t14_layout(data: bytes) -> bool:
+    """True for a Taiko 14 tuning.bin (count + 2028-byte records + pool)."""
+    if len(data) < 4 + T14_REC:
+        return False
+    cnt = struct.unpack_from("<I", data, 0)[0]
+    ps = 4 + cnt * T14_REC
+    if not 0 < cnt < 10000 or ps >= len(data):
+        return False
+    e = data.find(b"\0", ps)
+    return e > ps and data[ps:e].isascii() and data[e + 1:e + 7] == b"music_"
+
+
+def t14_stars(data: bytes) -> dict:
+    """{song id: [easy, normal, hard, oni]} for a Taiko 14 tuning.bin."""
+    if not is_t14_layout(data):
+        raise ValueError("not a Taiko 14 tuning.bin")
+    cnt = struct.unpack_from("<I", data, 0)[0]
+    ps = 4 + cnt * T14_REC
+    out = {}
+    for i in range(cnt):
+        rec = 4 + i * T14_REC
+        off = ps + struct.unpack_from("<i", data, rec)[0]
+        sid = data[off:data.find(b"\0", off)].decode("ascii", "replace")
+        out[sid] = [struct.unpack_from("<i", data, rec + 4 * c)[0] for c in T14_STAR_COLS]
+    return out
+
+
+T8_SONG = 972 + 984                  # 1P + 2P block (T8..T13, T11T/T12T)
+
+
+def t8_stars(data: bytes) -> dict:
+    """{song id: [easy, normal, hard, oni]} for a T8-layout tuning.bin.
+
+    Song k's 1P block starts at k * 1956; record 0 holds the song's pool
+    offsets (col 1 = id, col 2 = music_<id>) and every record has its star at
+    int index 5. Pool offsets are relative to a base just before the pool
+    (song 0's bare id sits there), recovered from song 0's music_ offset.
+    """
+    if len(data) < T8_SONG:
+        raise ValueError("tuning.bin too small")
+    pool = _find_pool_offset(data)
+    count = struct.unpack_from("<i", data, 0)[0]
+    if count <= 0 or not 0 <= pool - count * T8_SONG < RECORD_SIZE:
+        raise ValueError("not a T8-layout tuning.bin")
+    base = pool - struct.unpack_from("<i", data, 8)[0]
+    out = {}
+    for k in range(count):
+        blk = k * T8_SONG
+        off = base + struct.unpack_from("<i", data, blk + 4)[0]
+        if not 0 <= off < len(data):
+            continue
+        sid = data[off:data.find(bytes(1), off)].decode("ascii", "replace")
+        out[sid] = [struct.unpack_from("<i", data, blk + r * RECORD_SIZE + 4 * STAR_INDEX_T8)[0]
+                    for r in range(RECORDS_PER_BLOCK)]
+    return out
+
+
+STAR_INDEX_T8 = 5
+
+
+def set_t14_stars(rec: bytearray, stars) -> None:
+    """Write [easy, normal, hard, oni] into one 2028-byte T14 record."""
+    for c, v in zip(T14_STAR_COLS, stars):
+        struct.pack_into("<i", rec, 4 * c, int(v))
+
+
 def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_INDEX):
     """Tile [0, pool_offset) into song-player blocks.
 

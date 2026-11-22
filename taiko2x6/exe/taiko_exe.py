@@ -553,6 +553,106 @@ def patch_difficulty_timer(dec: bytes, log=print) -> bytes:
     return bytes(buf)
 
 
+# Song-select countdown freeze. The visible 120 s countdown is not a variable:
+# it is the `counter` clip in the select screen's Flash scene, and time runs out
+# when that clip reaches its last frame (sub_176200 reads it back as
+# totalFrames - currentFrame - 1). The select screen's per-frame update
+# (sub_167A98, this+0x2204 -> holder -> scene, scene+0x14C = Flash root) is
+# entered through a state pointer at 0x3A7490; point that at a
+# small wrapper that looks the clip up (sub_1914C0 / sub_191398, as sub_176200
+# does), stops it (sub_193D68) and pins its frame at (total - 120) every frame,
+# then runs the original update. A select script advances the clip one frame
+# per second with gotoAndStop, so the stop alone does not hold it.
+# The wrapper lives in the last 392 bytes of the unused libc routine whose first
+# 512 bytes song_tables uses.
+_SELECT_STATE = 0x003A7490          # state entry: (fn, this-adjust)
+_SELECT_UPDATE = 0x00167A98
+_FREEZE_VA = song_tables.CAVE_VA + song_tables.CAVE_LEN     # 0x214E30
+_FREEZE_LEN = 392
+_FREEZE_VA_V1 = 0x00214F30          # an earlier build put the wrapper here
+_FREEZE_STOCK_SHA1 = 'fd0f21f790e6048555c963e4549d00066be29900'
+_F_CHILD_ID = 0x001914C0            # (root, 3, name) -> child id
+_F_CHILD = 0x00191398               # (root, id) -> clip
+_F_STOP = 0x00193D68                # clip.stop()
+_COUNTER_STR = 0x003A78F0           # "counter"
+_FREEZE_SECONDS = 120               # remaining time = total frames - frame
+
+
+def _freeze_code() -> bytes:
+    a = song_tables._Asm(_FREEZE_VA)
+    a.addiu('sp', 'sp', -32)
+    a.sd('ra', 0, 'sp'); a.sd('a0', 8, 'sp'); a.sd('a1', 16, 'sp'); a.sd('s0', 24, 'sp')
+    a.lw('t0', 0x2204, 'a0')        # select scene holder
+    a.beqz('t0', 'done'); a.nop()
+    a.lw('t0', 0, 't0')             # -> scene (as sub_173F48 does)
+    a.beqz('t0', 'done'); a.nop()
+    a.lw('s0', 0x14C, 't0')         # its Flash root
+    a.beqz('s0', 'done'); a.nop()
+    a.move('a0', 's0')
+    a.addiu('a1', 'zero', 3)
+    a.lui('a2', _COUNTER_STR >> 16)
+    a.jal(_F_CHILD_ID)
+    a.addiu('a2', 'a2', _COUNTER_STR & 0xFFFF)
+    a.move('a0', 's0')
+    a.jal(_F_CHILD)
+    a.move('a1', 'v0')
+    a.beqz('v0', 'done'); a.nop()
+    a.move('s0', 'v0')              # the counter clip
+    a.jal(_F_STOP)
+    a.move('a0', 'v0')
+    # A script steps the clip once a second (gotoAndStop), so stopping it is
+    # not enough: pin its frame at total - 120, i.e. 120 s left, whenever it
+    # has moved past that. Time-up needs the last frame, which it never reaches.
+    a.lw('t2', 0x2C, 's0')
+    a.lw('t3', 0x28, 's0')
+    a.emit(song_tables._r('t2', 't3', 't2', 0x23))          # subu t2, t2, t3
+    a.emit(song_tables._r('zero', 't2', 't2', 0x03, 3))     # sra  t2, t2, 3   (frames)
+    a.addiu('t2', 't2', -_FREEZE_SECONDS)
+    a.lw('t3', 0xD8, 's0')
+    a.emit(song_tables._r('t2', 't3', 't4', 0x2A))          # slt  t4, t2, t3
+    a.beqz('t4', 'done'); a.nop()
+    a.sw('t2', 0xD8, 's0')
+    a.sw('t2', 0xDC, 's0')
+    a.label('done')
+    a.ld('ra', 0, 'sp'); a.ld('a0', 8, 'sp'); a.ld('a1', 16, 'sp'); a.ld('s0', 24, 'sp')
+    a.j(_SELECT_UPDATE)
+    a.addiu('sp', 'sp', 32)
+    code = a.finish()
+    assert len(code) <= _FREEZE_LEN
+    return code
+
+
+def is_select_timer_frozen(dec: bytes) -> bool:
+    return struct.unpack_from('<I', dec, _SELECT_STATE - DELTA)[0] == _FREEZE_VA
+
+
+def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
+    """Stop the song-select countdown (it stays on screen but never runs out)."""
+    import hashlib
+    buf = bytearray(dec)
+    st = _SELECT_STATE - DELTA
+    cur = struct.unpack_from('<I', buf, st)[0]
+    code = _freeze_code()
+    cave = bytes(buf[_FREEZE_VA - DELTA:_FREEZE_VA - DELTA + _FREEZE_LEN])
+    if cur == _FREEZE_VA and cave.startswith(code):
+        log(f'{_SELECT_STATE:08X}  select timer already frozen')
+        return bytes(buf)
+    if cur not in (_SELECT_UPDATE, _FREEZE_VA, _FREEZE_VA_V1):
+        raise TaikoExeError(
+            f'{_SELECT_STATE:08X}: expected the select update {_SELECT_UPDATE:#x} '
+            f'(got {cur:#x}) — refusing')
+    if (cur not in (_FREEZE_VA, _FREEZE_VA_V1) and hashlib.sha1(cave).hexdigest() != _FREEZE_STOCK_SHA1
+            and cave != bytes(_FREEZE_LEN)):
+        raise TaikoExeError(f'{_FREEZE_VA:08X}: cave area is not free — refusing')
+    if bytes(buf[_COUNTER_STR - DELTA:_COUNTER_STR - DELTA + 8]) != b'counter\0':
+        raise TaikoExeError(f'{_COUNTER_STR:08X}: "counter" string not found — refusing')
+    buf[_FREEZE_VA - DELTA:_FREEZE_VA - DELTA + _FREEZE_LEN] = code + bytes(_FREEZE_LEN - len(code))
+    struct.pack_into('<I', buf, st, _FREEZE_VA)
+    log(f'{_SELECT_STATE:08X}  select update -> {_FREEZE_VA:08X}  '
+        f'(song-select countdown frozen)')
+    return bytes(buf)
+
+
 # Attract-loop license/credits screen ("協力" + McDonald's/Nintendo/Capcom/… roll)
 # is a separate state from the boot Notice. LicenseAdvertiseWait (sub_146CB8) waits
 # on `bnezl $v0, loc_146DB4` @0x146CDC — branch-likely: while the credits controller
@@ -684,6 +784,7 @@ def patch_hdd_timer(img: str | Path, seconds: int, partition: str = PARTITION,
 
 def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
                    disable_diff_timer: bool = True, skip_copyright: bool = True,
+                   freeze_select_timer: bool = False,
                    partition: str = PARTITION,
                    t14load=None, log=print, progress=None) -> dict:
     """Apply boot-flow patches to /taiko in place: skip the boot Notice screen,
@@ -703,6 +804,8 @@ def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
         out = patch_skip_copyright(out, log); applied.append('skip_copyright')
     if disable_diff_timer:
         out = patch_difficulty_timer(out, log); applied.append('diff_timer_off')
+    if freeze_select_timer:
+        out = patch_freeze_select_timer(out, log); applied.append('select_timer_frozen')
     if out == dec:
         log('nothing to do — already patched')
         return {'applied': [], 'md5': hashlib.md5(enc).hexdigest()}

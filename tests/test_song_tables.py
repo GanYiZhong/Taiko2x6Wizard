@@ -37,6 +37,7 @@ def _stock(monkeypatch):
     for va, w, _ in S.HOOKS:
         _put(buf, va, w)
     _put(buf, S.ALLOC_VA, 0x24040000 | (0x4A90 + 4 * 331))
+    _put(buf, S.TEX_CAP_VA, 0x24050000 | S.TEX_CAP_STOCK)
     cave = bytes(range(256)) * 4
     buf[S.CAVE_VA - S.DELTA:S.CAVE_VA - S.DELTA + S.CAVE_LEN] = cave[:S.CAVE_LEN]
     monkeypatch.setattr(S, "CAVE_SHA1", hashlib.sha1(cave[:S.CAVE_LEN]).hexdigest())
@@ -77,6 +78,15 @@ def test_patch_records(monkeypatch):
     bigger = S.patch_records(out, 400, log=lambda s: None)
     assert S.current_delta(bigger) == S.layout(400)["delta"]
     assert _w(bigger, S.BOUND_SITES[0][0]) & 0xFFFF == 400
+    assert _w(bigger, S.TEX_CAP_VA) == 0x24050000 | S.tex_capacity(400)
+
+
+def test_texture_capacity():
+    # 3 select textures per song plus the rest of the game must fit
+    assert S.tex_capacity(331) == S.TEX_CAP_STOCK
+    for n in (440, 604, S.MAX_SONGS):
+        cap = S.tex_capacity(n)
+        assert cap >= 3 * n + S.TEX_CAP_SPARE and cap < 0x8000 and cap % 2 == 0
 
 
 def test_keeps_larger_vector_capacity(monkeypatch):

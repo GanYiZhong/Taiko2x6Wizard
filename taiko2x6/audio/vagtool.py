@@ -385,6 +385,68 @@ def _resample_linear(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarra
     return out
 
 
+def resample_sinc(pcm: np.ndarray, src_rate: int, dst_rate: int,
+                  half_taps: int = 16, chunk: int = 1 << 18) -> np.ndarray:
+    """Band-limited (Hann-windowed sinc) resample of pcm shape (n, ch).
+
+    Unlike _resample_linear this low-passes first when going down in rate,
+    so content above the new Nyquist does not fold back as aliasing. numpy
+    only (the packaged app excludes scipy). Returns float64 (m, ch).
+    """
+    pcm = np.asarray(pcm)
+    if pcm.ndim == 1:
+        pcm = pcm[:, None]
+    n, ch = pcm.shape
+    if src_rate == dst_rate or n == 0:
+        return pcm.astype(np.float64)
+    ratio = dst_rate / src_rate
+    cutoff = min(1.0, ratio) * 0.94            # fraction of the source Nyquist
+    m = int(round(n * ratio))
+    x = pcm.astype(np.float64)
+    out = np.empty((m, ch), dtype=np.float64)
+    ks = np.arange(-half_taps + 1, half_taps + 1)
+    for s in range(0, m, chunk):
+        t = np.arange(s, min(m, s + chunk), dtype=np.float64) / ratio
+        i0 = np.floor(t).astype(np.int64)
+        frac = t - i0
+        acc = np.zeros((len(t), ch), dtype=np.float64)
+        for k in ks:
+            d = k - frac
+            w = cutoff * np.sinc(cutoff * d) * (0.5 + 0.5 * np.cos(np.pi * d / half_taps))
+            idx = i0 + k
+            ok = (idx >= 0) & (idx < n)
+            acc += np.where(ok[:, None], x[np.clip(idx, 0, n - 1)], 0.0) * w[:, None]
+        out[s:s + len(t)] = acc
+    return out
+
+
+def resample_vag(data: bytes, sample_rate: int, mono: bool = False) -> bytes:
+    """Re-encode a game VAG stream at a lower `sample_rate`.
+
+    The game sets the SPU2 pitch from the stream header's rate (taiko VA
+    0x116F30 stores header[3]; 0x115B60 computes pitch = rate*4096/48000), so a
+    lower rate plays at the right speed and pitch, only with less treble.
+    Streams already at or below the rate, or with loop points, are returned
+    unchanged.
+    """
+    _il, _size, ch, rate, loop_s, loop_e = struct.unpack_from('<4I2i', data, 0)
+    shrink_rate = sample_rate and rate > sample_rate
+    shrink_ch = mono and ch > 1
+    if not (shrink_rate or shrink_ch) or loop_s != -1 or loop_e != -1:
+        return data
+    src_rate, channels, pcm = decode_vag(data)
+    y = pcm.astype(np.float64)
+    if shrink_ch:                                   # fold to mono (average)
+        y = y.mean(axis=1, keepdims=True)
+        channels = 1
+    out_rate = src_rate
+    if shrink_rate:
+        y = resample_sinc(y, src_rate, sample_rate)
+        out_rate = sample_rate
+    y = np.clip(np.rint(y), -32768, 32767).astype(np.int16)
+    return encode_vag(y, out_rate, channels)
+
+
 def _load_wav(path: str):
     """Load wav via stdlib wave -> (pcm int16 (n,ch), rate)."""
     with wave.open(path, 'rb') as w:

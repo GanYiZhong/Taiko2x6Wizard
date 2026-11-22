@@ -487,7 +487,7 @@ _TEX_GROUP = {
 }
 
 
-def _db_add_song(sm, new_id: str, k_src: int, stars: list):
+def _db_add_song(sm, new_id: str, k_src: int, stars: list, genre=None):
     """Programmatically add a song to a SongManager (reuses its add logic).
 
     NOTE: tightly coupled to SongManager internals — relies on the attributes
@@ -501,9 +501,13 @@ def _db_add_song(sm, new_id: str, k_src: int, stars: list):
     sm._new_counter += 1
     sm._new_songs[token] = {"template_k": k_src, "template_id": src.id,
                             "id": new_id, "stars": list(stars)}
+    # Genre folder 0..6; anything else (header-row markers) keeps the template's.
+    if genre is not None and 0 <= int(genre) <= 6:
+        sm._new_songs[token]["genre"] = int(genre)
     sm._order.append(token)
     sm._added_anything = True
-    ns = _Song(k=len(sm._songs), sid=new_id, genre=src.genre, stars=list(stars),
+    ns = _Song(k=len(sm._songs), sid=new_id,
+               genre=sm._new_songs[token].get("genre", src.genre), stars=list(stars),
                score=src.score, score3=src.score3, score5=src.score5,
                stream=(f"music_{new_id}" if src.stream_rec is not None else ""),
                stream_rec=src.stream_rec)

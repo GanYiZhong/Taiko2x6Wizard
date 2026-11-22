@@ -383,11 +383,59 @@ def _is_t14_tuning(tu: bytes) -> bool:
     return bool(bare) and bare.isascii() and tu[e + 1:e + 7] == b"music_"
 
 
+def _t14_place_by_stars(sec0, order, songs, new_songs, tuning) -> None:
+    """Slot added songs into the T14 difficulty orders (SEC0 col15 / col16).
+
+    col15 lists every row by hard-course stars, col16 by oni stars (the seven
+    folder header rows first). New rows start at the end of both, so they
+    would always sort last. Insert each one after the last row with the same
+    or lower rating, keep the original rows in their relative order, and
+    renumber both permutations.
+    """
+    try:
+        stock = TU.t14_stars(tuning) if TU.is_t14_layout(tuning) else {}
+    except Exception:
+        stock = {}
+    new_rows = []
+    stars = {}
+    for i, ref in enumerate(order):
+        if isinstance(ref, str) and ref.startswith("+"):
+            st = new_songs[ref].get("stars")
+            if not st or len(st) < 4:
+                return                      # nothing to place by
+            stars[i] = list(st)
+            new_rows.append(i)
+        else:
+            st = stock.get(songs[i].id)
+            if st is None:
+                return                      # can't rank the stock rows; leave as is
+            stars[i] = st
+    if not new_rows:
+        return
+
+    def oni(st):
+        return st[3] if st[3] > 0 else st[2]
+
+    for col, key in ((15, lambda i: stars[i][2]), (16, lambda i: oni(stars[i]))):
+        is_new = set(new_rows)
+        seq = sorted((i for i in range(len(sec0)) if i not in is_new),
+                     key=lambda i: sec0[i][col])
+        headers = sum(1 for i in seq if sec0[i][GENRE_COL] > 6)
+        for i in new_rows:
+            k = key(i)
+            pos = len(seq)
+            while pos > headers and key(seq[pos - 1]) > k:
+                pos -= 1
+            seq.insert(pos, i)
+        for p, i in enumerate(seq):
+            sec0[i][col] = p
+
+
 def _tuning_rebuild_t14(tu: bytes, keep_ids: list, new_specs: list) -> bytes:
     """Rebuild a Taiko-14 tuning.bin for an add/remove.
 
     ``keep_ids`` = bare ids of existing songs to retain; ``new_specs`` = list of
-    (new_id, template_id). Records are cloned verbatim, new songs get a fresh
+    (new_id, template_id[, stars]). Records are cloned verbatim, new songs get a fresh
     pool segment APPENDED (existing absolute offsets stay valid because they are
     relative to the pool start, which the game recomputes from the count), and
     the whole record array is re-sorted bytewise by id for the binary search.
@@ -410,7 +458,9 @@ def _tuning_rebuild_t14(tu: bytes, keep_ids: list, new_specs: list) -> bytes:
     keep = {k.encode("ascii", "replace") for k in keep_ids}
     emitted = [(bid, r) for bid, r in orig.items() if bid in keep]
 
-    for new_id, tmpl_id in new_specs:
+    for spec in new_specs:
+        new_id, tmpl_id = spec[0], spec[1]
+        stars = spec[2] if len(spec) > 2 else None
         tmpl = orig.get(tmpl_id.encode("ascii", "replace"))
         if tmpl is None:
             raise ValueError(f"T14 tuning rebuild: template id {tmpl_id!r} not found")
@@ -427,6 +477,9 @@ def _tuning_rebuild_t14(tu: bytes, keep_ids: list, new_specs: list) -> bytes:
         for k, col in enumerate(T14_TUNING_OFFCOLS):
             if k < len(rel):
                 struct.pack_into("<i", rec, col * 4, base_off + rel[k])
+        if stars:
+            # the clone carries the template's difficulty; use the song's own
+            TU.set_t14_stars(rec, stars)
         emitted.append((new_id.encode("ascii", "replace"), rec))
 
     emitted.sort(key=lambda t: t[0])   # bytewise id sort (SearchMusic invariant)
@@ -955,6 +1008,8 @@ class SongManager(QDialog):
                     g = self._new_songs[ref].get("genre")
                     if g is not None:
                         rec[GENRE_COL] = max(0, min(6, int(g)))
+            _t14_place_by_stars(new_sec0, self._order, self._songs,
+                                self._new_songs, self._tu_in)
 
         # Now overlay edited per-song values. self._songs is aligned to _order.
         # Apply DIFF-BASED to stay byte-exact: only touch a column when its
@@ -1040,7 +1095,8 @@ class SongManager(QDialog):
         for song, ref in zip(self._songs, self._order):
             if isinstance(ref, str) and ref.startswith("+"):
                 spec = self._new_songs[ref]
-                new_specs.append((song.id, spec.get("template_id", "")))
+                new_specs.append((song.id, spec.get("template_id", ""),
+                                  list(song.stars)))
             else:
                 keep_ids.append(song.id)
         return _tuning_rebuild_t14(self._tu_in, keep_ids, new_specs)

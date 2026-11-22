@@ -130,9 +130,18 @@ class OmnimixDialog(QDialog):
         go = QGroupBox("Options")
         of = QFormLayout(go)
         self.cb_over = QComboBox(); self.cb_over.addItems([
-            "Fit everything, patch the ceiling (experimental > 214)",
-            "Cap at the proven-safe 214 songs"])
+            "Fit everything, patch the ceiling (up to 644)",
+            "Cap at 214 songs"])
         of.addRow("when songs exceed 214:", self.cb_over)
+        self.cb_audio = QComboBox(); self.cb_audio.addItems([
+            "keep original (44.1 kHz)",
+            "re-encode all songs at 30 kHz (fits ~600 songs)",
+            "re-encode all songs at 24 kHz"])
+        self.cb_audio.setToolTip(
+            "DATA.000 must stay under 2 GiB or the game hangs on LOADING. "
+            "At 44.1 kHz that is about 430 songs. Lower rates keep speed and "
+            "pitch (the game reads the rate from each song), only less treble.")
+        of.addRow("song audio:", self.cb_audio)
         self.ck_backup = QCheckBox("back up the target .img before writing"); self.ck_backup.setChecked(True)
         of.addRow("", self.ck_backup)
         self.ck_limit = QCheckBox("patch the song-count ceiling in the exe (.img target)")
@@ -340,9 +349,9 @@ class OmnimixDialog(QDialog):
                f"TOTAL after: {p.total_after} songs"
                + (f"\nCross-source duplicate ids skipped: {dupes}" if dupes else ""))
         if p.total_after > OM.SAFE_LIMIT:
-            msg += (f"\n\n⚠ {p.total_after} exceeds the proven-safe 214. "
-                    "Above 214 is experimental — the wheel may not render/play "
-                    "them all until the Stage-2 UI tables are patched. Test in-game.")
+            msg += (f"\n\nNote: {p.total_after} is above 214, so the per-song "
+                    "record tables are grown too (max 644). Records of songs past "
+                    "210 are kept until power-off; the first 210 are saved to SRAM.")
         self.log.appendPlainText("\n" + msg)
         self.b_build.setEnabled(len(p.items) > 0)
         self._end()
@@ -355,11 +364,17 @@ class OmnimixDialog(QDialog):
             QMessageBox.warning(self, "Omnimix", "Run Preview plan first."); return
         cap = self.cb_over.currentIndex() == 1
         if self._plan.total_after > OM.SAFE_LIMIT and not cap:
+            if self._plan.total_after > OM.taiko_exe_max():
+                QMessageBox.warning(
+                    self, "Too many songs",
+                    f"{self._plan.total_after} songs is above the maximum "
+                    f"{OM.taiko_exe_max()} the game executable can be patched for.")
+                return
             if QMessageBox.question(
-                    self, "Experimental",
-                    f"This builds {self._plan.total_after} songs — past the "
-                    "proven-safe 214. The data will be correct, but whether all "
-                    "of them show/play in-game is untested. Continue?") != \
+                    self, "Above 214 songs",
+                    f"This builds {self._plan.total_after} songs. The game's "
+                    "song tables will be grown to match; records of songs past "
+                    "210 are not kept across a reboot. Continue?") != \
                     QMessageBox.Yes:
                 return
         tl, td = self._target_pair
@@ -368,12 +383,14 @@ class OmnimixDialog(QDialog):
         img = self.ed_timg.text().strip(); tpart = self._tpart
         do_backup = self.ck_backup.isChecked() and is_img
         do_limit = self.ck_limit.isChecked() and is_img
+        audio_rate = (None, 30000, 24000)[self.cb_audio.currentIndex()]
 
         def task(log):
             target = OM.open_pair(tl, td)
             try:
                 t0 = time.perf_counter()
-                res = OM.assemble(target, specs, plan, db, log=log)
+                res = OM.assemble(target, specs, plan, db, log=log,
+                                  audio_rate=audio_rate)
             finally:
                 target.close()
             log("assembled %d songs (total %d) in %.1fs"

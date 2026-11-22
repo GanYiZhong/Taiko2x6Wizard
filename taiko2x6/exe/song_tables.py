@@ -59,6 +59,19 @@ STOCK_SONGS = 210
 OLD_TABLE = REC_SIZE * STOCK_SONGS   # 14280 bytes
 MAX_SONGS = (0xFFFF - ARRAYA_NEW) // (4 + REC_SIZE) - 1     # 644
 
+# Texture manager capacity, set once at boot (sub_1010D0: li $a1, 0x600 before
+# jal sub_1C28D0). Each genre in song select registers 3 textures per song
+# (select_full/short/non, sub_1773A8); past the capacity a fixed object pool
+# runs dry and the game dereferences NULL (sub_1CB198) and crashes.
+TEX_CAP_VA = 0x001011AC
+TEX_CAP_STOCK = 0x600
+TEX_CAP_SPARE = 512                    # textures the rest of the game needs (<= 219 seen)
+
+
+def tex_capacity(songs: int) -> int:
+    return max(TEX_CAP_STOCK, (3 * songs + TEX_CAP_SPARE + 0xFF) & ~0xFF)
+
+
 ALLOC_VA = 0x001012D0                # li $a0, SIZE (addiu)  -> ori $a0, $zero, SIZE
 
 # Sites whose 16-bit immediate anchors a record access: (VA, stock word).
@@ -122,9 +135,11 @@ DEF_NAME_GP = -0x6F18               # gp-relative default name (every 2nd byte)
 
 # Code cave: sub_214C30, a libc routine nothing references (no call, jump,
 # pointer or lui/addiu pair anywhere in the image).
+# The routine is 904 bytes; this patch owns the first 512 (its code is ~284)
+# and taiko_exe.patch_freeze_select_timer the last 392.
 CAVE_VA = 0x00214C30
-CAVE_LEN = 904
-CAVE_SHA1 = 'fd1efe8fc29261659b3bfb29cd737df51fc7028a'
+CAVE_LEN = 512
+CAVE_SHA1 = '2fcb2469f15162c5306d41bbb50b666d06753836'
 
 
 class SongTablesError(RuntimeError):
@@ -183,6 +198,7 @@ class _Asm:
         self.fix.append((len(self.words), label))
         self.emit(word)
 
+    def beqz(self, rs, label):      self._br(_i(0x04, rs, 'zero', 0), label)
     def bnez(self, rs, label):      self._br(_i(0x05, rs, 'zero', 0), label)
     def bgtz(self, rs, label):      self._br(_i(0x07, rs, 'zero', 0), label)
     def bgez(self, rs, label):      self._br((0x01 << 26) | (R[rs] << 21) | (1 << 16), label)
@@ -411,6 +427,14 @@ def patch_records(dec: bytes, songs: int, log=print) -> bytes:
         _put(buf, va, want)
     log(f'cave {len(code)} B at {CAVE_VA:08X}: SRAM load/save sync of the first '
         f'{STOCK_SONGS} records, history clamp')
+
+    # texture manager capacity: li $a1, CAP
+    w = _w(buf, TEX_CAP_VA)
+    if w >> 16 != 0x2405:
+        raise SongTablesError(f'{TEX_CAP_VA:08X}: unexpected instruction {w:08x}')
+    cap = tex_capacity(songs)
+    _put(buf, TEX_CAP_VA, 0x24050000 | cap)
+    log(f'texture capacity {TEX_CAP_STOCK:#x} -> {cap:#x} ({3 * songs} select textures)')
 
     # ctx allocation: ori $a0,$zero,SIZE (unsigned)
     w = _w(buf, ALLOC_VA)
