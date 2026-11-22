@@ -642,7 +642,7 @@ def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
             f'{_SELECT_STATE:08X}: expected the select update {_SELECT_UPDATE:#x} '
             f'(got {cur:#x}) — refusing')
     if (cur not in (_FREEZE_VA, _FREEZE_VA_V1) and hashlib.sha1(cave).hexdigest() != _FREEZE_STOCK_SHA1
-            and cave != bytes(_FREEZE_LEN)):
+            and cave != bytes(_FREEZE_LEN) and not cave.startswith(code)):
         raise TaikoExeError(f'{_FREEZE_VA:08X}: cave area is not free — refusing')
     if bytes(buf[_COUNTER_STR - DELTA:_COUNTER_STR - DELTA + 8]) != b'counter\0':
         raise TaikoExeError(f'{_COUNTER_STR:08X}: "counter" string not found — refusing')

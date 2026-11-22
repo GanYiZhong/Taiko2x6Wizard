@@ -282,6 +282,10 @@ def song_id_set(archive) -> set:
 # --------------------------------------------------------------------------- #
 #  reading per-song metadata (stars / genre) in the source's own DB variant
 # --------------------------------------------------------------------------- #
+CPOP = 8                 # C-POP song genre
+CPOP_HEADER = 15         # its folder header row ("selcpp")
+
+
 def musicinfo_genres(raw: bytes) -> dict:
     """{song id: genre} straight from musicinfo.bin's own rows.
 
@@ -326,9 +330,7 @@ def musicinfo_genres(raw: bytes) -> dict:
         if not sid:
             continue
         g = r[2]
-        if g == 8:                      # C-POP (T11T/T12T): no such folder in T14
-            g = 0                       # -> J-POP
-        if 0 <= g <= 6:
+        if 0 <= g <= 6 or g == CPOP:    # 8 = C-POP (T11T/T12T, TK14 .0001)
             out[sid] = g
     return out
 
@@ -475,6 +477,8 @@ class MergePlan:
     skipped_dupes: dict = field(default_factory=dict)   # sid -> [labels]
     # sid -> (source label, title, id it duplicates) for same-title skips
     skipped_titles: dict = field(default_factory=dict)
+    # target rows whose genre is corrected in place: sid -> genre
+    genre_fixes: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
@@ -577,14 +581,14 @@ def plan_merge(target, sources, log=lambda s: None,
                                       stars=m["stars"], genre=m["genre"]))
                 seen_new.add(sid)
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
-        _vote_genres(target, opened, items, log, metas)
+        fixes = _vote_genres(target, opened, items, log, metas)
     finally:
         for _spec, src in opened:
             src.close()
     if skipped_titles:
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
-                     skipped_titles=skipped_titles)
+                     skipped_titles=skipped_titles, genre_fixes=fixes)
 
 
 def _valid_stars(st) -> bool:
@@ -638,6 +642,20 @@ def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
             it.genre = best
     log(f"genres: {changed} added songs refiled by the cross-version vote, "
         f"{restar} took their stars from a more trusted source")
+
+    # C-POP: any song a release files under C-POP goes there (target rows too:
+    # TK14's own C-POP songs sit in Namco original), and the C-POP header row,
+    # which TK14 also files as a Namco song, becomes a folder header again.
+    cpop = {sid for _l, g, _w in per for sid, v in g.items() if v == CPOP}
+    for it in items:
+        if it.sid in cpop:
+            it.genre = CPOP
+    fixes = {sid: CPOP for sid in tgt if sid in cpop and tgt[sid] != CPOP}
+    if "selcpp" in set(_ordered_ids(target)):
+        fixes["selcpp"] = CPOP_HEADER
+    if fixes:
+        log(f"genres: C-POP folder ({len(cpop)} songs), {len(fixes)} target rows refiled")
+    return fixes
 
 
 def _ordered_ids(archive):
@@ -699,7 +717,106 @@ def precompute_db(target, plan, template_id=None) -> dict:
         # Without the source genre every added song copies the template's
         # folder, piling hundreds into one genre, which freezes song select.
         song_builder._db_add_song(sm, it.sid, k_template, stars, genre=it.genre)
-    return sm._build_result()
+    res = sm._build_result()
+    # Always pass through: besides the C-POP refiling this regroups the rows
+    # by genre and repoints the folder jump table (T14 only; no-op otherwise).
+    from taiko2x6.songs.song_manager import MUSICINFO
+    mi = res.get(MUSICINFO) or song_builder._read_named(target, "musicinfo.bin")
+    out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {})
+    if out != mi:
+        res[MUSICINFO] = out
+    return res
+
+
+def set_musicinfo_genres(raw: bytes, genres: dict) -> bytes:
+    """Set column 2 (genre) of the musicinfo rows whose id is in `genres`."""
+    from taiko2x6.bineditors import bineditor_musicinfo as MI
+    m = MI.parse(raw)
+    pool = m.pool
+    for rec in m.sec0:
+        o = rec[0]
+        sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
+        if sid in genres:
+            rec[2] = int(genres[sid])
+    group_rows_by_genre(m)
+    fix_genre_jumps(m)
+    return MI.serialize(m)
+
+
+SONG_GENRES = (0, 1, 2, 3, 4, 5, 6, CPOP)
+
+
+def group_rows_by_genre(m) -> None:
+    """Reorder T14 musicinfo rows so every genre is one contiguous block.
+
+    After a folder is picked, song select walks the rows in file order (only
+    the optional re-sort uses the col13..16 orders). Stock TK14 stores its
+    rows grouped by genre; rows appended by the merge land at the end in id
+    order, which scatters genres inside each folder. The layout becomes:
+    folder headers, then one block per genre in the order the genres first
+    appear (C-POP last if new), keeping the existing order inside a block.
+    Every row index stored in the file is remapped: col10 (ura row), col13
+    and col14 (own index), SEC1, SEC4 field 0, SEC6 and SEC7.
+    """
+    if getattr(m, "variant", "") != "t14" or not m.sec0:
+        return
+    rows = m.sec0
+    headers = [i for i, r in enumerate(rows) if r[2] not in SONG_GENRES]
+    order = []
+    for r in rows:
+        g = r[2]
+        if g in SONG_GENRES and g not in order:
+            order.append(g)
+    new = headers + [i for g in order for i, r in enumerate(rows) if r[2] == g]
+    if new == list(range(len(rows))):
+        return
+    old2new = {o: n for n, o in enumerate(new)}
+
+    def remap(i):
+        return old2new.get(i, i) if i >= 0 else i
+
+    out = []
+    for o in new:
+        r = list(rows[o])
+        r[10] = remap(r[10])
+        if r[13] == o:
+            r[13] = old2new[o]
+        if r[14] == o:
+            r[14] = old2new[o]
+        out.append(r)
+    m.sec0[:] = out
+    m.sec1[:] = [remap(i) for i in m.sec1]
+    m.sec4[:] = [(remap(a),) + tuple(rest) for a, *rest in m.sec4]
+    if m.sec6:
+        m.sec6[:] = [remap(i) for i in m.sec6]
+    if m.sec7:
+        m.sec7[:] = [remap(i) for i in m.sec7]
+
+
+# T14 musicinfo SEC6: per folder header, the row the cursor lands on when
+# that folder is picked (sub_175C20 -> sub_108218(list, slot)).  Folder
+# header genre h uses slot h - 3 (namco 7 -> 4) or h - 4 (the rest).
+GENRE_JUMP_SLOT = {4: 4, 0: 5, 6: 6, 3: 7, 2: 8, 1: 9, 5: 10, CPOP: 11}
+
+
+def fix_genre_jumps(m) -> None:
+    """Point every SEC6 folder slot at a row of that folder's genre.
+
+    Stock TK14 leaves the C-POP slot at 0 (the J-POP header), so picking
+    C-POP lands outside the folder and the cursor search can lock up."""
+    sec6 = getattr(m, "sec6", None)
+    if not sec6:
+        return
+    rows = m.sec0
+    for genre, slot in GENRE_JUMP_SLOT.items():
+        if slot >= len(sec6):
+            continue
+        cur = sec6[slot]
+        if 0 <= cur < len(rows) and rows[cur][2] == genre:
+            continue
+        first = next((i for i, r in enumerate(rows) if r[2] == genre), None)
+        if first is not None:
+            sec6[slot] = first
 
 
 def _resample_job(args):

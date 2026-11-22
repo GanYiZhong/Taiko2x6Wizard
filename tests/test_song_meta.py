@@ -23,7 +23,7 @@ def _t8_musicinfo(rows, recsz=104):
 def test_musicinfo_genres_t12t_rows():
     raw = _t8_musicinfo([("seljpp", "J-POP", 9), ("song1", "a", 0),
                          ("song2", "b", 4), ("cpop1", "c", 8)])
-    assert O.musicinfo_genres(raw) == {"song1": 0, "song2": 4, "cpop1": 0}
+    assert O.musicinfo_genres(raw) == {"song1": 0, "song2": 4, "cpop1": 8}
 
 
 def test_musicinfo_genres_t11t_100_byte_rows():
@@ -53,3 +53,41 @@ def test_t14_stars_roundtrip():
 def test_valid_stars():
     assert O._valid_stars([4, 7, 8, 10]) and O._valid_stars([1, 2, 3, -1])
     assert not O._valid_stars([2, 151, 550260, 0])
+
+
+def test_fix_genre_jumps_points_cpop_slot_at_cpop_row():
+    from types import SimpleNamespace
+    rows = [[0, 0, 9], [0, 0, 7], [0, 0, 4], [0, 0, 0], [0, 0, 8], [0, 0, 15]]
+    sec6 = [0, 0, 0, 0, 2, 3, 0, 0, 0, 0, 0, 0]
+    m = SimpleNamespace(sec0=rows, sec6=sec6)
+    O.fix_genre_jumps(m)
+    assert sec6[11] == 4          # C-POP -> first genre-8 row
+    assert sec6[4] == 2 and sec6[5] == 3   # already-valid slots untouched
+    assert sec6[0:4] == [0, 0, 0, 0]       # non-folder slots untouched
+
+
+def test_group_rows_by_genre_remaps_row_indices():
+    from types import SimpleNamespace
+
+    def row(g, ura=-1):
+        r = [0] * 26
+        r[2] = g
+        r[10] = ura
+        return r
+    # header(9), namco, jpop, namco(ura -> row 4), namco ex, jpop, header(15)
+    rows = [row(9), row(4), row(0), row(4, ura=4), row(4), row(0), row(15)]
+    for i, r in enumerate(rows):
+        r[13] = r[14] = i
+        r[15] = r[16] = len(rows) - 1 - i
+    m = SimpleNamespace(variant="t14", sec0=rows, sec1=[0, 3], sec4=[(3, 0, 1)],
+                        sec6=[0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 6], sec7=[5, 2])
+    O.group_rows_by_genre(m)
+    assert [r[2] for r in m.sec0] == [9, 15, 4, 4, 4, 0, 0]
+    assert [r[13] for r in m.sec0] == list(range(7))
+    assert [r[14] for r in m.sec0] == list(range(7))
+    assert sorted(r[15] for r in m.sec0) == list(range(7))
+    # old 3 -> new 3 (namco: 1,3,4 -> 2,3,4), its ura old 4 -> new 4
+    assert m.sec0[3][10] == 4
+    assert m.sec1 == [0, 3] and m.sec4 == [(3, 0, 1)]
+    assert m.sec6[4] == 2 and m.sec6[5] == 5 and m.sec6[11] == 1
+    assert m.sec7 == [6, 5]

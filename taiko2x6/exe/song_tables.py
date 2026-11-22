@@ -66,10 +66,26 @@ MAX_SONGS = (0xFFFF - ARRAYA_NEW) // (4 + REC_SIZE) - 1     # 644
 TEX_CAP_VA = 0x001011AC
 TEX_CAP_STOCK = 0x600
 TEX_CAP_SPARE = 512                    # textures the rest of the game needs (<= 219 seen)
+# The same init call takes the texture manager's own heap in $a0
+# (lui $a0, 0x100C = flag 0x10000000 | 0xC0000 bytes, sub_1C3150 ->
+# sub_1D6728, 128-byte blocks). Stock pairs 0xC0000 B with 0x600 textures
+# (512 B each). Raising only the count leaves the heap full after ~1536
+# textures: every select texture registered past that point is broken and
+# landing on such a song stalls the GS DMA (rows ~502..593 at 604 songs).
+TEX_MEM_VA = 0x001011A4
+TEX_MEM_STOCK = 0xC0000
+TEX_MEM_FLAG = 0x10000000
 
 
 def tex_capacity(songs: int) -> int:
     return max(TEX_CAP_STOCK, (3 * songs + TEX_CAP_SPARE + 0xFF) & ~0xFF)
+
+
+def tex_memory(songs: int) -> int:
+    """Texture heap bytes for :func:`tex_capacity` textures (stock ratio,
+    rounded up to the 64 KB a `lui` can express)."""
+    need = TEX_MEM_STOCK * tex_capacity(songs) // TEX_CAP_STOCK
+    return (need + 0xFFFF) & ~0xFFFF
 
 
 ALLOC_VA = 0x001012D0                # li $a0, SIZE (addiu)  -> ori $a0, $zero, SIZE
@@ -124,7 +140,16 @@ HOOKS = [
     (0x00132674, 0x0C05F322, 'save'),   # sub_132428: first-boot init, jal sub_17CC88
     (0x001332B8, 0x0C05F322, 'save'),   # sub_133250: periodic save, jal sub_17CC88
     (0x001318C0, 0x0C04E4FA, 'hist'),   # sub_1318A0: jal sub_1393E8 (history id)
+    # move $a2,$v0 (genre -> "genre%d") -> jal cave_genre; the next word (the
+    # call's delay slot) and the sprintf after it are untouched, and both
+    # functions save $ra in their prologue.
+    (0x00176594, 0x0040302D, 'genre'),  # sub_176550: genre bar
+    (0x00176A80, 0x0040302D, 'genre'),  # sub_176618: song boards
+    (0x00176C1C, 0x0040302D, 'genre'),
+    (0x00176CE8, 0x0040302D, 'genre'),
+    (0x00176DB4, 0x0040302D, 'genre'),
 ]
+GENRE_CPOP = 8
 F_LOAD = 0x0017CC50                 # copy SRAM image into ctx+2752
 F_SAVE = 0x0017CC88                 # checksum ctx+2752 (then the caller copies out)
 F_HIST = 0x001393E8                 # musicID -> history byte
@@ -287,10 +312,19 @@ def _cave(songs: int, rec: int) -> tuple[bytes, dict]:
     a.jr('ra')
     a.addiu('sp', 'sp', 0x10)                           # delay
 
+    # cave_genre(v0 = genre): a2 = genre for the "genre%d" card label, with
+    # C-POP (8) shown on the J-POP board - song_select_song.swg only has
+    # genre0..6 and stock TK14 never filed a song under 8.
+    a.label('genre')
+    a.move('a2', 'v0')
+    a.emit(_i(0x0E, 'v0', 't9', GENRE_CPOP))            # xori t9, v0, 8
+    a.jr('ra')
+    a.emit(_r('zero', 't9', 'a2', 0x0A))                # delay: movz a2, zero, t9
+
     code = a.finish()
     if len(code) > CAVE_LEN:
         raise SongTablesError(f'cave code {len(code)} B > {CAVE_LEN} B')
-    return code, {k: a.labels[k] for k in ('load', 'save', 'hist')}
+    return code, {k: a.labels[k] for k in ('load', 'save', 'hist', 'genre')}
 
 
 # --------------------------------------------------------------------------- #
@@ -426,7 +460,7 @@ def patch_records(dec: bytes, songs: int, log=print) -> bytes:
             raise SongTablesError(f'{va:08X}: unexpected call {w:08x}')
         _put(buf, va, want)
     log(f'cave {len(code)} B at {CAVE_VA:08X}: SRAM load/save sync of the first '
-        f'{STOCK_SONGS} records, history clamp')
+        f'{STOCK_SONGS} records, history clamp, C-POP card boards')
 
     # texture manager capacity: li $a1, CAP
     w = _w(buf, TEX_CAP_VA)
@@ -435,6 +469,14 @@ def patch_records(dec: bytes, songs: int, log=print) -> bytes:
     cap = tex_capacity(songs)
     _put(buf, TEX_CAP_VA, 0x24050000 | cap)
     log(f'texture capacity {TEX_CAP_STOCK:#x} -> {cap:#x} ({3 * songs} select textures)')
+
+    # texture heap: lui $a0, (FLAG | MEM) >> 16
+    w = _w(buf, TEX_MEM_VA)
+    if w >> 16 != 0x3C04 or not (w & 0xFFFF) & (TEX_MEM_FLAG >> 16):
+        raise SongTablesError(f'{TEX_MEM_VA:08X}: unexpected instruction {w:08x}')
+    mem = tex_memory(songs)
+    _put(buf, TEX_MEM_VA, 0x3C040000 | ((TEX_MEM_FLAG | mem) >> 16))
+    log(f'texture heap {TEX_MEM_STOCK:#x} -> {mem:#x} bytes')
 
     # ctx allocation: ori $a0,$zero,SIZE (unsigned)
     w = _w(buf, ALLOC_VA)

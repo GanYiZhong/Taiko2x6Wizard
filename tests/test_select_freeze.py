@@ -43,3 +43,10 @@ def test_freeze_refuses_unknown(monkeypatch):
     struct.pack_into("<I", buf, T._SELECT_STATE - T.DELTA, 0x12345678)
     with pytest.raises(T.TaikoExeError):
         T.patch_freeze_select_timer(bytes(buf), log=lambda s: None)
+
+
+def test_refreeze_after_unhook(monkeypatch):
+    out = bytearray(T.patch_freeze_select_timer(_img(monkeypatch), log=lambda s: None))
+    struct.pack_into("<I", out, T._SELECT_STATE - T.DELTA, T._SELECT_UPDATE)
+    monkeypatch.setattr(T, "_FREEZE_STOCK_SHA1", "x")
+    assert T.is_select_timer_frozen(T.patch_freeze_select_timer(bytes(out), log=lambda s: None))

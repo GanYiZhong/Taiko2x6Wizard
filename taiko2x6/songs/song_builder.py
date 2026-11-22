@@ -501,8 +501,8 @@ def _db_add_song(sm, new_id: str, k_src: int, stars: list, genre=None):
     sm._new_counter += 1
     sm._new_songs[token] = {"template_k": k_src, "template_id": src.id,
                             "id": new_id, "stars": list(stars)}
-    # Genre folder 0..6; anything else (header-row markers) keeps the template's.
-    if genre is not None and 0 <= int(genre) <= 6:
+    # Genre folder 0..6 or 8 (C-POP); header-row markers keep the template's.
+    if genre is not None and (0 <= int(genre) <= 6 or int(genre) == 8):
         sm._new_songs[token]["genre"] = int(genre)
     sm._order.append(token)
     sm._added_anything = True

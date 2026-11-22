@@ -38,6 +38,7 @@ def _stock(monkeypatch):
         _put(buf, va, w)
     _put(buf, S.ALLOC_VA, 0x24040000 | (0x4A90 + 4 * 331))
     _put(buf, S.TEX_CAP_VA, 0x24050000 | S.TEX_CAP_STOCK)
+    _put(buf, S.TEX_MEM_VA, 0x3C04100C)       # lui a0,0x100C (stock heap)
     cave = bytes(range(256)) * 4
     buf[S.CAVE_VA - S.DELTA:S.CAVE_VA - S.DELTA + S.CAVE_LEN] = cave[:S.CAVE_LEN]
     monkeypatch.setattr(S, "CAVE_SHA1", hashlib.sha1(cave[:S.CAVE_LEN]).hexdigest())
@@ -79,6 +80,7 @@ def test_patch_records(monkeypatch):
     assert S.current_delta(bigger) == S.layout(400)["delta"]
     assert _w(bigger, S.BOUND_SITES[0][0]) & 0xFFFF == 400
     assert _w(bigger, S.TEX_CAP_VA) == 0x24050000 | S.tex_capacity(400)
+    assert _w(bigger, S.TEX_MEM_VA) == 0x3C040000 | ((S.TEX_MEM_FLAG | S.tex_memory(400)) >> 16)
 
 
 def test_texture_capacity():
@@ -87,6 +89,11 @@ def test_texture_capacity():
     for n in (440, 604, S.MAX_SONGS):
         cap = S.tex_capacity(n)
         assert cap >= 3 * n + S.TEX_CAP_SPARE and cap < 0x8000 and cap % 2 == 0
+        # the texture heap grows with the count (stock: 0xC0000 B per 0x600)
+        mem = S.tex_memory(n)
+        assert mem * S.TEX_CAP_STOCK >= S.TEX_MEM_STOCK * cap and mem % 0x10000 == 0
+    assert S.tex_memory(331) == S.TEX_MEM_STOCK
+    assert S.tex_memory(604) == 0x140000
 
 
 def test_keeps_larger_vector_capacity(monkeypatch):
@@ -111,9 +118,28 @@ def test_refuses_other_builds(monkeypatch):
 def test_cave_code_shape():
     code, labels = S._cave(331, S.layout(331)["rec"])
     assert len(code) <= S.CAVE_LEN and len(code) % 4 == 0
-    assert set(labels) == {"load", "save", "hist"}
+    assert set(labels) == {"load", "save", "hist", "genre"}
     words = struct.unpack("<%dI" % (len(code) // 4), code)
     jal = lambda f: 0x0C000000 | (f >> 2)                       # noqa: E731
     assert jal(S.F_LOAD) in words and jal(S.F_MEMSET) in words
     assert jal(S.F_MEMCPY) in words and jal(S.F_HIST) in words
     assert (0x08000000 | (S.F_SAVE >> 2)) in words              # save tail-calls
+
+
+def test_genre_label_routine():
+    """cave_genre: a2 = v0, except C-POP (8) -> 0 (no genre8 board in the swf)."""
+    code, labels = S._cave(331, S.layout(331)["rec"])
+    off = (labels["genre"] - S.CAVE_VA) // 4
+    words = struct.unpack("<4I", code[4 * off:4 * off + 16])
+    assert words[0] == 0x0040302D                                # move a2, v0
+    assert words[1] == (0x0E << 26) | (2 << 21) | (25 << 16) | 8  # xori t9, v0, 8
+    assert words[2] == 0x03E00008                                # jr ra
+    assert words[3] == (25 << 16) | (6 << 11) | 0x0A             # movz a2, zero, t9
+
+    def run(v0):                     # tiny interpreter for the 4 words
+        a2 = v0
+        t9 = v0 ^ 8
+        return 0 if t9 == 0 else a2
+    assert [run(g) for g in range(9)] == [0, 1, 2, 3, 4, 5, 6, 7, 0]
+    genre_hooks = [h for h in S.HOOKS if h[2] == "genre"]
+    assert len(genre_hooks) == 5 and all(h[1] == 0x0040302D for h in genre_hooks)

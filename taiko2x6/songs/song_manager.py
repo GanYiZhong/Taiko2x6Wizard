@@ -1007,7 +1007,8 @@ class SongManager(QDialog):
                     # are header-row markers, never a song genre).
                     g = self._new_songs[ref].get("genre")
                     if g is not None:
-                        rec[GENRE_COL] = max(0, min(6, int(g)))
+                        g = int(g)
+                        rec[GENRE_COL] = g if g == 8 else max(0, min(6, g))   # 8 = C-POP
             _t14_place_by_stars(new_sec0, self._order, self._songs,
                                 self._new_songs, self._tu_in)
 
