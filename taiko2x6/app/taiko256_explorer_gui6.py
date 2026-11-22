@@ -34,20 +34,23 @@ log = logging.getLogger("taiko")
 from taiko2x6.archive import taiko256_archive_tool_v2 as core  # noqa: E402
 from taiko2x6.graphics import tim2  # noqa: E402  TIM2 (.nut) image decoding
 from taiko2x6.app import appconfig  # noqa: E402  last-used-path memory (config.ini)
+from taiko2x6.app import i18n  # noqa: E402  zh-TW / English UI strings
+from taiko2x6.app.i18n import tr  # noqa: E402
 
 from PySide6.QtCore import (  # noqa: E402
     Qt, QThread, Signal, QObject, QSortFilterProxyModel, QModelIndex, QSize,
     QSettings,
 )
 from PySide6.QtGui import (  # noqa: E402
-    QStandardItem, QStandardItemModel, QAction, QIcon, QImage, QPixmap,
-    QFont, QColor, QKeySequence,
+    QStandardItem, QStandardItemModel, QAction, QActionGroup, QIcon, QImage,
+    QPixmap, QFont, QColor, QKeySequence,
 )
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication, QMainWindow, QWidget, QTreeView, QVBoxLayout, QHBoxLayout,
     QSplitter, QLineEdit, QLabel, QPushButton, QFileDialog, QMessageBox,
     QProgressDialog, QPlainTextEdit, QTabWidget, QStyle, QToolBar, QStatusBar,
     QHeaderView, QMenu, QCheckBox, QGroupBox, QFormLayout, QSpinBox,
+    QStackedWidget, QToolButton, QFrame,
 )
 
 SECTOR_SIZE = core.SECTOR_SIZE
@@ -214,23 +217,23 @@ class PreviewPane(QTabWidget):
         self.hex.setFont(QFont("Consolas", 9))
         self.text = QPlainTextEdit(readOnly=True)
         self.text.setFont(QFont("Consolas", 9))
-        self.image_label = QLabel("(no image)", alignment=Qt.AlignCenter)
+        self.image_label = QLabel(tr("(no image)"), alignment=Qt.AlignCenter)
         self.image_label.setMinimumSize(QSize(64, 64))
 
         from taiko2x6.audio import audioplayer
         self.audio = audioplayer.AudioPlayer()
         self._audio_holder = QWidget()
         _ah = QVBoxLayout(self._audio_holder)
-        self._audio_msg = QLabel("(no audio)", alignment=Qt.AlignCenter)
+        self._audio_msg = QLabel(tr("(no audio)"), alignment=Qt.AlignCenter)
         _ah.addWidget(self._audio_msg)
         _ah.addWidget(self.audio)
         _ah.addStretch(1)
 
-        self.addTab(self.info, "Info")
-        self.addTab(self.hex, "Hex")
-        self.addTab(self.text, "Text")
-        self.addTab(self.image_label, "Image")
-        self.addTab(self._audio_holder, "Audio")
+        self.addTab(self.info, tr("Info"))
+        self.addTab(self.hex, tr("Hex"))
+        self.addTab(self.text, tr("Text"))
+        self.addTab(self.image_label, tr("Image"))
+        self.addTab(self._audio_holder, tr("Audio"))
 
     def show_file(self, name: str, group_name: str, entry: dict, data: bytes,
                   modified: bool):
@@ -349,13 +352,14 @@ def hexdump(data: bytes, limit: int = 4096) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Taiko SYSTEM256 Explorer (PySide6)")
+        self.setWindowTitle("Taiko2x6Wizard")
         self.resize(1180, 720)
         self.archive: Archive | None = None
         self.worker: ExtractWorker | None = None
 
         self._build_ui()
         self._build_actions()
+        self._restore_layout()
 
     # -- ui scaffolding -------------------------------------------------------
     def _build_ui(self):
@@ -363,7 +367,8 @@ class MainWindow(QMainWindow):
 
         # tree + model
         self.model = QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Name", "Size", "Type", "Group offset"])
+        self.model.setHorizontalHeaderLabels(
+            [tr("Name"), tr("Size"), tr("Type"), tr("Group offset")])
         self.proxy = QSortFilterProxyModel()
         self.proxy.setSourceModel(self.model)
         self.proxy.setRecursiveFilteringEnabled(True)
@@ -382,57 +387,65 @@ class MainWindow(QMainWindow):
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
 
         # filter box
-        self.filter_box = QLineEdit(placeholderText="Filter by name…")
+        self.filter_box = QLineEdit(placeholderText=tr("Filter by name…"))
         self.filter_box.textChanged.connect(self.proxy.setFilterFixedString)
 
-        left = QWidget()
-        ll = QVBoxLayout(left)
+        browser = QWidget()
+        ll = QVBoxLayout(browser)
         ll.setContentsMargins(4, 4, 4, 4)
         ll.addWidget(self.filter_box)
         ll.addWidget(self.tree)
 
-        # right: preview + save options
+        # left: a start page until an archive is open, then the file tree
+        self.left_stack = QStackedWidget()
+        self.left_stack.addWidget(self._build_start_page())
+        self.left_stack.addWidget(browser)
+
+        # right: preview + (collapsible) extract / save options
         self.preview = PreviewPane()
 
-        extract_box = QGroupBox("Extract options")
+        extract_box = QGroupBox(tr("Extract options"))
         eform = QFormLayout(extract_box)
         self.spin_threads = QSpinBox()
         self.spin_threads.setRange(1, 64)
         self.spin_threads.setValue(min(32, os.cpu_count() or 4))
         self.spin_threads.setToolTip(
-            "Number of worker threads used by Extract.\n"
-            f"Detected CPU cores: {os.cpu_count() or '?'}")
-        eform.addRow("threads:", self.spin_threads)
-        self.chk_manifest = QCheckBox("write manifest.json (Extract All only)")
+            tr("Number of worker threads used by Extract.") + "\n"
+            + tr("Detected CPU cores: {n}").format(n=os.cpu_count() or "?"))
+        eform.addRow(tr("threads:"), self.spin_threads)
+        self.chk_manifest = QCheckBox(tr("write manifest.json (Extract All only)"))
         self.chk_manifest.setChecked(True)
-        self.chk_manifest.setToolTip(
-            "Write the same manifest.json index the CLI tool produces,\n"
-            "so the extracted tree can be fed back to the CLI patch/repack commands.")
+        self.chk_manifest.setToolTip(tr(
+            "Write the same manifest.json index the CLI tool produces, so the "
+            "extracted tree can be fed back to the CLI patch/repack commands."))
         eform.addRow(self.chk_manifest)
-        self.chk_png = QCheckBox("convert .nut (TIM2) → PNG")
-        self.chk_png.setToolTip(
-            "For every .nut texture, also write a decoded .png next to it.\n"
-            "The raw .nut is still extracted, so patching keeps working.")
+        self.chk_png = QCheckBox(tr("convert .nut (TIM2) → PNG"))
+        self.chk_png.setToolTip(tr(
+            "For every .nut texture, also write a decoded .png next to it. "
+            "The raw .nut is still extracted, so patching keeps working."))
         eform.addRow(self.chk_png)
 
-        save_box = QGroupBox("Save options")
+        save_box = QGroupBox(tr("Save options"))
         form = QFormLayout(save_box)
-        self.chk_full_rebuild = QCheckBox("full rebuild (allow LARGER files; layout-preserving)")
-        self.chk_full_rebuild.setToolTip(
-            "Always on. Repacks DATA.000 so a replacement can be any size while\n"
-            "KEEPING every unchanged group at its original sector (boot-safe on real\n"
-            "SYSTEM256 hardware); only edited groups are recompressed and appended.")
+        self.chk_full_rebuild = QCheckBox(
+            tr("full rebuild (allow LARGER files; layout-preserving)"))
+        self.chk_full_rebuild.setToolTip(tr(
+            "Always on. Repacks DATA.000 so a replacement can be any size while "
+            "KEEPING every unchanged group at its original sector (boot-safe on "
+            "real SYSTEM256 hardware); only edited groups are recompressed and "
+            "appended."))
         # Forced on: the layout-preserving full rebuild is both the most capable
         # (any-size edits) and boot-safe, so there is no reason to run the limited
         # in-place patch path. Disabled so it can't be turned off by accident.
         self.chk_full_rebuild.setChecked(True)
         self.chk_full_rebuild.setEnabled(False)
-        self.chk_relayout = QCheckBox("allow relayout (repack group internally)")
-        self.chk_relayout.setToolTip(
-            "In-place mode only: lets an edited file grow into spare room within its\n"
-            "own group, as long as the compressed group still fits its original slot.")
+        self.chk_relayout = QCheckBox(tr("allow relayout (repack group internally)"))
+        self.chk_relayout.setToolTip(tr(
+            "In-place mode only: lets an edited file grow into spare room within "
+            "its own group, as long as the compressed group still fits its "
+            "original slot."))
         self.chk_relayout.setEnabled(False)          # irrelevant while full rebuild is forced on
-        self.chk_overwrite = QCheckBox("overwrite originals (.bak backup)")
+        self.chk_overwrite = QCheckBox(tr("overwrite originals (.bak backup)"))
         self.chk_overwrite.setChecked(True)
         form.addRow(self.chk_full_rebuild)
         form.addRow(self.chk_relayout)
@@ -441,175 +454,197 @@ class MainWindow(QMainWindow):
         self.chk_full_rebuild.toggled.connect(
             lambda on: self.chk_relayout.setEnabled(not on))
 
+        self.opts_panel = QWidget()
+        ol = QVBoxLayout(self.opts_panel)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.addWidget(extract_box)
+        ol.addWidget(save_box)
+        self.btn_opts = QToolButton()
+        self.btn_opts.setText(tr("Extract / save options"))
+        self.btn_opts.setCheckable(True)
+        self.btn_opts.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_opts.setAutoRaise(True)
+        self.btn_opts.toggled.connect(self._toggle_options)
+        show_opts = _settings().value("options_open", False, type=bool)
+        self.btn_opts.setChecked(show_opts)
+        self._toggle_options(show_opts)
+
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 4, 4)
         rl.addWidget(self.preview, 1)
-        rl.addWidget(extract_box)
-        rl.addWidget(save_box)
+        rl.addWidget(self.btn_opts)
+        rl.addWidget(self.opts_panel)
 
-        split = QSplitter()
-        split.addWidget(left)
-        split.addWidget(right)
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 2)
-        self.setCentralWidget(split)
+        self.split = QSplitter()
+        self.split.addWidget(self.left_stack)
+        self.split.addWidget(right)
+        self.split.setStretchFactor(0, 3)
+        self.split.setStretchFactor(1, 2)
+        self.setCentralWidget(self.split)
 
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Open an archive folder (File ▸ Open) to begin.")
+        self.statusBar().showMessage(tr("Open an archive folder (File ▸ Open) to begin."))
+
+    def _toggle_options(self, on: bool):
+        self.opts_panel.setVisible(on)
+        self.btn_opts.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+
+    def _build_start_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(32, 32, 32, 32)
+        v.addStretch(1)
+        title = QLabel("Taiko2x6Wizard")
+        f = title.font(); f.setPointSize(f.pointSize() + 10); f.setBold(True)
+        title.setFont(f)
+        v.addWidget(title)
+        sub = QLabel(tr("Pick where to start. Everything here is also in the "
+                        "File and Tools menus."))
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#888;")
+        v.addWidget(sub)
+        v.addSpacing(16)
+        self._start_buttons = []
+        for label, hint, slot in (
+                (tr("Open archive folder…"),
+                 tr("A folder with DATA.000 + list.bin: browse, preview, replace files."),
+                 lambda: self.open_archive_dialog()),
+                (tr("Open PS2 HDD image…"),
+                 tr("Browse a Taiko HDD .img and extract or replace DATA.000 / list.bin."),
+                 lambda: self.open_pfsshell()),
+                (tr("Omnimix Maker…"),
+                 tr("Merge the songs of several Taiko images into one."),
+                 lambda: self.open_omnimix()),
+                (tr("Boot & select patches…"),
+                 tr("Skip the Notice / credits screens, freeze the select timers."),
+                 lambda: self.open_taiko_boot())):
+            b = QPushButton(label.replace("&", "&&"))
+            b.setMinimumHeight(40)
+            b.setStyleSheet("text-align:left; padding:6px 14px; font-weight:bold;")
+            b.clicked.connect(slot)
+            v.addWidget(b)
+            h = QLabel(hint)
+            h.setWordWrap(True)
+            h.setStyleSheet("color:#888; margin:0 0 10px 14px;")
+            v.addWidget(h)
+            self._start_buttons.append(b)
+        v.addStretch(2)
+        return page
 
     def _build_actions(self):
         style = self.style()
-        tb = QToolBar("Main")
+        tb = QToolBar(tr("Main"))
+        tb.setObjectName("main_toolbar")
         tb.setIconSize(QSize(18, 18))
+        # The icons are generic Qt ones, so show what each button does.
+        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.addToolBar(tb)
 
-        self.act_open = QAction(style.standardIcon(QStyle.SP_DirOpenIcon), "Open…", self)
+        def act(attr, text, slot, icon=None, tip=None):
+            text = text.replace("&", "&&")         # a literal "&", not a mnemonic
+            a = QAction(style.standardIcon(icon), text, self) if icon is not None \
+                else QAction(text, self)
+            if tip:
+                a.setToolTip(tip)
+            a.triggered.connect(slot)
+            setattr(self, attr, a)
+            return a
+
+        act("act_open", tr("Open…"), self.open_archive_dialog, QStyle.SP_DirOpenIcon)
         self.act_open.setShortcut(QKeySequence.Open)
-        self.act_open.triggered.connect(self.open_archive_dialog)
-
-        self.act_extract_all = QAction(style.standardIcon(QStyle.SP_ArrowDown), "Extract All…", self)
-        self.act_extract_all.triggered.connect(lambda: self.extract(selected_only=False))
-
-        self.act_extract_sel = QAction(style.standardIcon(QStyle.SP_FileDialogDetailedView), "Extract Selected…", self)
-        self.act_extract_sel.triggered.connect(lambda: self.extract(selected_only=True))
-
-        self.act_replace = QAction(style.standardIcon(QStyle.SP_FileDialogStart), "Replace File…", self)
-        self.act_replace.triggered.connect(self.replace_selected)
-
-        self.act_save = QAction(style.standardIcon(QStyle.SP_DialogSaveButton), "Save", self)
+        act("act_extract_all", tr("Extract All…"),
+            lambda: self.extract(selected_only=False), QStyle.SP_ArrowDown)
+        act("act_extract_sel", tr("Extract Selected…"),
+            lambda: self.extract(selected_only=True), QStyle.SP_FileDialogDetailedView)
+        act("act_replace", tr("Replace File…"), self.replace_selected,
+            QStyle.SP_FileDialogStart)
+        act("act_save", tr("Save"), self.save_archive, QStyle.SP_DialogSaveButton)
         self.act_save.setShortcut(QKeySequence.Save)
-        self.act_save.triggered.connect(self.save_archive)
+        act("act_discard", tr("Discard Edits"), self.discard_edits,
+            QStyle.SP_DialogResetButton)
 
-        self.act_discard = QAction(style.standardIcon(QStyle.SP_DialogResetButton), "Discard Edits", self)
-        self.act_discard.triggered.connect(self.discard_edits)
-
-        self.act_songmgr = QAction(style.standardIcon(QStyle.SP_FileDialogContentsView),
-                                   "Song Manager…", self)
-        self.act_songmgr.setToolTip("Edit/add/remove songs across musicinfo + tuning + streaminfo")
-        self.act_songmgr.triggered.connect(self.open_song_manager)
-
-        self.act_songbuild = QAction(style.standardIcon(QStyle.SP_FileDialogNewFolder),
-                                     "Custom Song Builder…", self)
-        self.act_songbuild.setToolTip("Replace a song slot from a TJA + audio: textures, charts, VAG, stars")
-        self.act_songbuild.triggered.connect(self.open_song_builder)
-
-        self.act_songreplace = QAction(style.standardIcon(QStyle.SP_BrowserReload),
-                                       "Song Replacer…", self)
-        self.act_songreplace.setToolTip(
-            "Overwrite an existing song slot with a custom song (boot-safe: counts "
-            "stay identical). Stages + writes DATA.000 in one step.")
-        self.act_songreplace.triggered.connect(self.open_song_replacer)
-
-        self.act_packiso = QAction(style.standardIcon(QStyle.SP_DriveCDIcon),
-                                   "Pack to ISO…", self)
-        self.act_packiso.setToolTip("Inject the current DATA.000 + LIST.BIN into a new game ISO")
-        self.act_packiso.triggered.connect(self.open_pack_iso)
+        act("act_songmgr", tr("Song Manager…"), self.open_song_manager,
+            QStyle.SP_FileDialogContentsView,
+            tr("Edit/add/remove songs across musicinfo + tuning + streaminfo"))
+        act("act_songbuild", tr("Custom Song Builder…"), self.open_song_builder,
+            QStyle.SP_FileDialogNewFolder,
+            tr("Replace a song slot from a TJA + audio: textures, charts, VAG, stars"))
+        act("act_songreplace", tr("Song Replacer…"), self.open_song_replacer,
+            QStyle.SP_BrowserReload,
+            tr("Overwrite an existing song slot with a custom song (boot-safe: "
+               "counts stay identical). Stages + writes DATA.000 in one step."))
+        act("act_packiso", tr("Pack to ISO…"), self.open_pack_iso, QStyle.SP_DriveCDIcon,
+            tr("Inject the current DATA.000 + LIST.BIN into a new game ISO"))
 
         # "Open PS2 HDD (.img)…" (act_hdd -> hdd_browser) and "HDD Song Wizard…"
         # (act_hddwiz -> hdd_song_wizard) were removed from the UI as unused; the
         # modules and the open_hdd_browser/open_hdd_wizard handlers are still here
         # if they need re-exposing. Use the pfsshell browser for HDD file work.
-
-        self.act_ps2mc = QAction(style.standardIcon(QStyle.SP_DriveFDIcon),
-                                 "Open PS2 Memory Card (Arcade/COH)…", self)
-        self.act_ps2mc.setToolTip(
-            "Browse a PS2 / MagicGate-Arcade memory-card image (what mymc does): "
-            "extract / replace T14GAME, boot.bin, IRXARC.BIN… ECC is regenerated "
-            "on write.")
-        self.act_ps2mc.triggered.connect(self.open_ps2mc)
-
-        self.act_pfsshell = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                    "Open PS2 HDD via pfsshell…", self)
-        self.act_pfsshell.setToolTip(
-            "Browse a PS2 HDD image with the native pfsshell.exe backend "
-            "(extract / replace DATA.000, list.bin). Close any emulator holding "
-            "the image first.")
-        self.act_pfsshell.triggered.connect(self.open_pfsshell)
-
-        self.act_taikoexe = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                    "Patch taiko song limit (T14+)…", self)
-        self.act_taikoexe.setToolTip(
-            "Raise the 210-song ceiling in `taiko` (the exe T14+ actually runs, on "
-            "the HDD — not the dongle's T14GAME). Relocates ctx->arrayB so it stops "
-            "aliasing arrayA. Close any emulator holding the image first.")
-        self.act_taikoexe.triggered.connect(self.open_taiko_exe)
-
-        self.act_taikotimer = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                      "Song-select timer (T14+)…", self)
-        self.act_taikotimer.setToolTip(
-            "Change the song-select countdown in `taiko` (stock 120 s) to any "
-            "value from 1 to 999 s. Sets all three select-flow inactivity timers "
-            "that otherwise drop you back to the attract loop. Close any emulator "
-            "holding the image first.")
-        self.act_taikotimer.triggered.connect(self.open_taiko_timer)
-
-        self.act_taikoboot = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                     "Boot & select patches (T14+)…", self)
-        self.act_taikoboot.setToolTip(
-            "Checkboxes for `taiko`: skip the boot Notice screen, skip the attract "
-            "credits (協力) screen, freeze the song-select countdown, disable the "
-            "difficulty-select timeout. Unticking restores the stock code. Close "
-            "any emulator holding the image first.")
-        self.act_taikoboot.triggered.connect(self.open_taiko_boot)
-
-        self.act_usbkbd = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                  "USB keyboard patch (T14)…", self)
-        self.act_usbkbd.setToolTip(
-            "Play Taiko 14 with a USB keyboard and no JVS I/O board (KBD2EE.irx). "
-            "Installs into the HDD game partition (card untouched) or onto the "
-            "dongle card image. Close any emulator holding the image first.")
-        self.act_usbkbd.triggered.connect(self.open_usb_keyboard)
-
-        self.act_imgslim = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                   "Slim PS2 HDD image…", self)
-        self.act_imgslim.setToolTip(
-            "Reclaim disk space from a .img. Punches holes over regions that "
-            "already read as zero, so the emulator still reads identical bytes. "
-            "Close any emulator holding the image first.")
-        self.act_imgslim.triggered.connect(self.open_img_slim)
-
-        self.act_apamerge = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                    "Merge HDD images (multi-game disk)…", self)
-        self.act_apamerge.setToolTip(
-            "Combine several game HDD images into one APA disk. Each game's "
-            "memory card looks up its own partition by name, so the card alone "
-            "selects which game boots. Sources are never modified.")
-        self.act_apamerge.triggered.connect(self.open_apa_merge)
-
-        self.act_omnimix = QAction(style.standardIcon(QStyle.SP_DriveHDIcon),
-                                   "Omnimix Maker (fuse many games)…", self)
-        self.act_omnimix.setToolTip(
-            "Harvest every song from several Taiko images (8…14) and merge the "
-            "ones the target lacks into one image — charts, textures, audio and "
-            "stars — then lift the exe's song ceiling. Dedup by id; the target is "
-            "the base. Close any emulator holding the images first.")
-        self.act_omnimix.triggered.connect(self.open_omnimix)
-
-        self.act_gen3conv = QAction("Gen3 → Gen2 converter…", self)
-        self.act_gen3conv.setToolTip(
-            "Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin to "
-            ".sht, and song_<id>.nus3bank to a game VAG. Audio decoding needs "
-            "vgmstream.")
-        self.act_gen3conv.triggered.connect(self.open_gen3_convert)
-
-        self.act_shtgen = QAction("SHT Generator (TJA→sht)…", self)
-        self.act_shtgen.setToolTip("Convert a TJA chart to .sht files, exported to a folder")
-        self.act_shtgen.triggered.connect(self.open_sht_generator)
-        self.act_vaggen = QAction("VAG Generator (audio→vag)…", self)
-        self.act_vaggen.setToolTip("Convert wav/ogg to the game's VAG stream, exported to a folder")
-        self.act_vaggen.triggered.connect(self.open_vag_generator)
-        self.act_shtval = QAction("SHT Validator (check format)…", self)
-        self.act_shtval.setToolTip("Validate a .sht chart against the official on-disc format")
-        self.act_shtval.triggered.connect(self.open_sht_validator)
+        close_first = " " + tr("Close any emulator holding the image first.")
+        act("act_ps2mc", tr("Open PS2 Memory Card (Arcade/COH)…"), self.open_ps2mc,
+            QStyle.SP_DriveFDIcon,
+            tr("Browse a PS2 / MagicGate-Arcade memory-card image (what mymc "
+               "does): extract / replace T14GAME, boot.bin, IRXARC.BIN… ECC is "
+               "regenerated on write."))
+        act("act_pfsshell", tr("Open PS2 HDD via pfsshell…"), self.open_pfsshell,
+            QStyle.SP_DriveHDIcon,
+            tr("Browse a PS2 HDD image with the native pfsshell.exe backend "
+               "(extract / replace DATA.000, list.bin).") + close_first)
+        act("act_taikoexe", tr("Patch taiko song limit (T14+)…"), self.open_taiko_exe,
+            QStyle.SP_DriveHDIcon,
+            tr("Raise the 210-song ceiling in `taiko` (the exe T14+ actually "
+               "runs, on the HDD — not the dongle's T14GAME).") + close_first)
+        act("act_taikotimer", tr("Song-select timer (T14+)…"), self.open_taiko_timer,
+            QStyle.SP_DriveHDIcon,
+            tr("Change the song-select countdown in `taiko` (stock 120 s) to any "
+               "value from 1 to 999 s.") + close_first)
+        act("act_taikoboot", tr("Boot & select patches (T14+)…"), self.open_taiko_boot,
+            QStyle.SP_DriveHDIcon,
+            tr("Checkboxes for `taiko`: skip the boot Notice screen, skip the "
+               "attract credits (協力) screen, freeze the song-select countdown, "
+               "disable the difficulty-select timeout. Unticking restores the "
+               "stock code.") + close_first)
+        act("act_usbkbd", tr("USB keyboard patch (T14)…"), self.open_usb_keyboard,
+            QStyle.SP_DriveHDIcon,
+            tr("Play Taiko 14 with a USB keyboard and no JVS I/O board "
+               "(KBD2EE.irx). Installs into the HDD game partition (card "
+               "untouched) or onto the dongle card image.") + close_first)
+        act("act_imgslim", tr("Slim PS2 HDD image…"), self.open_img_slim,
+            QStyle.SP_DriveHDIcon,
+            tr("Reclaim disk space from a .img. Punches holes over regions that "
+               "already read as zero, so the emulator still reads identical "
+               "bytes.") + close_first)
+        act("act_apamerge", tr("Merge HDD images (multi-game disk)…"),
+            self.open_apa_merge, QStyle.SP_DriveHDIcon,
+            tr("Combine several game HDD images into one APA disk. Each game's "
+               "memory card looks up its own partition by name, so the card "
+               "alone selects which game boots. Sources are never modified."))
+        act("act_omnimix", tr("Omnimix Maker (fuse many games)…"), self.open_omnimix,
+            QStyle.SP_DriveHDIcon,
+            tr("Harvest every song from several Taiko images (7…14) and merge "
+               "the ones the target lacks into one image — charts, textures, "
+               "audio and stars — then lift the exe's song ceiling.") + close_first)
+        act("act_gen3conv", tr("Gen3 → Gen2 converter…"), self.open_gen3_convert,
+            tip=tr("Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin "
+                   "to .sht, and song_<id>.nus3bank to a game VAG. Audio decoding "
+                   "needs vgmstream."))
+        act("act_shtgen", tr("SHT Generator (TJA→sht)…"), self.open_sht_generator,
+            tip=tr("Convert a TJA chart to .sht files, exported to a folder"))
+        act("act_vaggen", tr("VAG Generator (audio→vag)…"), self.open_vag_generator,
+            tip=tr("Convert wav/ogg to the game's VAG stream, exported to a folder"))
+        act("act_shtval", tr("SHT Validator (check format)…"), self.open_sht_validator,
+            tip=tr("Validate a .sht chart against the official on-disc format"))
 
         for a in (self.act_open, self.act_extract_all, self.act_extract_sel,
                   self.act_replace, self.act_save, self.act_discard):
             tb.addAction(a)
         tb.addSeparator()
         tb.addAction(self.act_songmgr)
+        tb.addAction(self.act_songbuild)
+        tb.addAction(self.act_packiso)
 
-        menu = self.menuBar().addMenu("&File")
+        menu = self.menuBar().addMenu(tr("&File"))
         menu.addAction(self.act_open)
         menu.addSeparator()
         menu.addAction(self.act_extract_all)
@@ -618,29 +653,48 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_replace)
         menu.addAction(self.act_save)
         menu.addAction(self.act_discard)
-        tb.addAction(self.act_songbuild)
-        tb.addAction(self.act_packiso)
-        tools = self.menuBar().addMenu("&Tools")
-        tools.addAction(self.act_songmgr)
-        tools.addAction(self.act_songreplace)
-        tools.addAction(self.act_songbuild)
-        tools.addAction(self.act_packiso)
-        tools.addSeparator()
-        tools.addAction(self.act_shtgen)
-        tools.addAction(self.act_vaggen)
-        tools.addAction(self.act_shtval)
-        tools.addSeparator()
-        tools.addAction(self.act_pfsshell)
-        tools.addAction(self.act_ps2mc)
-        tools.addAction(self.act_taikoexe)
-        tools.addAction(self.act_taikotimer)
-        tools.addAction(self.act_taikoboot)
-        tools.addAction(self.act_usbkbd)
-        tools.addAction(self.act_imgslim)
-        tools.addAction(self.act_apamerge)
-        tools.addAction(self.act_omnimix)
-        tools.addAction(self.act_gen3conv)
+
+        tools = self.menuBar().addMenu(tr("&Tools"))
+        for title, acts in (
+                (tr("Songs"), (self.act_songmgr, self.act_songreplace,
+                               self.act_songbuild, None, self.act_omnimix)),
+                (tr("Charts && audio"), (self.act_shtgen, self.act_vaggen,
+                                         self.act_shtval, None, self.act_gen3conv)),
+                (tr("PS2 HDD && memory card"), (self.act_pfsshell, self.act_ps2mc,
+                                                None, self.act_imgslim,
+                                                self.act_apamerge, self.act_packiso)),
+                (tr("taiko executable patches"), (self.act_taikoexe,
+                                                  self.act_taikotimer,
+                                                  self.act_taikoboot,
+                                                  self.act_usbkbd))):
+            sub = tools.addMenu(title)
+            for a in acts:
+                if a is None:
+                    sub.addSeparator()
+                else:
+                    sub.addAction(a)
+
+        settings = self.menuBar().addMenu(tr("&Settings"))
+        lang_menu = settings.addMenu(tr("Language"))
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        self.lang_actions = {}
+        for code, name in i18n.LANGUAGES.items():
+            a = QAction(name, self, checkable=True)
+            a.setChecked(code == i18n.lang())
+            a.triggered.connect(lambda _=False, c=code: self._set_language(c))
+            group.addAction(a)
+            lang_menu.addAction(a)
+            self.lang_actions[code] = a
         self._update_actions()
+
+    def _set_language(self, code: str):
+        if code == i18n.lang():
+            return
+        i18n.set_lang(code)
+        QMessageBox.information(
+            self, i18n.tr_in(code, "Language"),
+            i18n.tr_in(code, "Restart Taiko2x6Wizard to use the new language."))
 
     def _update_actions(self):
         has = self.archive is not None
@@ -649,11 +703,27 @@ class MainWindow(QMainWindow):
             a.setEnabled(has)
         self.act_save.setEnabled(has and self.archive.dirty)
         self.act_discard.setEnabled(has and self.archive.dirty)
+        self.left_stack.setCurrentIndex(1 if has else 0)
+
+    def _restore_layout(self):
+        s = _settings()
+        geo = s.value("window_geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        split = s.value("splitter_state")
+        if split is not None:
+            self.split.restoreState(split)
+
+    def _save_layout(self):
+        s = _settings()
+        s.setValue("window_geometry", self.saveGeometry())
+        s.setValue("splitter_state", self.split.saveState())
+        s.setValue("options_open", self.btn_opts.isChecked())
 
     # -- open -----------------------------------------------------------------
     def open_archive_dialog(self):
         folder = appconfig.pick_dir(self, "archive_dir",
-                                    "Choose folder containing LIST.BIN + DATA.000")
+                                    tr("Choose folder containing LIST.BIN + DATA.000"))
         if folder:
             self.open_folder(Path(folder))
 
@@ -661,8 +731,8 @@ class MainWindow(QMainWindow):
         list_path = _find_ci(folder, ["list.bin"])
         data_path = _find_ci(folder, ["data.000"])
         if not list_path or not data_path:
-            QMessageBox.warning(self, "Not found",
-                                f"Could not find both LIST.BIN and DATA.000 in:\n{folder}")
+            QMessageBox.warning(self, tr("Not found"),
+                                tr("Could not find both LIST.BIN and DATA.000 in:\n{folder}").format(folder=folder))
             return
         self._load(list_path, data_path)
 
@@ -674,16 +744,17 @@ class MainWindow(QMainWindow):
             self.archive = Archive(list_path, data_path, fmt=2)
         except Exception as exc:
             log.error("open failed for %s: %s", data_path, exc)
-            QMessageBox.critical(self, "Open failed", f"{exc}\n\n{traceback.format_exc()}")
+            QMessageBox.critical(self, tr("Open failed"), f"{exc}\n\n{traceback.format_exc()}")
             return
-        self.setWindowTitle(f"Taiko SYSTEM256 Explorer — {data_path}")
+        self.setWindowTitle(f"Taiko2x6Wizard — {data_path}")
         self._populate_tree()
         a = self.archive
         log.info("loaded %d groups · %d files · DATA %.1f MB",
                  len(a.layout.groups), len(a.layout.files), a.data_len / 1e6)
         self.statusBar().showMessage(
-            f"{len(a.layout.groups)} groups · {len(a.layout.files)} files · "
-            f"DATA {a.data_len/1e6:.1f} MB")
+            tr("{groups} groups · {files} files · DATA {mb:.1f} MB").format(
+                groups=len(a.layout.groups), files=len(a.layout.files),
+                mb=a.data_len / 1e6))
         self._update_actions()
 
     def _populate_tree(self):
@@ -777,12 +848,12 @@ class MainWindow(QMainWindow):
         try:
             data = self.archive.read_file(group, entry)
         except Exception as exc:
-            QMessageBox.critical(self, "Read failed", str(exc))
+            QMessageBox.critical(self, tr("Read failed"), str(exc))
             return
         try:
             dlg = mod.Editor(data, f"{group['name']}/{entry['name']}", self)
         except Exception as exc:
-            QMessageBox.critical(self, "Editor failed", f"{exc}\n\n{traceback.format_exc()}")
+            QMessageBox.critical(self, tr("Editor failed"), f"{exc}\n\n{traceback.format_exc()}")
             return
         if dlg.exec() and dlg.result_bytes is not None and dlg.result_bytes != data:
             self.archive.stage_replace(gi, fi, dlg.result_bytes)
@@ -800,7 +871,7 @@ class MainWindow(QMainWindow):
         try:
             data = self.archive.read_file(group, entry)
         except Exception as exc:
-            QMessageBox.critical(self, "Read failed", str(exc))
+            QMessageBox.critical(self, tr("Read failed"), str(exc))
             return
         # decode up to 64 group textures for visual context
         textures = []
@@ -833,7 +904,7 @@ class MainWindow(QMainWindow):
         try:
             data = self.archive.read_file(group, entry)
         except Exception as exc:
-            QMessageBox.critical(self, "Read failed", str(exc))
+            QMessageBox.critical(self, tr("Read failed"), str(exc))
             return
         modified = (gi, fi) in self.archive.replacements
         self.preview.show_file(entry["name"], group["name"], entry, data, modified)
@@ -874,11 +945,11 @@ class MainWindow(QMainWindow):
             template = self.archive.read_file(group, entry)
             lay = tim2.first_picture_layout(template)
             if lay["image_type"] != 4 or (lay["width"], lay["height"]) != (640, 160):
-                QMessageBox.warning(self, "Song texture",
-                                    "This nut is not a 640×160 4-bit song-name slot.")
+                QMessageBox.warning(self, tr("Song texture"),
+                                    tr("This nut is not a 640×160 4-bit song-name slot."))
                 return
         except Exception as exc:
-            QMessageBox.critical(self, "Read failed", str(exc))
+            QMessageBox.critical(self, tr("Read failed"), str(exc))
             return
         # seed title from the song id in the group name
         sid = group["name"].split("kenri_song_", 1)[-1]
@@ -911,7 +982,7 @@ class MainWindow(QMainWindow):
                     log.debug("frames: decode skipped %s/%s: %s",
                               group['name'], e['name'], exc)
         if not frames:
-            QMessageBox.information(self, "Frame Player", "No .nut frames found here.")
+            QMessageBox.information(self, tr("Frame Player"), tr("No .nut frames found here."))
             return
         title = item.text() if item.text() else "frames"
         dlg = flipbook_player.FlipbookPlayer(frames, title, self)
@@ -922,14 +993,14 @@ class MainWindow(QMainWindow):
         group = self.archive.layout.groups[gi]
         files = {e["name"]: e for e in self.archive.layout.files_for_group(group)}
         if "hd" not in files or "bd" not in files:
-            QMessageBox.information(self, "Sound bank", "This group has no hd/bd pair.")
+            QMessageBox.information(self, tr("Sound bank"), tr("This group has no hd/bd pair."))
             return
         try:
             hd = self.archive.read_file(group, files["hd"])
             bd = self.archive.read_file(group, files["bd"])
             dlg = audioplayer.SoundBankDialog(hd, bd, group["name"], self)
         except Exception as exc:
-            QMessageBox.critical(self, "Sound bank failed",
+            QMessageBox.critical(self, tr("Sound bank failed"),
                                  f"{exc}\n\n{traceback.format_exc()}")
             return
         dlg.exec()
@@ -938,20 +1009,20 @@ class MainWindow(QMainWindow):
         gi, fi = item.data(ROLE_GROUP), item.data(ROLE_FILE)
         group = self.archive.layout.groups[gi]
         entry = self.archive.layout.files[fi]
-        dest = appconfig.pick_save(self, "export", "Export file", entry["name"])
+        dest = appconfig.pick_save(self, "export", tr("Export file"), entry["name"])
         if not dest:
             return
         try:
             Path(dest).write_bytes(self.archive.read_file(group, entry))
             self.statusBar().showMessage(f"Exported {entry['name']} → {dest}")
         except Exception as exc:
-            QMessageBox.critical(self, "Export failed", str(exc))
+            QMessageBox.critical(self, tr("Export failed"), str(exc))
 
     # -- replace --------------------------------------------------------------
     def replace_selected(self):
         item = self._current_file_item()
         if not item:
-            QMessageBox.information(self, "Replace", "Select a single file to replace.")
+            QMessageBox.information(self, tr("Replace"), tr("Select a single file to replace."))
             return
         gi, fi = item.data(ROLE_GROUP), item.data(ROLE_FILE)
         entry = self.archive.layout.files[fi]
@@ -986,7 +1057,7 @@ class MainWindow(QMainWindow):
     def discard_edits(self):
         if not self.archive or not self.archive.dirty:
             return
-        if QMessageBox.question(self, "Discard", "Discard all staged replacements?") \
+        if QMessageBox.question(self, tr("Discard"), tr("Discard all staged replacements?")) \
                 != QMessageBox.Yes:
             return
         self.archive.discard_edits()
@@ -1012,7 +1083,7 @@ class MainWindow(QMainWindow):
         for fn in needed:
             hit = self._find_archive_file(fn)
             if hit is None:
-                QMessageBox.warning(self, "Song Manager",
+                QMessageBox.warning(self, tr("Song Manager"),
                                     f"Could not find {fn} in this archive.")
                 return
             located[fn] = hit
@@ -1021,7 +1092,7 @@ class MainWindow(QMainWindow):
             dlg = song_manager.SongManager(
                 data["musicinfo.bin"], data["tuning.bin"], data["streaminfo.bin"], self)
         except Exception as exc:
-            QMessageBox.critical(self, "Song Manager failed",
+            QMessageBox.critical(self, tr("Song Manager failed"),
                                  f"{exc}\n\n{traceback.format_exc()}")
             return
         if not dlg.exec() or not getattr(dlg, "result", None):
@@ -1083,7 +1154,7 @@ class MainWindow(QMainWindow):
         try:
             taiko_exe.find_t14load()
         except taiko_exe.TaikoExeError as exc:
-            QMessageBox.warning(self, "Patch taiko", str(exc))
+            QMessageBox.warning(self, tr("Patch taiko"), str(exc))
             return
         dlg = taiko_exe.TaikoExeDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
@@ -1093,7 +1164,7 @@ class MainWindow(QMainWindow):
         try:
             taiko_exe.find_t14load()
         except taiko_exe.TaikoExeError as exc:
-            QMessageBox.warning(self, "Song-select timer", str(exc))
+            QMessageBox.warning(self, tr("Song-select timer"), str(exc))
             return
         dlg = taiko_exe.TaikoTimerDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
@@ -1103,7 +1174,7 @@ class MainWindow(QMainWindow):
         try:
             taiko_exe.find_t14load()
         except taiko_exe.TaikoExeError as exc:
-            QMessageBox.warning(self, "Boot & select patches", str(exc))
+            QMessageBox.warning(self, tr("Boot & select patches"), str(exc))
             return
         dlg = taiko_exe.TaikoBootDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
@@ -1116,7 +1187,7 @@ class MainWindow(QMainWindow):
     def open_gen3_convert(self):
         from taiko2x6.charts import gen3_convert
         if gen3_convert.QDialog is None:
-            QMessageBox.warning(self, "Gen3 → Gen2", "PySide6 is required.")
+            QMessageBox.warning(self, "Gen3 → Gen2", tr("PySide6 is required."))
             return
         dlg = gen3_convert.Gen3ConvertDialog(self)
         dlg.exec()
@@ -1124,11 +1195,11 @@ class MainWindow(QMainWindow):
     def open_img_slim(self):
         from taiko2x6.ps2 import img_slim
         if img_slim.QDialog is None:
-            QMessageBox.warning(self, "Slim image", "PySide6 is required.")
+            QMessageBox.warning(self, tr("Slim image"), tr("PySide6 is required."))
             return
         if os.name != "nt":
             QMessageBox.warning(
-                self, "Slim image",
+                self, tr("Slim image"),
                 "Slimming uses NTFS sparse files and needs Windows.")
             return
         dlg = img_slim.ImgSlimDialog(self, default_img=self._recent_hdd_img() or "")
@@ -1137,7 +1208,7 @@ class MainWindow(QMainWindow):
     def open_apa_merge(self):
         from taiko2x6.ps2 import apa_merge
         if apa_merge.QDialog is None:
-            QMessageBox.warning(self, "Merge HDD images", "PySide6 is required.")
+            QMessageBox.warning(self, tr("Merge HDD images"), tr("PySide6 is required."))
             return
         dlg = apa_merge.ApaMergeDialog(self)
         dlg.exec()
@@ -1146,7 +1217,7 @@ class MainWindow(QMainWindow):
         try:
             from taiko2x6.songs import omnimix_gui
         except Exception as exc:
-            QMessageBox.warning(self, "Omnimix Maker", f"Could not load: {exc}")
+            QMessageBox.warning(self, tr("Omnimix Maker"), f"Could not load: {exc}")
             return
         dlg = omnimix_gui.OmnimixDialog(self, default_img=self._recent_hdd_img() or "")
         dlg.exec()
@@ -1169,10 +1240,10 @@ class MainWindow(QMainWindow):
 
     def open_song_replacer(self):
         if not self.archive:
-            QMessageBox.information(self, "Song Replacer", "Open an archive first.")
+            QMessageBox.information(self, tr("Song Replacer"), tr("Open an archive first."))
             return
         if self.archive.dirty and QMessageBox.question(
-                self, "Song Replacer",
+                self, tr("Song Replacer"),
                 "There are unsaved staged edits. Replacing a song will add to them "
                 "and then write everything out. Continue?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
@@ -1188,7 +1259,7 @@ class MainWindow(QMainWindow):
         # Write it out immediately with the boot-safe (layout-preserving) full
         # rebuild, so the result is a ready-to-run DATA.000 / list.bin.
         if QMessageBox.question(
-                self, "Write DATA.000",
+                self, tr("Write DATA.000"),
                 "Song staged into the slot. Write it into DATA.000 / list.bin now "
                 "(boot-safe full rebuild, .bak backup)?",
                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
@@ -1228,7 +1299,7 @@ class MainWindow(QMainWindow):
         a = self.archive
         list_path, data_path = a.list_path, a.data_path
         if QMessageBox.question(
-                self, "Write new archive",
+                self, tr("Write new archive"),
                 f"A new song was built. Overwrite (with .bak backup)?\n\n"
                 f"{list_path}\n{data_path}") != QMessageBox.Yes:
             return
@@ -1242,13 +1313,13 @@ class MainWindow(QMainWindow):
                        backup=True)
         except Exception as exc:
             prog.close()
-            QMessageBox.critical(self, "Write failed", str(exc))
+            QMessageBox.critical(self, tr("Write failed"), str(exc))
             self._reload_after_save(list_path, data_path)
             return
         prog.close()
         self._reload_after_save(list_path, data_path)
         QMessageBox.information(
-            self, "New song added",
+            self, tr("New song added"),
             f"Wrote rebuilt archive.\nGroups now: {len(self.archive.layout.groups)}, "
             f"files: {len(self.archive.layout.files)}.\nAudio (if any) is included in DATA.000.")
 
@@ -1313,7 +1384,7 @@ class MainWindow(QMainWindow):
             if not full_rebuild and "fit" in str(exc).lower():
                 hint = ("\n\nTip: tick 'full rebuild' in Save options to allow "
                         "larger replacements (it rewrites the DATA layout).")
-            QMessageBox.critical(self, "Save failed", str(exc) + hint)
+            QMessageBox.critical(self, tr("Save failed"), str(exc) + hint)
             # reopen mmap so the app stays usable
             self._reload_after_save(a.list_path, a.data_path)
             return
@@ -1324,9 +1395,10 @@ class MainWindow(QMainWindow):
                  summary['changed_groups'], summary['files'], took)
         extra = (f"\nDATA size: {summary['data_size']/1e6:.1f} MB" if full_rebuild else "")
         QMessageBox.information(
-            self, "Saved",
-            f"{'Rebuilt' if full_rebuild else 'Patched'} {summary['changed_groups']} group(s), "
-            f"{summary['files']} file(s) in {took}.{extra}\n\n{out_list}\n{out_data}")
+            self, tr("Saved"),
+            tr("Wrote {groups} group(s), {files} file(s) in {took}.").format(
+                groups=summary['changed_groups'], files=summary['files'], took=took)
+            + f"{extra}\n\n{out_list}\n{out_data}")
         # reload from the written files so further edits start clean
         self._reload_after_save(out_list if not self.chk_overwrite.isChecked() else a.list_path,
                                 out_data if not self.chk_overwrite.isChecked() else a.data_path)
@@ -1337,7 +1409,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             # the old archive is already closed; do not leave a dangling handle
             self.archive = None
-            QMessageBox.critical(self, "Reload failed", str(exc))
+            QMessageBox.critical(self, tr("Reload failed"), str(exc))
             self._populate_tree()      # clears the now-stale tree
             self._update_actions()     # disables save/extract/etc.
             return
@@ -1376,9 +1448,9 @@ class MainWindow(QMainWindow):
             return
         groups = self._collect_group_indices(selected_only)
         if not groups:
-            QMessageBox.information(self, "Extract", "Nothing selected to extract.")
+            QMessageBox.information(self, tr("Extract"), tr("Nothing selected to extract."))
             return
-        out = appconfig.pick_dir(self, "extract_dir", "Extract to folder")
+        out = appconfig.pick_dir(self, "extract_dir", tr("Extract to folder"))
         if not out:
             return
         workers = self.spin_threads.value()
@@ -1413,11 +1485,12 @@ class MainWindow(QMainWindow):
             ptxt = f" · {pngs:,} PNG" if convert_png else ""
             stxt = f" · {png_skipped:,} texture(s) skipped" if png_skipped else ""
             if error:
-                QMessageBox.critical(self, "Extract failed", error)
+                QMessageBox.critical(self, tr("Extract failed"), error)
             else:
                 QMessageBox.information(
-                    self, "Extract complete",
-                    f"Extracted {g} groups, {f} files{ptxt} in {took} ({rate}){mtxt}{stxt}\n→ {out_dir}")
+                    self, tr("Extract complete"),
+                    tr("Extracted {g} groups, {f} files").format(g=g, f=f)
+                    + f"{ptxt} · {took} ({rate}){mtxt}{stxt}\n→ {out_dir}")
             self.statusBar().showMessage(
                 f"Extracted {g} groups · {f} files{ptxt} · {took} · {rate}{mtxt}{stxt}")
             self.worker = None
@@ -1431,8 +1504,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.archive and self.archive.dirty:
             r = QMessageBox.question(
-                self, "Unsaved edits",
-                "You have unsaved replacements. Quit anyway?",
+                self, tr("Unsaved edits"),
+                tr("You have unsaved replacements. Quit anyway?"),
                 QMessageBox.Yes | QMessageBox.No)
             if r != QMessageBox.Yes:
                 event.ignore()
@@ -1446,6 +1519,7 @@ class MainWindow(QMainWindow):
             w.wait(3000)
         if self.archive:
             self.archive.close()
+        self._save_layout()
         super().closeEvent(event)
 
 
@@ -1483,6 +1557,10 @@ def _bin_editor_module(filename: str):
             except Exception as exc:
                 log.debug("bin-editor: skipped %s: %s", stem, exc)
     return _BIN_EDITORS.get(Path(filename).name.lower())
+
+
+def _settings() -> QSettings:
+    return QSettings("TaikoTools", "SYSTEM256Explorer")
 
 
 def _fmt_duration(seconds: float) -> str:

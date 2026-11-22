@@ -980,6 +980,7 @@ except ImportError:                     # CLI-only environment
     pass
 else:
     from taiko2x6.app import appconfig
+    from taiko2x6.app.i18n import tr
 
     class _Worker(QThread):
         done = Signal(object)
@@ -1001,7 +1002,7 @@ else:
 
         def __init__(self, parent=None, default_img=''):
             super().__init__(parent)
-            self.setWindowTitle('Patch taiko song limit (T14+)')
+            self.setWindowTitle(tr('Patch taiko song limit (T14+)'))
             self.resize(720, 460)
             self._workers: list[_Worker] = []
             self._build_ui()
@@ -1012,13 +1013,13 @@ else:
             lay = QVBoxLayout(self)
 
             row = QHBoxLayout()
-            b = QPushButton('HDD .img…'); b.clicked.connect(self._pick)
+            b = QPushButton(tr('HDD .img…')); b.clicked.connect(self._pick)
             self.ed_img = QLineEdit(); self.ed_img.setReadOnly(True)
             row.addWidget(b); row.addWidget(self.ed_img, 1)
             lay.addLayout(row)
 
             row = QHBoxLayout()
-            row.addWidget(QLabel('Song ceiling:'))
+            row.addWidget(QLabel(tr('Song ceiling:')))
             self.sp = QSpinBox()
             self.sp.setRange(BASE_SONGS, MAX_SONGS_BIG)
             self.sp.setValue(212)
@@ -1037,10 +1038,10 @@ else:
                                     f'experimental max {MAX_SONGS_BIG})')
             row.addWidget(self.lbl_range)
             row.addStretch(1)
-            self.b_check = QPushButton('Check'); self.b_check.clicked.connect(self._check)
-            self.b_backup = QPushButton('Back up taiko…'); self.b_backup.clicked.connect(self._backup)
-            self.b_patch = QPushButton('Patch'); self.b_patch.clicked.connect(self._patch)
-            self.b_restore = QPushButton('Restore…'); self.b_restore.clicked.connect(self._restore)
+            self.b_check = QPushButton(tr('Check')); self.b_check.clicked.connect(self._check)
+            self.b_backup = QPushButton(tr('Back up taiko…')); self.b_backup.clicked.connect(self._backup)
+            self.b_patch = QPushButton(tr('Patch')); self.b_patch.clicked.connect(self._patch)
+            self.b_restore = QPushButton(tr('Restore…')); self.b_restore.clicked.connect(self._restore)
             for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
                 row.addWidget(w)
             lay.addLayout(row)
@@ -1069,7 +1070,7 @@ else:
                 self.lbl_range.setStyleSheet('')
 
         def _pick(self):
-            p = appconfig.pick_open(self, 'hddimg', 'Open PS2 HDD image',
+            p = appconfig.pick_open(self, 'hddimg', tr('Open PS2 HDD image'),
                                     'HDD image (*.img *.raw *.bin);;All files (*)')
             if p:
                 self.ed_img.setText(p)
@@ -1077,7 +1078,7 @@ else:
         def _img(self):
             p = self.ed_img.text().strip()
             if not p:
-                QMessageBox.information(self, 'Patch taiko', 'Pick an HDD image first.')
+                QMessageBox.information(self, tr('Patch taiko'), tr('Pick an HDD image first.'))
                 return None
             return p
 
@@ -1107,13 +1108,13 @@ else:
                 self.status.setText(
                     f'ceiling {n}, arrayB={moved}, arrayA={a_moved}')
 
-            self._run(task, ok, 'Reading + decrypting…')
+            self._run(task, ok, tr('Reading + decrypting…'))
 
         def _backup(self):
             img = self._img()
             if not img:
                 return
-            dest = appconfig.pick_save(self, 'taiko_backup', 'Back up taiko to',
+            dest = appconfig.pick_save(self, 'taiko_backup', tr('Back up taiko to'),
                                        'taiko.bin')
             if not dest:
                 return
@@ -1124,7 +1125,7 @@ else:
                 return len(data)
 
             self._run(task, lambda n: self._say(f'backed up {n:,} B -> {dest}'),
-                      'Extracting /taiko…')
+                      tr('Extracting /taiko…'))
 
         def _patch(self):
             img = self._img()
@@ -1141,10 +1142,10 @@ else:
                     f'a high count. Test on a COPY of the image and raise the number '
                     f'gradually to find where it breaks.')
             if QMessageBox.warning(
-                    self, 'Patch taiko',
-                    f'Raise the song ceiling to {n} in {Path(img).name}?\n\n'
-                    f'The image is modified in place; {UNDO_NOTE}. '
-                    f'Make sure PCSX2 is closed. Continue?{extra}',
+                    self, tr('Patch taiko'),
+                    tr('Raise the song ceiling to {n} in {name}?').format(n=n, name=Path(img).name)
+                    + '\n\n' + tr('The image is modified in place; an undo '
+                    'journal is saved first. Make sure PCSX2 is closed. Continue?') + extra,
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             self._run(lambda log: patch_hdd(img, n, log=log),
@@ -1160,12 +1161,12 @@ else:
             if not img:
                 return
             src = appconfig.pick_open(self, 'taiko_backup',
-                                      'Restore taiko from (your backup)')
+                                      tr('Restore taiko from (your backup)'))
             if not src:
                 return
             self._run(lambda log: restore_hdd(img, src, log=log),
-                      lambda r: self.status.setText('restored ✓'),
-                      'Restoring /taiko…')
+                      lambda r: self.status.setText(tr('restored ✓')),
+                      tr('Restoring /taiko…'))
 
         # -- worker plumbing --
         def _say(self, s):
@@ -1194,8 +1195,8 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, 'Patch taiko', str(r[1]))
-                    self.status.setText('failed — image untouched')
+                    QMessageBox.critical(self, tr('Patch taiko'), str(r[1]))
+                    self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
 
@@ -1215,7 +1216,7 @@ else:
 
         def __init__(self, parent=None, default_img=''):
             super().__init__(parent)
-            self.setWindowTitle('Song-select timer (T14+)')
+            self.setWindowTitle(tr('Song-select timer (T14+)'))
             self.resize(680, 380)
             self._workers: list[_Worker] = []
             self._build_ui()
@@ -1226,13 +1227,13 @@ else:
             lay = QVBoxLayout(self)
 
             row = QHBoxLayout()
-            b = QPushButton('HDD .img…'); b.clicked.connect(self._pick)
+            b = QPushButton(tr('HDD .img…')); b.clicked.connect(self._pick)
             self.ed_img = QLineEdit(); self.ed_img.setReadOnly(True)
             row.addWidget(b); row.addWidget(self.ed_img, 1)
             lay.addLayout(row)
 
             row = QHBoxLayout()
-            row.addWidget(QLabel('Seconds:'))
+            row.addWidget(QLabel(tr('Seconds:')))
             self.sp = QSpinBox()
             self.sp.setRange(TIMER_MIN, TIMER_MAX)
             self.sp.setValue(TIMER_MAX)
@@ -1251,10 +1252,10 @@ else:
             lay.addLayout(row)
 
             row = QHBoxLayout()
-            self.b_check = QPushButton('Check'); self.b_check.clicked.connect(self._check)
-            self.b_backup = QPushButton('Back up taiko…'); self.b_backup.clicked.connect(self._backup)
-            self.b_patch = QPushButton('Apply'); self.b_patch.clicked.connect(self._patch)
-            self.b_restore = QPushButton('Restore…'); self.b_restore.clicked.connect(self._restore)
+            self.b_check = QPushButton(tr('Check')); self.b_check.clicked.connect(self._check)
+            self.b_backup = QPushButton(tr('Back up taiko…')); self.b_backup.clicked.connect(self._backup)
+            self.b_patch = QPushButton(tr('Apply')); self.b_patch.clicked.connect(self._patch)
+            self.b_restore = QPushButton(tr('Restore…')); self.b_restore.clicked.connect(self._restore)
             for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
                 row.addWidget(w)
             lay.addLayout(row)
@@ -1264,15 +1265,15 @@ else:
             lay.addWidget(self.log, 1)
 
             self.status = QLabel(
-                f'Stock is {TIMER_DEFAULT} s. Sets all three select-flow countdowns. '
-                f'Close PCSX2 first — it locks the .img. Back up `taiko` before '
-                f'your first patch.')
+                tr('Stock is {n} s. Sets all three select-flow countdowns. '
+                   'Close PCSX2 first — it locks the .img. Back up `taiko` before '
+                   'your first patch.').format(n=TIMER_DEFAULT))
             self.status.setWordWrap(True)
             self.status.setStyleSheet('color:#999;')
             lay.addWidget(self.status)
 
         def _pick(self):
-            p = appconfig.pick_open(self, 'hddimg', 'Open PS2 HDD image',
+            p = appconfig.pick_open(self, 'hddimg', tr('Open PS2 HDD image'),
                                     'HDD image (*.img *.raw *.bin);;All files (*)')
             if p:
                 self.ed_img.setText(p)
@@ -1280,7 +1281,7 @@ else:
         def _img(self):
             p = self.ed_img.text().strip()
             if not p:
-                QMessageBox.information(self, 'Song-select timer', 'Pick an HDD image first.')
+                QMessageBox.information(self, tr('Song-select timer'), tr('Pick an HDD image first.'))
                 return None
             return p
 
@@ -1300,19 +1301,19 @@ else:
                           f'{" (stock)" if secs == TIMER_DEFAULT else ""}')
                 self.status.setText(f'current timer = {secs} s')
 
-            self._run(task, ok, 'Reading + decrypting…')
+            self._run(task, ok, tr('Reading + decrypting…'))
 
         def _backup(self):
             img = self._img()
             if not img:
                 return
-            dest = appconfig.pick_save(self, 'taiko_backup', 'Back up taiko to', 'taiko.bin')
+            dest = appconfig.pick_save(self, 'taiko_backup', tr('Back up taiko to'), 'taiko.bin')
             if not dest:
                 return
             self._run(lambda log: (Path(dest).write_bytes(read_from_hdd(img)) or
                                    Path(dest).stat().st_size),
                       lambda n: self._say(f'backed up {n:,} B -> {dest}'),
-                      'Extracting /taiko…')
+                      tr('Extracting /taiko…'))
 
         def _patch(self):
             img = self._img()
@@ -1320,10 +1321,10 @@ else:
                 return
             n = self.sp.value()
             if QMessageBox.warning(
-                    self, 'Song-select timer',
-                    f'Set the song-select timer to {n} s in {Path(img).name}?\n\n'
-                    f'The image is modified in place; {UNDO_NOTE}. '
-                    f'Make sure PCSX2 is closed. Continue?',
+                    self, tr('Song-select timer'),
+                    tr('Set the song-select timer to {n} s in {name}?').format(n=n, name=Path(img).name)
+                    + '\n\n' + tr('The image is modified in place; an undo '
+                    'journal is saved first. Make sure PCSX2 is closed. Continue?'),
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             self._run(lambda log: patch_hdd_timer(img, n, log=log),
@@ -1338,11 +1339,11 @@ else:
             img = self._img()
             if not img:
                 return
-            src = appconfig.pick_open(self, 'taiko_backup', 'Restore taiko from (your backup)')
+            src = appconfig.pick_open(self, 'taiko_backup', tr('Restore taiko from (your backup)'))
             if not src:
                 return
             self._run(lambda log: restore_hdd(img, src, log=log),
-                      lambda r: self.status.setText('restored ✓'), 'Restoring /taiko…')
+                      lambda r: self.status.setText(tr('restored ✓')), tr('Restoring /taiko…'))
 
         # -- worker plumbing (same pattern as TaikoExeDialog) --
         def _say(self, s):
@@ -1367,8 +1368,8 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, 'Song-select timer', str(r[1]))
-                    self.status.setText('failed — image untouched')
+                    QMessageBox.critical(self, tr('Song-select timer'), str(r[1]))
+                    self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
 
@@ -1399,7 +1400,7 @@ else:
 
         def __init__(self, parent=None, default_img=''):
             super().__init__(parent)
-            self.setWindowTitle(self.TITLE)
+            self.setWindowTitle(tr(self.TITLE))
             self.resize(640, 440)
             self._workers: list[_Worker] = []
             self._state: dict | None = None
@@ -1412,17 +1413,17 @@ else:
             lay = QVBoxLayout(self)
 
             row = QHBoxLayout()
-            b = QPushButton('HDD .img…'); b.clicked.connect(self._pick)
+            b = QPushButton(tr('HDD .img…')); b.clicked.connect(self._pick)
             self.ed_img = QLineEdit(); self.ed_img.setReadOnly(True)
             row.addWidget(b); row.addWidget(self.ed_img, 1)
             lay.addLayout(row)
 
-            box = QGroupBox('Patches (ticked = on)')
+            box = QGroupBox(tr('Patches (ticked = on)'))
             bl = QVBoxLayout(box)
             self.cbs: dict[str, QCheckBox] = {}
             for key, (label, *_fns) in BOOT_PATCHES.items():
-                cb = QCheckBox(label)
-                cb.setToolTip(self.TIPS.get(key, ''))
+                cb = QCheckBox(tr(label))
+                cb.setToolTip(tr(self.TIPS.get(key, '')))
                 cb.setEnabled(False)
                 cb.toggled.connect(self._dirty)
                 bl.addWidget(cb)
@@ -1430,10 +1431,10 @@ else:
             lay.addWidget(box)
 
             row = QHBoxLayout()
-            self.b_check = QPushButton('Read current'); self.b_check.clicked.connect(self._check)
-            self.b_backup = QPushButton('Back up taiko…'); self.b_backup.clicked.connect(self._backup)
-            self.b_patch = QPushButton('Apply'); self.b_patch.clicked.connect(self._patch)
-            self.b_restore = QPushButton('Restore…'); self.b_restore.clicked.connect(self._restore)
+            self.b_check = QPushButton(tr('Read current')); self.b_check.clicked.connect(self._check)
+            self.b_backup = QPushButton(tr('Back up taiko…')); self.b_backup.clicked.connect(self._backup)
+            self.b_patch = QPushButton(tr('Apply')); self.b_patch.clicked.connect(self._patch)
+            self.b_restore = QPushButton(tr('Restore…')); self.b_restore.clicked.connect(self._restore)
             self.b_patch.setEnabled(False)
             for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
                 row.addWidget(w)
@@ -1443,16 +1444,16 @@ else:
             self.log.setStyleSheet('font-family: Consolas, monospace;')
             lay.addWidget(self.log, 1)
 
-            self.status = QLabel(
+            self.status = QLabel(tr(
                 'Pick an image; its current patches are read in. Tick what you '
                 'want and Apply. Unticking a patch restores the stock code. Close '
-                'PCSX2 first — it locks the .img.')
+                'PCSX2 first — it locks the .img.'))
             self.status.setWordWrap(True)
             self.status.setStyleSheet('color:#999;')
             lay.addWidget(self.status)
 
         def _pick(self):
-            p = appconfig.pick_open(self, 'hddimg', 'Open PS2 HDD image',
+            p = appconfig.pick_open(self, 'hddimg', tr('Open PS2 HDD image'),
                                     'HDD image (*.img *.raw *.bin);;All files (*)')
             if p:
                 self.ed_img.setText(p)
@@ -1461,7 +1462,7 @@ else:
         def _img(self):
             p = self.ed_img.text().strip()
             if not p:
-                QMessageBox.information(self, self.TITLE, 'Pick an HDD image first.')
+                QMessageBox.information(self, tr(self.TITLE), tr('Pick an HDD image first.'))
                 return None
             return p
 
@@ -1475,8 +1476,8 @@ else:
             ch = self._changes()
             self.b_patch.setEnabled(bool(ch) and not self._workers)
             if self._state is not None:
-                self.status.setText(f'{len(ch)} change(s) to apply' if ch
-                                    else 'matches the image')
+                self.status.setText(tr('{n} change(s) to apply').format(n=len(ch)) if ch
+                                    else tr('matches the image'))
 
         def _show_state(self, state):
             self._state = dict(state)
@@ -1486,7 +1487,7 @@ else:
                 cb.setEnabled(True)
                 cb.blockSignals(False)
             for k, on in state.items():
-                self._say(f'  {"[x]" if on else "[ ]"} {BOOT_PATCHES[k][0]}')
+                self._say(f'  {"[x]" if on else "[ ]"} {tr(BOOT_PATCHES[k][0])}')
             self._dirty()
 
         def _check(self):
@@ -1499,53 +1500,53 @@ else:
                 log(f'read /taiko: {len(enc):,} B')
                 return boot_patch_state(decrypt_taiko(enc, progress=lambda s, n: None))
 
-            self._run(task, self._show_state, 'Reading + decrypting…')
+            self._run(task, self._show_state, tr('Reading + decrypting…'))
 
         def _backup(self):
             img = self._img()
             if not img:
                 return
-            dest = appconfig.pick_save(self, 'taiko_backup', 'Back up taiko to', 'taiko.bin')
+            dest = appconfig.pick_save(self, 'taiko_backup', tr('Back up taiko to'), 'taiko.bin')
             if not dest:
                 return
             self._run(lambda log: (Path(dest).write_bytes(read_from_hdd(img)) or
                                    Path(dest).stat().st_size),
                       lambda n: self._say(f'backed up {n:,} B -> {dest}'),
-                      'Extracting /taiko…')
+                      tr('Extracting /taiko…'))
 
         def _patch(self):
             img = self._img()
             ch = self._changes()
             if not img or not ch:
                 return
-            lines = '\n'.join(f'  {"ON " if on else "OFF"}  {BOOT_PATCHES[k][0]}'
+            lines = '\n'.join(f'  {tr("ON ") if on else tr("OFF")}  {tr(BOOT_PATCHES[k][0])}'
                               for k, on in ch.items())
             if QMessageBox.warning(
-                    self, self.TITLE,
-                    f'Change these in {Path(img).name}?\n\n{lines}\n\n'
-                    f'The image is modified in place; {UNDO_NOTE}. '
-                    f'Make sure PCSX2 is closed. Continue?',
+                    self, tr(self.TITLE),
+                    tr('Change these in {name}?').format(name=Path(img).name)
+                    + f'\n\n{lines}\n\n' + tr('The image is modified in place; an undo '
+                    'journal is saved first. Make sure PCSX2 is closed. Continue?'),
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
             self._run(lambda log: set_hdd_boot(img, ch, log=log),
-                      self._done_patch, 'Applying…')
+                      self._done_patch, tr('Applying…'))
 
         def _done_patch(self, r):
             self._say('')
             self._say(f'DONE — md5 {r["md5"]}')
             self._show_state(r['state'])
-            self.status.setText('applied ✓')
+            self.status.setText(tr('applied ✓'))
 
         def _restore(self):
             img = self._img()
             if not img:
                 return
-            src = appconfig.pick_open(self, 'taiko_backup', 'Restore taiko from (your backup)')
+            src = appconfig.pick_open(self, 'taiko_backup', tr('Restore taiko from (your backup)'))
             if not src:
                 return
             self._run(lambda log: restore_hdd(img, src, log=log),
-                      lambda r: (self.status.setText('restored ✓'), self._check()),
-                      'Restoring /taiko…')
+                      lambda r: (self.status.setText(tr('restored ✓')), self._check()),
+                      tr('Restoring /taiko…'))
 
         # -- worker plumbing (same pattern as TaikoExeDialog) --
         def _say(self, s):
@@ -1575,8 +1576,8 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, self.TITLE, str(r[1]))
-                    self.status.setText('failed — image untouched')
+                    QMessageBox.critical(self, tr(self.TITLE), str(r[1]))
+                    self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
 

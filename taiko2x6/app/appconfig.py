@@ -70,6 +70,24 @@ def remember(key: str, path) -> None:
         pass                                       # readonly dir -> just skip
 
 
+def get(section: str, key: str, default: str = "") -> str:
+    """A value from any [section] of config.ini ('' / default if unset)."""
+    return _load().get(section, key, fallback=default)
+
+
+def set_value(section: str, key: str, value) -> None:
+    """Persist `value` under [section] key (immediate write)."""
+    cp = _load()
+    if not cp.has_section(section):
+        cp.add_section(section)
+    cp.set(section, key, str(value))
+    try:
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            cp.write(f)
+    except OSError:
+        pass                                       # readonly dir -> just skip
+
+
 def last_existing(key: str) -> str:
     """The last path for `key` only if it still exists on disk ('' otherwise).
     Use to pre-fill line edits without resurrecting deleted files."""
