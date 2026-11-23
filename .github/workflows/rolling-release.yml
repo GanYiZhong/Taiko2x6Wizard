@@ -1,19 +1,21 @@
 name: rolling release
 
 # Every push to main rebuilds the Windows and Linux binaries and replaces the
-# assets of the single "rolling" pre-release. Versioned releases (v1.x) are
-# untouched.
+# assets of the single "rolling" pre-release. Pushing a tag v1.2.3 builds the
+# same binaries and publishes them as release v1.2.3, with the notes in
+# release/NOTES-1.2.3.md.
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: rolling-release
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,6 +33,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
+      LABEL: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'rolling' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,15 +66,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $d = "Taiko2x6Wizard-rolling-${{ matrix.platform }}"
+          $d = "Taiko2x6Wizard-$env:LABEL-${{ matrix.platform }}"
           New-Item -ItemType Directory $d | Out-Null
           Copy-Item dist/Taiko2x6Wizard.exe, release/README_FIRST.txt, config.ini.example $d
           Compress-Archive -Path $d -DestinationPath "$d.zip"
+          if ($env:LABEL -ne 'rolling') { Copy-Item dist/Taiko2x6Wizard.exe . }
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          d="Taiko2x6Wizard-rolling-${{ matrix.platform }}"
+          d="Taiko2x6Wizard-$LABEL-${{ matrix.platform }}"
           mkdir "$d"
           cp dist/Taiko2x6Wizard release/README_FIRST-linux.txt config.ini.example "$d"
           chmod +x "$d/Taiko2x6Wizard"
@@ -81,8 +85,9 @@ jobs:
         with:
           name: ${{ matrix.platform }}
           path: |
-            Taiko2x6Wizard-rolling-*.zip
-            Taiko2x6Wizard-rolling-*.tar.gz
+            Taiko2x6Wizard-*.zip
+            Taiko2x6Wizard-*.tar.gz
+            Taiko2x6Wizard.exe
           if-no-files-found: error
 
   publish:
@@ -98,7 +103,19 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Publish the version release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="release/NOTES-${TAG#v}.md"
+          test -f "$notes" || { echo "missing $notes"; exit 1; }
+          gh release create "$TAG" dist/* --verify-tag --latest \
+            --title "Taiko2x6Wizard $TAG" --notes-file "$notes"
+
       - name: Replace the rolling release
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
