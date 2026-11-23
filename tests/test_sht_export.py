@@ -99,6 +99,16 @@ def test_branched_chart():
     assert "#BRANCHSTART p,50,100" in text
     lines = text.splitlines()
     assert lines.count("#N") == lines.count("#E") == lines.count("#M") == 1
+    # TJA -> sht keeps all three routes and turns 50% / 100% of the 80
+    # points back into the same thresholds
     back = tja2sht.parse_sht(tja2sht.convert_tja(text, "oni"))
+    assert sht_export.is_branched(back)
+    assert list(back["tracks"][1]["bunkis"]) == [40, 80, 40, 80, 40, 80]
     _div, rts = sht_export.routes(back)
-    assert [[n["type"] for n in r[0]] for r in rts] == [[1, 1, 1, 1], [7, 8, 7], [7]]
+    assert [[[n["type"] for n in r[b]] for r in rts] for b in range(3)] == [
+        [[1, 1, 1, 1], [1], [1]],
+        [[1, 1, 1, 1], [4, 4], [4]],
+        [[1, 1, 1, 1], [7, 8, 7], [7]]]
+    # branches=False still collapses to the master route
+    flat = tja2sht.parse_sht(tja2sht.convert_tja(text, "oni", branches=False))
+    assert not sht_export.is_branched(flat)

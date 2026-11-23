@@ -625,16 +625,11 @@ class MainWindow(QMainWindow):
             tr("Harvest every song from several Taiko images (7…14) and merge "
                "the ones the target lacks into one image — charts, textures, "
                "audio and stars — then lift the exe's song ceiling.") + close_first)
-        act("act_gen3conv", tr("Gen3 → Gen2 converter…"), self.open_gen3_convert,
-            tip=tr("Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin "
-                   "to .sht, and song_<id>.nus3bank to a game VAG. Audio decoding "
-                   "needs vgmstream."))
-        act("act_shtexport", tr("SHT → TJA / Gen3 converter…"),
-            self.open_sht_export,
-            tip=tr("Convert .sht charts back to a TJA (all difficulties in one "
-                   "file) or to Nijiiro (Gen3) fumen .bin files."))
-        act("act_shtgen", tr("SHT Generator (TJA→sht)…"), self.open_sht_generator,
-            tip=tr("Convert a TJA chart to .sht files, exported to a folder"))
+        act("act_chartconv", tr("Chart converter (TJA / sht / Gen3 .bin)…"),
+            self.open_chart_converter,
+            tip=tr("Convert charts between TJA, PS2-arcade .sht and Nijiiro "
+                   "(Gen3) fumen .bin in any direction, branches kept; a Gen3 "
+                   "song_<id>.nus3bank becomes a game VAG."))
         act("act_vaggen", tr("VAG Generator (audio→vag)…"), self.open_vag_generator,
             tip=tr("Convert wav/ogg to the game's VAG stream, exported to a folder"))
         act("act_shtval", tr("SHT Validator (check format)…"), self.open_sht_validator,
@@ -662,9 +657,8 @@ class MainWindow(QMainWindow):
         for title, acts in (
                 (tr("Songs"), (self.act_songmgr, self.act_songreplace,
                                self.act_songbuild, None, self.act_omnimix)),
-                (tr("Charts && audio"), (self.act_shtgen, self.act_vaggen,
-                                         self.act_shtval, None, self.act_gen3conv,
-                                         self.act_shtexport)),
+                (tr("Charts && audio"), (self.act_chartconv, self.act_vaggen,
+                                         self.act_shtval)),
                 (tr("PS2 HDD && memory card"), (self.act_pfsshell, self.act_ps2mc,
                                                 None, self.act_imgslim,
                                                 self.act_apamerge, self.act_packiso)),
@@ -1189,21 +1183,6 @@ class MainWindow(QMainWindow):
         dlg = usb_keyboard.UsbKeyboardDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
 
-    def open_sht_export(self):
-        from taiko2x6.charts import sht_export
-        if sht_export.QDialog is None:
-            QMessageBox.warning(self, "SHT", tr("PySide6 is required."))
-            return
-        sht_export.ShtExportDialog(self).exec()
-
-    def open_gen3_convert(self):
-        from taiko2x6.charts import gen3_convert
-        if gen3_convert.QDialog is None:
-            QMessageBox.warning(self, "Gen3 → Gen2", tr("PySide6 is required."))
-            return
-        dlg = gen3_convert.Gen3ConvertDialog(self)
-        dlg.exec()
-
     def open_img_slim(self):
         from taiko2x6.ps2 import img_slim
         if img_slim.QDialog is None:
@@ -1277,9 +1256,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.save_archive()
 
-    def open_sht_generator(self):
-        from taiko2x6.songs import generators
-        generators.ShtGeneratorDialog(self).exec()
+    def open_chart_converter(self):
+        from taiko2x6.charts import chart_convert
+        if chart_convert.QDialog is None:
+            QMessageBox.warning(self, "Chart converter", tr("PySide6 is required."))
+            return
+        chart_convert.ChartConverterDialog(self).exec()
 
     def open_vag_generator(self):
         from taiko2x6.songs import generators

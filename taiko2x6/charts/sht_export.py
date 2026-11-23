@@ -318,18 +318,24 @@ class _Course:
         pts = sum(_points(self.rts[j][0]) for j in range(prev, k))
         a, b = info[0], info[1]
         if info == _NONE:
-            return "p,101,101"
+            # routes that differ before any real branch point: no decision
+            # here (tja2sht reads -1 back as "none")
+            return "p,-1,-1"
         if pts <= 0:
             return "r,%d,%d" % (max(a, 0), max(b, 0))
 
         def pct(v):
             if v <= 0:
                 return 0
-            if v >= 999:
-                return 101
-            pc = int(math.ceil(v * 100.0 / pts - 1e-9))
-            return 101 if pc > 100 else pc
-        return "p,%d,%d" % (pct(a), pct(b))
+            if v == 999:            # tja2fumen's "never" marker; real
+                return 101          # thresholds do go above it (1196 ...)
+            # exact to 1/10000 %, rounded up, so int(points * pct / 100)
+            # gives back v (tja2sht and tja2fumen both read it that way)
+            # A threshold above what the normal route offered since the last
+            # branch point comes from a longer section than the sht records:
+            # ask for 100% rather than turning it into "never".
+            return min(100.0, math.ceil(v * 1000000.0 / pts - 1e-6) / 10000.0)
+        return "p,%s,%s" % (_num(pct(a), 4), _num(pct(b), 4))
 
     def line(self, b, k):
         cells = self.grid[b][k]
@@ -458,15 +464,7 @@ def sht_to_tja(charts, title="", subtitle="", wave="", levels=None,
     return "\n".join(lines)
 
 
-# --- GUI -------------------------------------------------------------------
-
-try:
-    from PySide6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-        QPushButton, QPlainTextEdit, QFileDialog, QMessageBox, QSpinBox)
-except ImportError:                                            # headless / CLI
-    QDialog = None
-
+# --- helpers for files -----------------------------------------------------
 
 def song_id_of(path):
     """'…/abc1p_m/sht' or '…/abc_m.sht' -> 'abc'."""
@@ -481,197 +479,6 @@ def song_id_of(path):
     return name
 
 
-_LETTER = {"easy": "e", "normal": "n", "hard": "h", "oni": "m", "ura": "x"}
-
-
-if QDialog is not None:
-    from taiko2x6.app.i18n import tr
-
-    class ShtExportDialog(QDialog):
-        """Gen2 .sht charts -> one TJA, or Gen3 (Nijiiro) fumen .bin files."""
-
-        _ROWS = (("easy", "Easy"), ("normal", "Normal"), ("hard", "Hard"),
-                 ("oni", "Oni"), ("ura", "Ura"))
-
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.setWindowTitle(tr("SHT → TJA / Gen3 converter"))
-            self.resize(760, 520)
-            v = QVBoxLayout(self)
-            v.addWidget(QLabel(tr(
-                "Turns Gen2 (PS2 arcade) .sht charts back into a TJA (all "
-                "difficulties in one file) or into Gen3 (Nijiiro) fumen .bin "
-                "files. Pick one chart and the other difficulties next to it "
-                "are filled in. Stars set the TJA LEVEL and the Gen3 soul "
-                "gauge; 0 uses a typical value.")))
-            v.itemAt(0).widget().setWordWrap(True)
-
-            g = QGridLayout()
-            g.addWidget(QLabel(tr("Stars")), 0, 3)
-            self.eds, self.stars = {}, {}
-            for i, (key, label) in enumerate(self._ROWS, start=1):
-                g.addWidget(QLabel(tr(label) + ":"), i, 0)
-                ed = QLineEdit()
-                self.eds[key] = ed
-                g.addWidget(ed, i, 1)
-                b = QPushButton(tr("Browse…"))
-                b.clicked.connect(lambda _=False, k=key: self._browse(k))
-                g.addWidget(b, i, 2)
-                sp = QSpinBox()
-                sp.setRange(0, 10)
-                self.stars[key] = sp
-                g.addWidget(sp, i, 3)
-            v.addLayout(g)
-
-            row = QHBoxLayout()
-            row.addWidget(QLabel(tr("Title:")))
-            self.ed_title = QLineEdit()
-            row.addWidget(self.ed_title, 1)
-            row.addWidget(QLabel("WAVE:"))
-            self.ed_wave = QLineEdit()
-            self.ed_wave.setToolTip(tr("Audio file name written in the TJA"))
-            row.addWidget(self.ed_wave, 1)
-            v.addLayout(row)
-
-            row = QHBoxLayout()
-            row.addWidget(QLabel(tr("Output folder:")))
-            self.ed_out = QLineEdit()
-            row.addWidget(self.ed_out, 1)
-            b = QPushButton(tr("Browse…"))
-            b.clicked.connect(self._browse_out)
-            row.addWidget(b)
-            v.addLayout(row)
-
-            self.log = QPlainTextEdit()
-            self.log.setReadOnly(True)
-            v.addWidget(self.log, 1)
-
-            row = QHBoxLayout()
-            row.addStretch(1)
-            self.b_tja = QPushButton(tr("Export TJA"))
-            self.b_tja.clicked.connect(self._export_tja)
-            row.addWidget(self.b_tja)
-            self.b_bin = QPushButton(tr("Export Gen3 .bin"))
-            self.b_bin.clicked.connect(self._export_bin)
-            row.addWidget(self.b_bin)
-            close = QPushButton(tr("Close"))
-            close.clicked.connect(self.reject)
-            row.addWidget(close)
-            v.addLayout(row)
-
-        # -- input ----------------------------------------------------------
-        def _browse(self, key):
-            p, _ = QFileDialog.getOpenFileName(
-                self, tr("Select .sht chart"), self.eds[key].text(),
-                tr("sht chart (sht *.sht);;All files (*)"))
-            if p:
-                self.set_chart(key, p)
-
-        def set_chart(self, key, path):
-            path = os.path.normpath(path)
-            self.eds[key].setText(path)
-            self._fill_siblings(path)
-            sid = song_id_of(path)
-            if not self.ed_title.text():
-                self.ed_title.setText(sid)
-            if not self.ed_wave.text():
-                self.ed_wave.setText(sid + ".ogg")
-            if not self.ed_out.text():
-                p = pathlib.Path(path)
-                self.ed_out.setText(str(p.parent.parent if p.name.lower() == "sht"
-                                        else p.parent))
-
-        def _fill_siblings(self, path):
-            """…/abc1p_m/sht -> …/abc1p_e/sht etc.; …/abc_m.sht -> abc_e.sht."""
-            p = pathlib.Path(path)
-            for key, letter in _LETTER.items():
-                if self.eds[key].text():
-                    continue
-                if p.name.lower() == "sht":
-                    d = p.parent.name
-                    if len(d) > 2 and d[-2] == "_":
-                        cand = p.parent.parent / (d[:-1] + letter) / p.name
-                    else:
-                        continue
-                elif len(p.stem) > 2 and p.stem[-2] == "_":
-                    cand = p.with_name(p.stem[:-1] + letter + p.suffix)
-                else:
-                    continue
-                if cand.is_file():
-                    self.eds[key].setText(str(cand))
-
-        def _browse_out(self):
-            p = QFileDialog.getExistingDirectory(self, tr("Output folder"),
-                                                 self.ed_out.text())
-            if p:
-                self.ed_out.setText(p)
-
-        def _charts(self):
-            out = {}
-            for key, ed in self.eds.items():
-                path = ed.text().strip()
-                if not path:
-                    continue
-                out[key] = (path, pathlib.Path(path).read_bytes(),
-                            self.stars[key].value() or None)
-            return out
-
-        def _say(self, s):
-            self.log.appendPlainText(str(s))
-
-        def _out_dir(self):
-            out = self.ed_out.text().strip()
-            if not out or not os.path.isdir(out):
-                QMessageBox.warning(self, self.windowTitle(),
-                                    tr("Pick an output folder."))
-                return None
-            return pathlib.Path(out)
-
-        # -- export ---------------------------------------------------------
-        def _export_tja(self):
-            out = self._out_dir()
-            if out is None:
-                return
-            try:
-                charts = self._charts()
-                if not charts:
-                    self._say(tr("nothing selected."))
-                    return
-                first = next(iter(charts.values()))[0]
-                sid = song_id_of(first)
-                text = sht_to_tja(
-                    {k: v[1] for k, v in charts.items()},
-                    title=self.ed_title.text().strip() or sid,
-                    wave=self.ed_wave.text().strip(),
-                    levels={k: v[2] for k, v in charts.items() if v[2]})
-                dst = out / (sid + ".tja")
-                dst.write_text(text, encoding="utf-8")
-                self._say(tr("wrote {path} ({n} courses)").format(
-                    path=dst, n=len(charts)))
-            except Exception as e:
-                self._say(tr("FAILED: {err}").format(err=e))
-
-        def _export_bin(self):
-            out = self._out_dir()
-            if out is None:
-                return
-            charts = self._charts()
-            if not charts:
-                self._say(tr("nothing selected."))
-                return
-            for key, (path, raw, stars) in charts.items():
-                try:
-                    sid = song_id_of(path)
-                    data = sht_to_gen3_bin(raw, course=key, stars=stars)
-                    dst = out / sid / ("%s_%s.bin" % (sid, _LETTER[key]))
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    dst.write_bytes(data)
-                    self._say(tr("wrote {path}").format(path=dst))
-                except Exception as e:
-                    self._say("%s: %s" % (key, tr("FAILED: {err}").format(err=e)))
-
-
-# --- helpers for files -----------------------------------------------------
 
 def course_from_name(name):
     """Guess the course from a chart file/folder name (…_e / …1p_m / …_x)."""

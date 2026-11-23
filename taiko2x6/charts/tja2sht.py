@@ -404,16 +404,28 @@ def parse_tja(text):
                 elif cmd == "M":
                     state["branch"] = BRANCH_MASTER
                 elif cmd == "BRANCHSTART":
-                    # condition args (p,x,y) are intentionally not modelled; the
-                    # measures up to the first #N/#E/#M default to common path.
+                    # The condition (p = accuracy %, r = drumroll hits, s =
+                    # score; then two thresholds) is kept per branch block;
+                    # convert_tja turns it into the track's bunkis.
                     state["branch"] = BRANCH_COMMON
+                    state["branch_seq"] = state.get("branch_seq", 0) + 1
+                    cp = [x.strip() for x in arg.split(",")]
+                    kind = (cp[0][:1] or "p").lower()
+                    vals = [_to_float(x, 0.0) for x in cp[1:3]] + [0.0, 0.0]
+                    courses[cur_course].setdefault("branch_conds", {})[
+                        state["branch_seq"]] = (kind, vals[0], vals[1])
                 elif cmd == "BRANCHEND":
                     state["branch"] = BRANCH_COMMON
             elif cmd == "BARLINEOFF":
                 state["barline"] = 0
             elif cmd == "BARLINEON":
                 state["barline"] = 1
-            # other commands (SECTION, LEVELHOLD, ...) intentionally ignored
+            elif cmd == "SECTION":
+                # resets the accuracy count the next branch condition uses
+                if state["buffer"]:
+                    _flush_measure(courses[cur_course], state)
+                state["section"] = True
+            # other commands (LEVELHOLD, ...) intentionally ignored
             continue
 
         if ":" in line and not in_chart:
@@ -477,6 +489,10 @@ def _flush_measure(course, state):
         "measure_den": state["measure_den"],
         "barline": state.get("barline", 1),
         "delay_ms": delay_ms,
+        # which #BRANCHSTART block a branch measure belongs to
+        "bseq": (state.get("branch_seq", 0)
+                 if state["branch"] != BRANCH_COMMON else None),
+        "section": state.pop("section", False),
     })
 
 
@@ -496,7 +512,7 @@ _TJA_NOTE_MAP = {
 # ===========================================================================
 # STEP 3 -- TJA -> sht conversion
 # ===========================================================================
-def convert_tja(tja_text, course, player="1p"):
+def convert_tja(tja_text, course, player="1p", branches=True):
     """Convert one TJA course to Gen2 .sht bytes.
 
     course in {'easy','normal','hard','oni'} (also accepts 'edit'/index).
@@ -506,9 +522,10 @@ def convert_tja(tja_text, course, player="1p"):
     measure with correct time/bpm/scroll/gogo and sub-track note indices, and
     a note table with notes placed at the correct in-measure positions.
 
-    Branches (#BRANCHSTART/#N/#E/#M/#BRANCHEND) are collapsed to the common
-    path plus one selected path (SELECTED_BRANCH) so the timeline length stays
-    correct. Roll/balloon start markers (5/6/7/9) are paired with their 8 end
+    Branches (#BRANCHSTART/#N/#E/#M/#BRANCHEND) keep all three routes in the
+    official branched layout, with the #BRANCHSTART thresholds as bunkis.
+    branches=False (or routes of different lengths) collapses them to the
+    common path plus SELECTED_BRANCH instead. Roll/balloon start markers (5/6/7/9) are paired with their 8 end
     marker and back-patched with the elapsed ms in longNoteLength. Each
     measure's note block is written twice (sub-track 0 + sub-track 3) to match
     the corpus duplication invariant.
@@ -533,136 +550,144 @@ def convert_tja(tja_text, course, player="1p"):
     if global_bpm <= 0:
         global_bpm = 120.0
     offset = _to_float(meta.get("OFFSET", gmeta.get("OFFSET", "0")), 0.0)
-    balloon_counts = list(cdata.get("balloon", gmeta.get("BALLOON", [])))
-    branched = any(m.get("branch", BRANCH_COMMON) != BRANCH_COMMON
-                   for m in cdata["measures"])
-    if branched:
-        # A per-route list (OpenTaiko) covers exactly the balloons this route
-        # meets. A plain BALLOON list runs over every balloon in file order,
-        # all routes included, so keep only the ones on the kept measures.
-        per = meta.get({BRANCH_NORMAL: "BALLOONNOR", BRANCH_EXPERT: "BALLOONEXP",
-                        BRANCH_MASTER: "BALLOONMAS"}[SELECTED_BRANCH])
-        if per:
-            balloon_counts = [int(_to_float(x)) for x in
-                              per.replace(" ", "").split(",") if x != ""]
-        else:
-            it, kept = iter(balloon_counts), []
-            for m in cdata["measures"]:
-                keep = m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON,
-                                                          SELECTED_BRANCH)
-                for ch in m["notes"]:
-                    if ch in "79":
-                        v = next(it, None)
-                        if keep and v is not None:
-                            kept.append(v)
-            balloon_counts = kept
-    bal_iter = iter(balloon_counts)
+    all_balloons = list(cdata.get("balloon", gmeta.get("BALLOON", [])))
+    branched = branches and any(m.get("branch", BRANCH_COMMON) != BRANCH_COMMON
+                                for m in cdata["measures"])
 
-    # Branch handling: keep only COMMON measures plus the one selected path.
-    # Laying N/E/M end to end (as the naive walk did) makes the chart 2-3x too
-    # long and mistimes every note after the first branch.
-    src_measures = [m for m in cdata["measures"]
-                    if m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON, SELECTED_BRANCH)]
+    def route_balloons(route):
+        """Balloon counts met on `route`. A per-route list (OpenTaiko) is
+        exactly that; a plain BALLOON list runs over every balloon in file
+        order, all routes included, so keep the ones on this route."""
+        if not any(m.get("branch", BRANCH_COMMON) != BRANCH_COMMON
+                   for m in cdata["measures"]):
+            return list(all_balloons)
+        per = meta.get({BRANCH_NORMAL: "BALLOONNOR", BRANCH_EXPERT: "BALLOONEXP",
+                        BRANCH_MASTER: "BALLOONMAS"}[route])
+        if per:
+            return [int(_to_float(x)) for x in
+                    per.replace(" ", "").split(",") if x != ""]
+        it, kept = iter(all_balloons), []
+        for m in cdata["measures"]:
+            keep = m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON, route)
+            for ch in m["notes"]:
+                if ch in "79":
+                    v = next(it, None)
+                    if keep and v is not None:
+                        kept.append(v)
+        return kept
+
+    def layout(route):
+        """First pass for one route: (measure, start ms, bpm, note recs) per
+        track. COMMON measures plus the route's own -- laying N/E/M end to
+        end would make the chart 2-3x too long."""
+        src_measures = [m for m in cdata["measures"]
+                        if m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON, route)]
+        bal_iter = iter(route_balloons(route))
+        # running time in ms; TJA OFFSET is seconds before the first measure
+        cur_time_ms = -offset * 1000.0
+        # Notes are recorded without long durations first, so rolls/balloons
+        # can be paired start->8 across measures and back-patched with their
+        # true ms duration.
+        measure_recs = []
+        open_roll = None     # (note_dict, start_time_ms) for an unpaired 5/6/7/9
+        for m in src_measures:
+            bpm = m["bpm"] if (m["bpm"] and m["bpm"] > 0) else global_bpm
+            num = max(0, m["measure_num"])
+            den = m["measure_den"] or 4
+            beats = 4.0 * (num / float(den))
+            measure_ms = (60000.0 / bpm) * beats
+            if measure_ms < 0:
+                measure_ms = 0.0
+
+            # #DELAY shifts this measure (and everything after) later in time.
+            cur_time_ms += m.get("delay_ms", 0.0)
+            measure_start = cur_time_ms
+
+            note_chars = [c for c in m["notes"] if not c.isspace()]
+            n = len(note_chars)
+
+            # The Gen2 position grid is 1/48 of a 4/4 BAR at this tempo, not 1/48
+            # of the measure: official charts put a 3/4 measure on 0..35 (verified
+            # 99.96% on the 390 chart pairs shipped by both T14 and Nijiiro). A
+            # measure longer than 4/4 cannot fit 0..47, so -- like Nijiiro does --
+            # it becomes several tracks of one bar each, the extra ones without a
+            # bar line.
+            bar_ms = 240000.0 / bpm
+            span = POS_DIV * beats / 4.0                 # grid units it occupies
+            nseg = max(1, int(math.ceil(span / POS_DIV - 1e-9)))
+            seg_recs = [[] for _ in range(nseg)]
+            used_pos = set()
+            for i, ch in enumerate(note_chars):
+                if ch == "0":
+                    continue
+                # Position in 1/48-bar units. Clamp to the valid range and nudge
+                # off collisions so two distinct notes (e.g. in a 5/7-tuplet that
+                # 1/48 can't represent exactly) never silently stack.
+                q = int(round(i * span / n)) if n > 0 else 0
+                seg = min(max(q, 0) // POS_DIV, nseg - 1)
+                pos = min(max(q - seg * POS_DIV, 0), POS_DIV - 1)
+                if ch != "8":
+                    # '8' only ends a roll: it takes no slot and needs no nudge.
+                    while (seg, pos) in used_pos and pos < POS_DIV - 1:
+                        pos += 1
+                    used_pos.add((seg, pos))
+                recs = seg_recs[seg]
+
+                note_time = measure_start + (seg + pos / float(POS_DIV)) * bar_ms
+                if ch == "8" and n > 0:
+                    # exact end time: a TJA may place it finer than the 1/48 grid
+                    note_time = measure_start + (i / float(n)) * measure_ms
+
+                if ch in _TJA_NOTE_MAP:
+                    rec = {"type": _TJA_NOTE_MAP[ch], "measure": pos,
+                           "balloonHitCount": -1, "longNoteLength": -1}
+                    recs.append(rec)
+                elif ch in ("5", "6"):
+                    t = NOTE_DRUMROLL if ch == "5" else NOTE_BIGDRUMROLL
+                    rec = {"type": t, "measure": pos,
+                           "balloonHitCount": -1, "longNoteLength": -1}
+                    recs.append(rec)
+                    open_roll = (rec, note_time)
+                elif ch in ("7", "9"):
+                    # 7 = balloon, 9 = kusudama. Both are type 10 / 12 and carry a hit
+                    # count (from the TJA BALLOON: header) + a duration (set at the '8').
+                    cnt = next(bal_iter, None)
+                    t = NOTE_BALLOON if ch == "7" else NOTE_KUSUDAMA
+                    bal = cnt if cnt is not None else -1
+                    rec = {"type": t, "measure": pos,
+                           "balloonHitCount": bal, "longNoteLength": -1}
+                    recs.append(rec)
+                    open_roll = (rec, note_time)
+                elif ch == "8":
+                    # Roll/balloon END: this format has NO separate end note. The '8'
+                    # only closes the open roll/balloon and sets the START note's
+                    # longNoteLength (duration). Writing an actual type-8 note draws a
+                    # stray big-ka in-game. ALL roll/balloon kinds carry the duration.
+                    if open_roll is not None:
+                        start_rec, start_time = open_roll
+                        dur = int(round(note_time - start_time))
+                        if dur < 1:
+                            dur = 1
+                        start_rec["longNoteLength"] = dur
+                        open_roll = None
+                # other characters ignored
+
+            for j, recs in enumerate(seg_recs):
+                mj = m if j == 0 else dict(m, barline=0)
+                measure_recs.append((mj, measure_start + j * bar_ms, bpm, recs))
+            cur_time_ms = measure_start + measure_ms
+        return measure_recs
 
     tracks = []
     notes = []
-
-    # running time in ms; TJA OFFSET is seconds before the first measure
-    cur_time_ms = -offset * 1000.0
-
-    # First pass: compute each measure's start time and per-measure note records
-    # (without long durations yet), so rolls/balloons can be paired start->8
-    # across measures and back-patched with their true ms duration.
-    measure_recs = []        # list of (track_meta, [note dicts])
-    open_roll = None         # (note_dict, start_time_ms) for an unpaired 5/6/7/9
-    note_seq = 0             # running index of logical notes for balloon assoc.
-
-    for m in src_measures:
-        bpm = m["bpm"] if (m["bpm"] and m["bpm"] > 0) else global_bpm
-        num = max(0, m["measure_num"])
-        den = m["measure_den"] or 4
-        beats = 4.0 * (num / float(den))
-        measure_ms = (60000.0 / bpm) * beats
-        if measure_ms < 0:
-            measure_ms = 0.0
-
-        # #DELAY shifts this measure (and everything after) later in time.
-        cur_time_ms += m.get("delay_ms", 0.0)
-        measure_start = cur_time_ms
-
-        note_chars = [c for c in m["notes"] if not c.isspace()]
-        n = len(note_chars)
-
-        # The Gen2 position grid is 1/48 of a 4/4 BAR at this tempo, not 1/48
-        # of the measure: official charts put a 3/4 measure on 0..35 (verified
-        # 99.96% on the 390 chart pairs shipped by both T14 and Nijiiro). A
-        # measure longer than 4/4 cannot fit 0..47, so -- like Nijiiro does --
-        # it becomes several tracks of one bar each, the extra ones without a
-        # bar line.
-        bar_ms = 240000.0 / bpm
-        span = POS_DIV * beats / 4.0                 # grid units it occupies
-        nseg = max(1, int(math.ceil(span / POS_DIV - 1e-9)))
-        seg_recs = [[] for _ in range(nseg)]
-        used_pos = set()
-        for i, ch in enumerate(note_chars):
-            if ch == "0":
-                continue
-            # Position in 1/48-bar units. Clamp to the valid range and nudge
-            # off collisions so two distinct notes (e.g. in a 5/7-tuplet that
-            # 1/48 can't represent exactly) never silently stack.
-            q = int(round(i * span / n)) if n > 0 else 0
-            seg = min(max(q, 0) // POS_DIV, nseg - 1)
-            pos = min(max(q - seg * POS_DIV, 0), POS_DIV - 1)
-            if ch != "8":
-                # '8' only ends a roll: it takes no slot and needs no nudge.
-                while (seg, pos) in used_pos and pos < POS_DIV - 1:
-                    pos += 1
-                used_pos.add((seg, pos))
-            recs = seg_recs[seg]
-
-            note_time = measure_start + (seg + pos / float(POS_DIV)) * bar_ms
-            if ch == "8" and n > 0:
-                # exact end time: a TJA may place it finer than the 1/48 grid
-                note_time = measure_start + (i / float(n)) * measure_ms
-
-            if ch in _TJA_NOTE_MAP:
-                rec = {"type": _TJA_NOTE_MAP[ch], "measure": pos,
-                       "balloonHitCount": -1, "longNoteLength": -1}
-                recs.append(rec)
-            elif ch in ("5", "6"):
-                t = NOTE_DRUMROLL if ch == "5" else NOTE_BIGDRUMROLL
-                rec = {"type": t, "measure": pos,
-                       "balloonHitCount": -1, "longNoteLength": -1}
-                recs.append(rec)
-                open_roll = (rec, note_time)
-            elif ch in ("7", "9"):
-                # 7 = balloon, 9 = kusudama. Both are type 10 / 12 and carry a hit
-                # count (from the TJA BALLOON: header) + a duration (set at the '8').
-                cnt = next(bal_iter, None)
-                t = NOTE_BALLOON if ch == "7" else NOTE_KUSUDAMA
-                bal = cnt if cnt is not None else -1
-                rec = {"type": t, "measure": pos,
-                       "balloonHitCount": bal, "longNoteLength": -1}
-                recs.append(rec)
-                open_roll = (rec, note_time)
-            elif ch == "8":
-                # Roll/balloon END: this format has NO separate end note. The '8'
-                # only closes the open roll/balloon and sets the START note's
-                # longNoteLength (duration). Writing an actual type-8 note draws a
-                # stray big-ka in-game. ALL roll/balloon kinds carry the duration.
-                if open_roll is not None:
-                    start_rec, start_time = open_roll
-                    dur = int(round(note_time - start_time))
-                    if dur < 1:
-                        dur = 1
-                    start_rec["longNoteLength"] = dur
-                    open_roll = None
-            # other characters ignored
-
-        for j, recs in enumerate(seg_recs):
-            mj = m if j == 0 else dict(m, barline=0)
-            measure_recs.append((mj, measure_start + j * bar_ms, bpm, recs))
-        cur_time_ms = measure_start + measure_ms
+    if branched:
+        routes3 = [layout(r) for r in (BRANCH_NORMAL, BRANCH_EXPERT, BRANCH_MASTER)]
+        if len({len(r) for r in routes3}) == 1:
+            tracks, notes = _diverge_layout(routes3, cdata.get("branch_conds", {}))
+            return _finish_sht(tracks, notes, cur_time_ms=-offset * 1000.0,
+                               global_bpm=global_bpm)
+        # routes of different lengths cannot share one track list: keep one
+    measure_recs = layout(SELECTED_BRANCH)
 
     # Second pass: lay out the note table. The Gen2 format stores each measure's
     # note block TWICE consecutively -- sub-track 0 points at the first copy and
@@ -720,6 +745,11 @@ def convert_tja(tja_text, course, player="1p"):
             "subtracks": subs,
         })
 
+    return _finish_sht(tracks, notes, cur_time_ms=-offset * 1000.0,
+                       global_bpm=global_bpm)
+
+
+def _finish_sht(tracks, notes, cur_time_ms, global_bpm):
     # Ensure at least one track so the file is valid even for empty charts.
     if not tracks:
         tracks.append({
@@ -729,18 +759,94 @@ def convert_tja(tja_text, course, player="1p"):
             "subtracks": [{"noteIndexSt": 0, "noteCount": 0, "pointGain": 0}
                           for _ in range(6)],
         })
-
-    note_offset = HEADER_SIZE + len(tracks) * TRACK_NEW_SIZE
-    model = {
-        "noteOffset": note_offset,
+    return serialize_sht({
+        "noteOffset": HEADER_SIZE + len(tracks) * TRACK_NEW_SIZE,
         "padding": 0,
         "isOld": False,
         "tracks": tracks,
         "notes": notes,
         "_gap": b"",
         "_tail": b"",
-    }
-    return serialize_sht(model)
+    })
+
+
+# Diverge points per note, as the game counts them for an accuracy (p)
+# branch condition: 20 per don/ka of either size, 30 per balloon/kusudama,
+# none for drumrolls (sht_export uses the same values).
+def _diverge_points(recs):
+    return sum(30 if r["type"] in (NOTE_BALLOON, NOTE_KUSUDAMA) else
+               0 if r["type"] in (NOTE_DRUMROLL, NOTE_BIGDRUMROLL) else 20
+               for r in recs)
+
+
+def _bunki_values(cond, points):
+    """A #BRANCHSTART condition -> the six Gen2 thresholds (a pair per route).
+
+    p: percent of the diverge points each route offered since the last
+    branch point or #SECTION -- the shipped charts store the same percentages
+    times each route's own points, so the three pairs differ. 0 always
+    passes; over 100 never does (999). r: drumroll hits, the same on every
+    route."""
+    kind, a, b = cond
+
+    def one(v, pts):
+        if v == -1:                 # "no decision here" (sht_export)
+            return -1
+        if kind == "p":
+            if v <= 0:
+                return 0
+            if v > 100:
+                return 999
+            return int(pts * v / 100.0 + 1e-6)
+        return max(0, int(round(v)))
+    return [one(x, points[r]) for r in range(3) for x in (a, b)]
+
+
+def _diverge_layout(routes3, conds):
+    """Tracks and notes for a branched chart, laid out like the official
+    ones (T14 butou*, alrpri): per measure the three routes' notes stored as
+    SIX copies [n, p, m, n, p, m], sub-tracks 0-2 / 3-5 pointing at them,
+    pointGain a per-route remaining-note countdown, scroll per route, and the
+    thresholds in bunkis on the measure where a branch block starts."""
+    K = len(routes3[0])
+    tracks, notes = [], []
+    remaining = [sum(len(rec[3]) for rec in r) for r in routes3]
+    prev_seq, since = None, 0
+    for k in range(K):
+        m, start, bpm, _ = routes3[2][k]
+        seqs = [routes3[b][k][0].get("bseq") for b in range(3)]
+        seq = next((x for x in seqs if x is not None), None)
+        if any(routes3[b][k][0].get("section") for b in range(3)):
+            since = k
+        bunkis = [-1] * 6
+        if seq is not None and seq != prev_seq:
+            pts = [sum(_diverge_points(routes3[r][j][3]) for j in range(since, k))
+                   for r in range(3)]
+            bunkis = _bunki_values(conds.get(seq, ("p", 101.0, 101.0)), pts)
+            since = k
+        if seq is not None:
+            prev_seq = seq
+        starts = []
+        for _copy in range(2):
+            for b in range(3):
+                starts.append(len(notes))
+                notes.extend(dict(r) for r in routes3[b][k][3])
+        for b in range(3):
+            remaining[b] -= len(routes3[b][k][3])
+        subs = [{"noteIndexSt": starts[s], "noteCount": len(routes3[s % 3][k][3]),
+                 "pointGain": remaining[s % 3]} for s in range(6)]
+        tracks.append({
+            "time": start,
+            "bpm": bpm,
+            "trackLine": m.get("barline", 1),
+            "gogoFlag": 1 if m["gogo"] else 0,
+            "_unk": 0,
+            "bunkis": bunkis,
+            "scrollSpeeds": [float(routes3[s % 3][k][0]["scroll"])
+                             for s in range(6)],
+            "subtracks": subs,
+        })
+    return tracks, notes
 
 
 def tja_to_all_charts(tja_text):

@@ -25,9 +25,9 @@ one Explorer GUI.
   (VAG), and all the per-song database rows, then rebuild the archive.
 - **Omnimix** — fuse the songs of several Taiko 7…14 images into one: dedup by
   song id, auto song-limit patch, and partition grow when the data outgrows it.
-- **Chart conversion** — TJA → SHT, and encrypted **Gen3 (Nijiiro)** fumen → SHT;
-  back the other way, SHT → TJA (all difficulties, branches kept) and SHT → Gen3
-  fumen `.bin`
+- **Chart conversion** — one converter (Tools → Charts & audio) between TJA,
+  SHT and encrypted **Gen3 (Nijiiro)** fumen `.bin`, any direction, branches
+  kept; a Gen3 `song_<id>.nus3bank` becomes a game VAG
   (keeps diverge branches, bpm-aware measure timing).
 - **Per-song `.bin` editors** — `musicinfo`, `tuning`, `streaminfo`, `rank`,
   `lamp`, `fname`, `hdbdinfo`, `enso_parts` — auto-discovered by the Explorer.
@@ -113,7 +113,7 @@ python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # song-sel
 python -m taiko2x6.exe.taiko_exe --help                               # all exe-patch options
 python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB keyboard patch
 python -m taiko2x6.charts.gen3_convert --help    # Gen3 (Nijiiro) fumen -> SHT — CLI
-python -m taiko2x6.charts.sht_export --help      # SHT -> TJA / Gen3 fumen — CLI
+python -m taiko2x6.charts.chart_convert --help   # TJA / SHT / Gen3 fumen, any direction — CLI
 ```
 
 (The exe patches also have GUI dialogs in the Explorer's Tools menu.)

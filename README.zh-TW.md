@@ -22,8 +22,8 @@
   再重建封存檔。
 - **Omnimix 合併**：把 Taiko 7～14 多款遊戲的歌曲合併進同一個映像檔，
   自動去除重複歌曲、解除歌曲數量上限，必要時自動擴大分割區。
-- **譜面轉換**：TJA → SHT，以及加密的**虹版（Gen3）** fumen → SHT；
-  也能反向轉換：SHT → TJA（所有難度、保留分歧）和 SHT → 虹版 fumen `.bin`
+- **譜面轉換**：單一轉換器（工具 → 譜面與音訊），TJA、SHT 與加密的**虹版（Gen3）**
+  fumen `.bin` 之間任意互轉並保留分歧；虹版 `song_<id>.nus3bank` 會轉成遊戲 VAG
   （保留分歧譜面、正確處理變速）。
 - **歌曲資料表編輯器**：`musicinfo`、`tuning`、`streaminfo`、`rank`、`lamp`、`fname`、
   `hdbdinfo`、`enso_parts`，Explorer 會自動找到並開啟對應的編輯器。
@@ -103,7 +103,7 @@ python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # 選歌�
 python -m taiko2x6.exe.taiko_exe --help                               # 所有執行檔修補選項
 python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB 鍵盤 patch
 python -m taiko2x6.charts.gen3_convert --help      # 虹版譜面 → SHT（命令列）
-python -m taiko2x6.charts.sht_export --help        # SHT → TJA／虹版譜面（命令列）
+python -m taiko2x6.charts.chart_convert --help     # TJA／SHT／虹版譜面任意互轉（命令列）
 ```
 
 （執行檔修補在 Explorer 的 Tools 選單裡也有圖形介面。）

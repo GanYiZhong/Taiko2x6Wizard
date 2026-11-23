@@ -52,6 +52,14 @@ Editors: `bineditor_*.py`; cross-table coordination: `song_manager.py`.
   a bar line); no shipped chart has a position above 47. Finer grids were
   tried and broke playback.
 - **TJA → SHT** (`tja2sht.py`): standard TJA parse with collision-nudging.
+  Branched courses keep all three routes in the official branched layout
+  (six note copies per measure, per-route scroll and pointGain); each
+  `#BRANCHSTART p,x,y` becomes per-route thresholds = x% / y% of the diverge
+  points that route offered since the last branch point or `#SECTION`. The
+  shipped charts' sections are not stored in an sht, so SHT → TJA → SHT gives
+  the shipped threshold back exactly for 39 of 198 branch points (median
+  error 0%, 70% of values within 5%); every note, track and route is exact.
+  `charts/chart_convert.py` is the single entry point for TJA / SHT / Gen3.
 - **Gen3 (Nijiiro) fumen** (`gen3_convert.py`): **AES-256-CBC** (IV = first 16
   bytes) then **gzip**. Layout: 40-byte measure header + 3 branch streams +
   24-byte notes (type 6 is 32 bytes). **Note positions are absolute
