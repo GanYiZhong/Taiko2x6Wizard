@@ -57,6 +57,19 @@ Editors: `bineditor_*.py`; cross-table coordination: `song_manager.py`.
   24-byte notes (type 6 is 32 bytes). **Note positions are absolute
   milliseconds — not quantized**; conversion maps them onto the 1/48 grid.
   See [`notecolor_report.md`](notecolor_report.md) for note-color encoding.
+- **SHT → Gen3 / TJA** (`sht_export.py`). The 0x208-byte Gen3 header is 36
+  repeats of the (good, ok, bad) timing windows (one set for Easy/Normal, one
+  for Hard/Oni), then has-branches, soul gauge max 10000 / clear line
+  (6000 / 7000 / 7000 / 8000), the soul-gauge gain per good / ok / bad, branch
+  point values (20 per don/ka, 30 per balloon), and the measure count at
+  0x200. The gains come from tja2fumen's table (difficulty x star level x
+  note count): on the 404 charts shipped by both T14 and Nijiiro, good matches
+  92% and ok 95%; bad is usually 1 lower in the shipped charts. Gen2
+  `bunkis` equal Gen3 `branchInfo` and are diverge POINTS, so a TJA
+  percentage is recovered from the points before the branch. Round trips over
+  every T14 chart: SHT → Gen3 → SHT is identical for 839/840 charts (the
+  other has a zero-filled bunki tail that `gen3_to_sht` normalises), and SHT
+  → TJA → SHT reproduces every track and note (roll ends within 1 ms).
 
 ## Audio — VAG / hd·bd
 

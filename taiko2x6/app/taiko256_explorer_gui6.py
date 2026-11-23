@@ -629,6 +629,10 @@ class MainWindow(QMainWindow):
             tip=tr("Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin "
                    "to .sht, and song_<id>.nus3bank to a game VAG. Audio decoding "
                    "needs vgmstream."))
+        act("act_shtexport", tr("SHT → TJA / Gen3 converter…"),
+            self.open_sht_export,
+            tip=tr("Convert .sht charts back to a TJA (all difficulties in one "
+                   "file) or to Nijiiro (Gen3) fumen .bin files."))
         act("act_shtgen", tr("SHT Generator (TJA→sht)…"), self.open_sht_generator,
             tip=tr("Convert a TJA chart to .sht files, exported to a folder"))
         act("act_vaggen", tr("VAG Generator (audio→vag)…"), self.open_vag_generator,
@@ -659,7 +663,8 @@ class MainWindow(QMainWindow):
                 (tr("Songs"), (self.act_songmgr, self.act_songreplace,
                                self.act_songbuild, None, self.act_omnimix)),
                 (tr("Charts && audio"), (self.act_shtgen, self.act_vaggen,
-                                         self.act_shtval, None, self.act_gen3conv)),
+                                         self.act_shtval, None, self.act_gen3conv,
+                                         self.act_shtexport)),
                 (tr("PS2 HDD && memory card"), (self.act_pfsshell, self.act_ps2mc,
                                                 None, self.act_imgslim,
                                                 self.act_apamerge, self.act_packiso)),
@@ -1183,6 +1188,13 @@ class MainWindow(QMainWindow):
         from taiko2x6.exe import usb_keyboard
         dlg = usb_keyboard.UsbKeyboardDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
+
+    def open_sht_export(self):
+        from taiko2x6.charts import sht_export
+        if sht_export.QDialog is None:
+            QMessageBox.warning(self, "SHT", tr("PySide6 is required."))
+            return
+        sht_export.ShtExportDialog(self).exec()
 
     def open_gen3_convert(self):
         from taiko2x6.charts import gen3_convert

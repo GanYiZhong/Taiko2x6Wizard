@@ -9,7 +9,9 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('taiko2x6/exe/data/KBD2EE.irx', 'taiko2x6/exe/data')],  # USB keyboard patch module
+    datas=[('taiko2x6/exe/data/KBD2EE.irx', 'taiko2x6/exe/data'),  # USB keyboard patch module
+           ('taiko2x6/charts/data/hp_values.csv', 'taiko2x6/charts/data'),  # Gen3 soul gauge (tja2fumen, MIT)
+           ('taiko2x6/charts/data/LICENSE-tja2fumen.txt', 'taiko2x6/charts/data')],
     hiddenimports=collect_submodules('taiko2x6'),
     hookspath=[],
     hooksconfig={},

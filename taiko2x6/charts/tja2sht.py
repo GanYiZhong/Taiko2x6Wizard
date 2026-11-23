@@ -90,15 +90,16 @@ NOTE_KA2HAND      = 13   # 2-hand ka
 # There is NO separate roll/balloon END note: the TJA '8' terminator only sets the
 # START note's longNoteLength (duration). A leftover end note renders as a big-ka.
 
-# Granularity of in-measure note position used by this format (1/48 of a measure)
+# Granularity of in-measure note position: 1/48 of a 4/4 BAR at the track's bpm
 POS_DIV = 48
 
 # NOTE: a measure-splitting feature used to live here (emitting k track records
-# per measure to reach finer grids). It was REVERTED: it made charts play wrong
-# in-game (1/24 measures that were previously fine came out broken). The premise
-# -- that manufacturing extra records is transparent to the game -- was never
-# validated; the corpus only proves 48 units span a record, not that the engine
-# accepts records we invent. Do not reintroduce without in-game evidence first.
+# per measure to reach FINER grids). It was REVERTED: it made charts play wrong
+# in-game (1/24 measures that were previously fine came out broken). Do not
+# reintroduce that. What convert_tja does now is different and is what retail
+# does: a measure LONGER than 4/4 becomes one 4/4 track plus a remainder track
+# without a bar line -- T14 ships that exact pattern 680 times (4/4 + 1/4,
+# i.e. 5/4), 214 times as 4/4 + 3/4 and 136 times as 4/4 + 2/4.
 
 # Per-difficulty note-table capacity. The game allocates a FIXED note buffer per
 # difficulty; loading a chart whose note count (both sub-track copies, i.e. the
@@ -446,11 +447,11 @@ def parse_tja(text):
             # non-chart text) appearing between #START and #END: only digits,
             # commas and whitespace are legal chart data. Anything else would
             # silently corrupt the measure buffer, so skip it.
-            if any(c not in "0123456789, \t" for c in line):
+            if any(c not in "0123456789ABab, \t" for c in line):
                 continue
             # a line may contain a trailing ',' ending a measure; may have
             # multiple commas; accumulate
-            seg = line
+            seg = line.upper()
             while "," in seg:
                 pre, seg = seg.split(",", 1)
                 state["buffer"] += pre
@@ -485,6 +486,8 @@ _TJA_NOTE_MAP = {
     "2": NOTE_KA,
     "3": NOTE_BIGDON,
     "4": NOTE_BIGKA,
+    "A": NOTE_DON2HAND,      # two-hand big don / ka (OpenTaiko)
+    "B": NOTE_KA2HAND,
     # 5 = drumroll start, 6 = big drumroll start, 7 = balloon, 8 = roll/balloon end,
     # 9 = kusudama  -> handled specially below
 }
@@ -531,6 +534,28 @@ def convert_tja(tja_text, course, player="1p"):
         global_bpm = 120.0
     offset = _to_float(meta.get("OFFSET", gmeta.get("OFFSET", "0")), 0.0)
     balloon_counts = list(cdata.get("balloon", gmeta.get("BALLOON", [])))
+    branched = any(m.get("branch", BRANCH_COMMON) != BRANCH_COMMON
+                   for m in cdata["measures"])
+    if branched:
+        # A per-route list (OpenTaiko) covers exactly the balloons this route
+        # meets. A plain BALLOON list runs over every balloon in file order,
+        # all routes included, so keep only the ones on the kept measures.
+        per = meta.get({BRANCH_NORMAL: "BALLOONNOR", BRANCH_EXPERT: "BALLOONEXP",
+                        BRANCH_MASTER: "BALLOONMAS"}[SELECTED_BRANCH])
+        if per:
+            balloon_counts = [int(_to_float(x)) for x in
+                              per.replace(" ", "").split(",") if x != ""]
+        else:
+            it, kept = iter(balloon_counts), []
+            for m in cdata["measures"]:
+                keep = m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON,
+                                                          SELECTED_BRANCH)
+                for ch in m["notes"]:
+                    if ch in "79":
+                        v = next(it, None)
+                        if keep and v is not None:
+                            kept.append(v)
+            balloon_counts = kept
     bal_iter = iter(balloon_counts)
 
     # Branch handling: keep only COMMON measures plus the one selected path.
@@ -588,12 +613,17 @@ def convert_tja(tja_text, course, player="1p"):
             q = int(round(i * span / n)) if n > 0 else 0
             seg = min(max(q, 0) // POS_DIV, nseg - 1)
             pos = min(max(q - seg * POS_DIV, 0), POS_DIV - 1)
-            while (seg, pos) in used_pos and pos < POS_DIV - 1:
-                pos += 1
-            used_pos.add((seg, pos))
+            if ch != "8":
+                # '8' only ends a roll: it takes no slot and needs no nudge.
+                while (seg, pos) in used_pos and pos < POS_DIV - 1:
+                    pos += 1
+                used_pos.add((seg, pos))
             recs = seg_recs[seg]
 
             note_time = measure_start + (seg + pos / float(POS_DIV)) * bar_ms
+            if ch == "8" and n > 0:
+                # exact end time: a TJA may place it finer than the 1/48 grid
+                note_time = measure_start + (i / float(n)) * measure_ms
 
             if ch in _TJA_NOTE_MAP:
                 rec = {"type": _TJA_NOTE_MAP[ch], "measure": pos,
