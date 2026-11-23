@@ -43,11 +43,14 @@ Editors: `bineditor_*.py`; cross-table coordination: `song_manager.py`.
 
 - **SHT** (SYSTEM256 chart): per-track records of
   `float time, float bpm, int trackLine, int gogo, [int unk], int bunki[6],
-  float scrollSpeeds[6]` plus sub-tracks. There is **no** time-signature field;
-  measure span is derived from the time gap between consecutive track times.
-- **Note position grid is 1/48 of a measure** (`POS_DIV = 48`). This is an
-  engine limit — finer grids were tried and broke playback. Triplets inside
-  short (e.g. 3-beat) measures are the main source of small (<16 ms) rounding.
+  float scrollSpeeds[6]` plus sub-tracks. There is **no** time-signature field.
+- **Note position grid is 1/48 of a 4/4 bar** (`240000/bpm` ms, `POS_DIV = 48`),
+  **not** 1/48 of the measure: a 3/4 measure uses positions 0..35, and the
+  measure's length comes only from the next track's time. Verified 99.96%
+  (140732/140785 notes) on the 390 charts shipped by both T14 and Nijiiro.
+  Measures longer than 4/4 are written as several tracks (extra ones without
+  a bar line); no shipped chart has a position above 47. Finer grids were
+  tried and broke playback.
 - **TJA → SHT** (`tja2sht.py`): standard TJA parse with collision-nudging.
 - **Gen3 (Nijiiro) fumen** (`gen3_convert.py`): **AES-256-CBC** (IV = first 16
   bytes) then **gzip**. Layout: 40-byte measure header + 3 branch streams +

@@ -40,8 +40,9 @@ detected from (noteOffset-16)/trackCount:
 
 Note record (16 bytes), noteCount of them starting at noteOffset:
     int type               note-type enum (see NOTE_* below)
-    int measure / position offset of the note WITHIN its measure, in 1/48 units
-                           (observed range 0..47)
+    int measure / position offset of the note WITHIN its measure, in 1/48 of
+                           a 4/4 bar (240000/bpm ms) -- NOT of the measure, so
+                           a 3/4 measure uses 0..35 (observed range 0..47)
     int balloonHitCount    hit count for balloon/kusudama notes, else -1
     int longNoteLength     duration (in `time` units) for rolls/balloons, else -1
 
@@ -567,24 +568,32 @@ def convert_tja(tja_text, course, player="1p"):
         note_chars = [c for c in m["notes"] if not c.isspace()]
         n = len(note_chars)
 
-        recs = []
+        # The Gen2 position grid is 1/48 of a 4/4 BAR at this tempo, not 1/48
+        # of the measure: official charts put a 3/4 measure on 0..35 (verified
+        # 99.96% on the 390 chart pairs shipped by both T14 and Nijiiro). A
+        # measure longer than 4/4 cannot fit 0..47, so -- like Nijiiro does --
+        # it becomes several tracks of one bar each, the extra ones without a
+        # bar line.
+        bar_ms = 240000.0 / bpm
+        span = POS_DIV * beats / 4.0                 # grid units it occupies
+        nseg = max(1, int(math.ceil(span / POS_DIV - 1e-9)))
+        seg_recs = [[] for _ in range(nseg)]
         used_pos = set()
         for i, ch in enumerate(note_chars):
             if ch == "0":
                 continue
-            # In-measure position in 1/48 units. Clamp to the valid range and
-            # nudge off collisions so two distinct notes (e.g. in a 5/7-tuplet
-            # that 1/48 can't represent exactly) never silently stack.
-            pos = int(round(i * POS_DIV / n)) if n > 0 else 0
-            if pos >= POS_DIV:
-                pos = POS_DIV - 1
-            if pos < 0:
-                pos = 0
-            while pos in used_pos and pos < POS_DIV - 1:
+            # Position in 1/48-bar units. Clamp to the valid range and nudge
+            # off collisions so two distinct notes (e.g. in a 5/7-tuplet that
+            # 1/48 can't represent exactly) never silently stack.
+            q = int(round(i * span / n)) if n > 0 else 0
+            seg = min(max(q, 0) // POS_DIV, nseg - 1)
+            pos = min(max(q - seg * POS_DIV, 0), POS_DIV - 1)
+            while (seg, pos) in used_pos and pos < POS_DIV - 1:
                 pos += 1
-            used_pos.add(pos)
+            used_pos.add((seg, pos))
+            recs = seg_recs[seg]
 
-            note_time = measure_start + (pos / float(POS_DIV)) * measure_ms
+            note_time = measure_start + (seg + pos / float(POS_DIV)) * bar_ms
 
             if ch in _TJA_NOTE_MAP:
                 rec = {"type": _TJA_NOTE_MAP[ch], "measure": pos,
@@ -620,7 +629,9 @@ def convert_tja(tja_text, course, player="1p"):
                     open_roll = None
             # other characters ignored
 
-        measure_recs.append((m, measure_start, bpm, recs))
+        for j, recs in enumerate(seg_recs):
+            mj = m if j == 0 else dict(m, barline=0)
+            measure_recs.append((mj, measure_start + j * bar_ms, bpm, recs))
         cur_time_ms = measure_start + measure_ms
 
     # Second pass: lay out the note table. The Gen2 format stores each measure's

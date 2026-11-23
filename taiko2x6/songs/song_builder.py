@@ -160,9 +160,11 @@ def _first_note_time_ms(model) -> float | None:
     for i, t in enumerate(tracks):
         for s in t["subtracks"]:
             if s["noteCount"] > 0 and s["noteIndexSt"] <= 0 < s["noteIndexSt"] + s["noteCount"]:
-                measure_ms = (tracks[i + 1]["time"] - t["time"]) if i + 1 < len(tracks) else 0.0
+                # positions are 1/48 of a 4/4 bar, not of the measure
+                bpm = float(t.get("bpm") or 0.0)
+                bar_ms = 240000.0 / bpm if bpm > 0 else 0.0
                 pos = notes[0].get("measure", 0)
-                return float(t["time"]) + (pos / 48.0) * measure_ms
+                return float(t["time"]) + (pos / 48.0) * bar_ms
     for t in tracks:
         if any(s["noteCount"] > 0 for s in t["subtracks"]):
             return float(t["time"])

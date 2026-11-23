@@ -150,41 +150,28 @@ def parse_gen3(data, long_types=_LONG_NOTE_TYPES):
 
 
 def measure_length(meas, k):
-    """Length of measure k in ms, used to quantize its notes onto the 1/48 grid.
+    """Length in ms of the 1/48 grid unit x 48 for measure k: always the 4/4
+    bar 240000/bpm, whatever the time signature.
 
-    Gen3 stores absolute measure offsets, so the naive length is the gap to the
-    next measure — but that gap is only reliable WITHIN a constant-tempo run. At
-    a BPM change (and the file's non-monotonic transition measures) the offset
-    arithmetic yields an anomalous gap — negative, tiny, or inflated — that does
-    NOT match how the official Gen2 chart quantizes; there the game falls back to
-    the plain 4/4 bar 240000/bpm. Discriminator, proven against 398 charts that
-    ship in both generations:
+    Gen2 positions are 1/48 of a WHOLE NOTE at the measure's tempo, not 1/48 of
+    the measure: a 3/4 measure only uses 0..35, a 2/4 one 0..23. Measured on
+    the 390 chart pairs that ship in both generations (T14 vs Nijiiro):
 
-      * constant bpm across the boundary -> use the gap. This is what makes
-        genuine odd-time measures work (e.g. Vertex's 6/4 is a run of short
-        constant-tempo measures whose notes need not fill the bar).
-      * bpm changes -> use 240000/bpm (falling back to the gap only if a note
-        would overflow the bar).
-
-    Lifts e.g. Hatara oni from 89.7% to 100% grid-match vs the retail Gen2
-    chart, with zero regressions on the odd-time songs.
+      * round(pos / (240000/bpm) * 48) == official value for 140732/140785
+        notes (99.96%); the rest are charts rebalanced between generations.
+      * the old "gap to the next measure" length matched only 9635/19047 notes
+        in measures whose gap is not a 4/4 bar, stretching every odd-time
+        measure's notes across the full 48 slots (rot3, yokud, kaiki ...).
+      * no note in 19158 Gen3 charts (7.3M notes) lies past 47/48 of that bar,
+        so the grid never overflows and needs no fallback.
     """
-    m = meas[k]
-    bpm = m["bpm"]
-    bar = 240000.0 / bpm if bpm > 0 else 0.0
-    if k + 1 >= len(meas):
-        return bar if bar > 0 else 0.0
-    gap = meas[k + 1]["offset"] - m["offset"]
-    next_bpm = meas[k + 1]["bpm"]
-    # widest note position across all branches (guards the fallbacks)
-    mx = max((n["pos"] for br in m["branches"] for n in br["notes"]), default=0.0)
-    if gap <= 0:
-        return bar if bar >= mx * 0.98 else (mx * 48.0 / 47 if mx > 0 else bar)
-    if bpm > 0 and abs(bpm - next_bpm) > 0.5:      # tempo change -> gap unreliable
-        if bar >= mx * 0.98:
-            return bar
-        return gap if gap >= mx else mx * 48.0 / 47
-    return gap
+    bpm = meas[k]["bpm"]
+    if bpm > 0:
+        return 240000.0 / bpm
+    # bpm 0 never occurs in shipped charts; fall back to the offset gap.
+    if k + 1 < len(meas):
+        return max(0.0, meas[k + 1]["offset"] - meas[k]["offset"])
+    return 0.0
 
 
 # --- Gen3 -> Gen2 sht ------------------------------------------------------
@@ -656,8 +643,9 @@ def main(argv=None):
     ap.add_argument("input", nargs="?",
                     help="Gen3 fumen .bin, or song_<id>.nus3bank")
     ap.add_argument("-o", "--out", help="output file (.sht / .vag)")
-    ap.add_argument("--branch", type=int, default=0,
-                    help="Gen3 branch to take (0=normal, default 0)")
+    ap.add_argument("--branch", type=int, default=None,
+                    help="flatten to one Gen3 branch (0 normal / 1 pro / "
+                         "2 master); default keeps the branches")
     ap.add_argument("--lead-ms", type=float, default=0.0,
                     help="silence to prepend to audio")
     ap.add_argument("--trim-ms", type=float, default=0.0,
