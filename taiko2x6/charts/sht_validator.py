@@ -147,18 +147,23 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
                     E("note.order", f"track {ti} slot {si}: notes not sorted by position")
                     break
 
-    # pointGain must be the remaining-note countdown (total_one_copy - cumulative)
-    total = sum(t["subtracks"][0]["noteCount"] for t in tracks)
-    rem = total
+    # pointGain must be the remaining-note countdown (total_one_copy - cumulative);
+    # a branched chart keeps one countdown per route (slots 0-2, repeated in 3-5)
+    branched = (any(list(t["bunkis"]) != [-1] * 6 for t in tracks) or
+                any(t["subtracks"][si]["noteCount"] for t in tracks for si in (1, 2)))
     pg_ok = True
-    for t in tracks:
-        rem -= t["subtracks"][0]["noteCount"]
-        for si in (0, 3):
-            if t["subtracks"][si]["pointGain"] != rem:
-                pg_ok = False
-        for si in (1, 2, 4, 5):
-            if t["subtracks"][si]["pointGain"] != 0:
-                pg_ok = False
+    for r in (range(3) if branched else (0,)):
+        rem = sum(t["subtracks"][r]["noteCount"] for t in tracks)
+        for t in tracks:
+            rem -= t["subtracks"][r]["noteCount"]
+            for si in (r, r + 3):
+                if t["subtracks"][si]["pointGain"] != rem:
+                    pg_ok = False
+    if not branched:
+        for t in tracks:
+            for si in (1, 2, 4, 5):
+                if t["subtracks"][si]["pointGain"] != 0:
+                    pg_ok = False
     if not pg_ok:
         # ~15% of official charts (those with rolls/balloons) use a different
         # remaining-note count, so a mismatch is a soft note, not an error.
@@ -214,12 +219,15 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
     if difficulty:
         limit = tja2sht.DIFFICULTY_NOTE_LIMIT.get(difficulty.lower())
         if limit is not None:
-            if len(notes) > limit:
+            # branched charts count by their busiest route (see
+            # tja2sht.limit_note_count)
+            n = tja2sht.limit_note_count({"tracks": tracks, "notes": notes})
+            if n > limit:
                 E("difficulty.limit",
-                  f"{len(notes)} notes exceeds the {difficulty} buffer ({limit}) "
+                  f"{n} notes exceeds the {difficulty} buffer ({limit}) "
                   f"— FREEZES on this difficulty")
             else:
-                I("difficulty.limit", f"{len(notes)}/{limit} notes ({difficulty}) — ok")
+                I("difficulty.limit", f"{n}/{limit} notes ({difficulty}) — ok")
 
     I("summary", f"{len(tracks)} measures, {len(notes)} notes, "
                  f"first={times[0]:.0f}ms last={times[-1]:.0f}ms" if times else "empty")

@@ -62,7 +62,7 @@ Editors: `bineditor_*.py`; cross-table coordination: `song_manager.py`.
   `charts/chart_convert.py` is the single entry point for TJA / SHT / Gen3.
 - **Gen3 (Nijiiro) fumen** (`gen3_convert.py`): **AES-256-CBC** (IV = first 16
   bytes) then **gzip**. Layout: 40-byte measure header + 3 branch streams +
-  24-byte notes (type 6 is 32 bytes). **Note positions are absolute
+  24-byte notes (rolls, types 6 and 9, are 32 bytes). **Note positions are absolute
   milliseconds — not quantized**; conversion maps them onto the 1/48 grid.
   See [`notecolor_report.md`](notecolor_report.md) for note-color encoding.
 - **SHT → Gen3 / TJA** (`sht_export.py`). The 0x208-byte Gen3 header is 36
@@ -77,7 +77,8 @@ Editors: `bineditor_*.py`; cross-table coordination: `song_manager.py`.
   percentage is recovered from the points before the branch. Round trips over
   every T14 chart: SHT → Gen3 → SHT is identical for 839/840 charts (the
   other has a zero-filled bunki tail that `gen3_to_sht` normalises), and SHT
-  → TJA → SHT reproduces every track and note (roll ends within 1 ms).
+  → TJA → SHT reproduces every track and note of the shipped charts (roll
+  ends within 1 ms; a TJA roll end finer than 1/384 bar rounds to that grid).
 
 ## Audio — VAG / hd·bd
 

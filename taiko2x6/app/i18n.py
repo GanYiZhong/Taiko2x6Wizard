@@ -109,9 +109,6 @@ ZH_TW: dict[str, str] = {
     "Omnimix Maker (fuse many games)…": "Omnimix 製作（合併多代歌曲）…",
     "Harvest every song from several Taiko images (7…14) and merge the ones the target lacks into one image — charts, textures, audio and stars — then lift the exe's song ceiling.":
         "從多個太鼓映像（7…14 代）收集歌曲，把目標缺少的歌合併進去（譜面、圖、音訊、星數），再提高主程式的歌曲上限。",
-    "Gen3 → Gen2 converter…": "Gen3 → Gen2 轉換…",
-    "Convert a Nijiiro (Gen3) song to PS2-arcade assets: fumen .bin to .sht, and song_<id>.nus3bank to a game VAG. Audio decoding needs vgmstream.":
-        "把新筐體（Gen3）的歌轉成 PS2 機台格式：fumen .bin 轉 .sht，song_<id>.nus3bank 轉遊戲 VAG。音訊解碼需要 vgmstream。",
     "Browse…": "瀏覽…",
     "Output folder:": "輸出資料夾：",
     "Output folder": "輸出資料夾",
@@ -140,8 +137,7 @@ ZH_TW: dict[str, str] = {
     "Tick at least one format to write.": "請至少勾選一種輸出格式。",
     "Convert": "轉換",
     "done: {s} songs, {f} files written, {e} problems": "完成：{s} 首歌，寫入 {f} 個檔案，{e} 個問題",
-    "SHT Generator (TJA→sht)…": "SHT 產生器（TJA→sht）…",
-    "Convert a TJA chart to .sht files, exported to a folder": "把 TJA 譜面轉成 .sht，輸出到資料夾",
+    "Still converting; close the window when it is done.": "還在轉換中，完成後再關閉視窗。",
     "VAG Generator (audio→vag)…": "VAG 產生器（音訊→vag）…",
     "Convert wav/ogg to the game's VAG stream, exported to a folder": "把 wav/ogg 轉成遊戲的 VAG 音訊，輸出到資料夾",
     "SHT Validator (check format)…": "SHT 檢查器（檢查格式）…",

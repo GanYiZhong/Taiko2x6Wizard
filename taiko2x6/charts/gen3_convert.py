@@ -11,9 +11,10 @@ is what makes this conversion trustworthy rather than a guess:
     diagonal confusion matrix (4 stray notes total, from charts rebalanced
     between generations).
   * The TIME AXIS is the same: gen2 track.time == gen3 measure.offset.
-  * Gen2 stores a note's position as 1/48 of its measure; Gen3 stores absolute
-    milliseconds within the measure. round(pos / measure_len * 48) reproduces
-    the official gen2 value for 95.6% of notes, the residual being +/-1 rounding.
+  * Gen2 stores a note's position as 1/48 of a 4/4 bar (240000/bpm ms, not of
+    the measure); Gen3 stores absolute milliseconds within the measure.
+    round(ms / bar_ms * 48) reproduces the official gen2 value for 99.96% of
+    notes (see measure_length).
 
 That last point is the only lossy step, and it is a limit of the Gen2 format
 itself (a 1/48 grid cannot express every millisecond), not of this converter.
@@ -501,140 +502,6 @@ def validate(gen3_root, gen2_root, limit=None, log=print):
                drifts[-1]))
     return stats
 
-
-# --- GUI -------------------------------------------------------------------
-
-try:
-    from PySide6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-        QPlainTextEdit, QFileDialog, QMessageBox, QComboBox, QDoubleSpinBox)
-except ImportError:                                            # headless / CLI
-    QDialog = None
-
-
-if QDialog is not None:
-
-    class Gen3ConvertDialog(QDialog):
-        """Convert a Gen3 song's chart and audio into Gen2 game assets."""
-
-        _DIFFS = [("Easy", "e"), ("Normal", "n"), ("Hard", "h"), ("Oni", "m")]
-
-        def __init__(self, parent=None, fumen_dir="", sound_dir=""):
-            super().__init__(parent)
-            self.setWindowTitle("Gen3 → Gen2 converter")
-            self.resize(720, 460)
-            v = QVBoxLayout(self)
-
-            v.addWidget(QLabel(
-                "Converts a Nijiiro (Gen3) song to PS2-arcade (Gen2) assets: the\n"
-                "fumen .bin becomes an .sht chart, and song_<id>.nus3bank becomes\n"
-                "a game VAG. Note types are identical between generations; note\n"
-                "positions are re-gridded to Gen2's 1/48 of a measure, which is\n"
-                "the one lossy step and is a limit of the Gen2 format itself."))
-
-            for label, attr, browse in (
-                    ("Gen3 fumen .bin:", "ed_fumen", "file"),
-                    ("Gen3 nus3bank:", "ed_audio", "file"),
-                    ("Output folder:", "ed_out", "dir")):
-                row = QHBoxLayout()
-                row.addWidget(QLabel(label))
-                ed = QLineEdit()
-                setattr(self, attr, ed)
-                row.addWidget(ed, 1)
-                b = QPushButton("Browse…")
-                b.clicked.connect(
-                    lambda _=False, e=ed, k=browse: self._browse(e, k))
-                row.addWidget(b)
-                v.addLayout(row)
-
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Audio lead silence (ms):"))
-            self.sp_lead = QDoubleSpinBox()
-            self.sp_lead.setRange(0, 60000)
-            self.sp_lead.setDecimals(1)
-            self.sp_lead.setToolTip(
-                "The game starts the chart and the music together at t=0, so a "
-                "song whose music should start N ms in needs N ms of silence "
-                "baked into the VAG. Gen3 charts already carry their own "
-                "measure-0 offset, so this is usually 0.")
-            row.addWidget(self.sp_lead)
-            row.addStretch(1)
-            v.addLayout(row)
-
-            self.log = QPlainTextEdit()
-            self.log.setReadOnly(True)
-            v.addWidget(self.log, 1)
-
-            row = QHBoxLayout()
-            row.addStretch(1)
-            self.btn_go = QPushButton("Convert")
-            self.btn_go.clicked.connect(self._run)
-            row.addWidget(self.btn_go)
-            close = QPushButton("Close")
-            close.clicked.connect(self.reject)
-            row.addWidget(close)
-            v.addLayout(row)
-
-            self._fumen_dir = fumen_dir
-            self._sound_dir = sound_dir
-
-        def _browse(self, ed, kind):
-            if kind == "dir":
-                p = QFileDialog.getExistingDirectory(self, "Output folder",
-                                                     ed.text())
-            else:
-                start = (self._fumen_dir if ed is self.ed_fumen
-                         else self._sound_dir) or ed.text()
-                filt = ("Gen3 fumen (*.bin)" if ed is self.ed_fumen
-                        else "nus3bank (*.nus3bank)")
-                p, _ = QFileDialog.getOpenFileName(self, "Select", start, filt)
-            if p:
-                ed.setText(p)
-
-        def _say(self, s):
-            self.log.appendPlainText(str(s))
-            self.log.repaint()
-
-        def _run(self):
-            out = self.ed_out.text().strip()
-            if not out or not os.path.isdir(out):
-                QMessageBox.warning(self, "Convert", "Pick an output folder.")
-                return
-            self.btn_go.setEnabled(False)
-            try:
-                fumen = self.ed_fumen.text().strip()
-                if fumen:
-                    self._say("chart: %s" % fumen)
-                    try:
-                        data = convert_fumen(fumen)
-                        dst = os.path.join(
-                            out, pathlib.Path(fumen).stem + ".sht")
-                        pathlib.Path(dst).write_bytes(data)
-                        self._say("  wrote %s (%d bytes)" % (dst, len(data)))
-                    except Exception as e:
-                        self._say("  FAILED: %s" % e)
-                audio = self.ed_audio.text().strip()
-                if audio:
-                    self._say("audio: %s" % audio)
-                    try:
-                        data = convert_audio(
-                            audio, lead_silence_ms=self.sp_lead.value())
-                        dst = os.path.join(
-                            out, pathlib.Path(audio).stem + ".vag")
-                        pathlib.Path(dst).write_bytes(data)
-                        self._say("  wrote %s (%d bytes)" % (dst, len(data)))
-                    except VgmstreamMissing as e:
-                        self._say("  FAILED: %s" % e)
-                    except Exception as e:
-                        self._say("  FAILED: %s" % e)
-                if not fumen and not audio:
-                    self._say("nothing selected.")
-                self._say("done.")
-            finally:
-                self.btn_go.setEnabled(True)
-
-
-# --- CLI -------------------------------------------------------------------
 
 def main(argv=None):
     import argparse

@@ -17,6 +17,7 @@ lossless for shipped charts and rounds finer TJA tuplets.
 from __future__ import annotations
 
 import pathlib
+import re
 
 from taiko2x6.charts import gen3_convert, sht_export, tja2sht
 
@@ -30,7 +31,9 @@ _STAR_KEY = {"easy": "starEasy", "normal": "starNormal", "hard": "starHard",
 
 def read_text(path):
     raw = pathlib.Path(path).read_bytes()
-    for enc in ("utf-8-sig", "utf-8", "shift_jis", "cp932"):
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    for enc in ("utf-8-sig", "shift_jis", "cp932"):
         try:
             return raw.decode(enc)
         except UnicodeDecodeError:
@@ -38,10 +41,16 @@ def read_text(path):
     return raw.decode("cp932", errors="replace")
 
 
+# Nijiiro double-play charts (<id>_m_1.bin / _m_2.bin): not converted
+_DUET = re.compile(r"_[enhmx]_[12]$", re.I)
+
+
 def detect(path):
     """'tja', 'sht', 'bin' (Gen3 fumen), 'audio' (nus3bank) or None."""
     p = pathlib.Path(path)
     suf = p.suffix.lower()
+    if suf == ".bin" and _DUET.search(p.stem):
+        return None
     if suf == ".tja":
         return "tja"
     if suf == ".nus3bank":
@@ -52,6 +61,8 @@ def detect(path):
         try:
             gen3_convert.parse_gen3(gen3_convert.decrypt_fumen(p))
             return "bin"
+        except ImportError:
+            raise                   # no AES library: say so, not "unknown"
         except Exception:
             pass
         try:
@@ -63,11 +74,7 @@ def detect(path):
 
 
 def _course_of(name):
-    stem = pathlib.Path(name).stem.lower()
-    for s in (pathlib.Path(name).parent.name.lower(), stem):
-        if len(s) > 2 and s[-2] == "_" and s[-1] in _BY_LETTER:
-            return _BY_LETTER[s[-1]]
-    return None
+    return sht_export.course_from_name(name)
 
 
 def _gen3_stars(path, sid, course):
@@ -103,13 +110,18 @@ def load(path):
             course = _TJA_IDX.get(idx)
             if course is None or not cdata.get("measures"):
                 continue
-            piece["charts"][course] = tja2sht.convert_tja(text, course)
+            piece["charts"][course] = tja2sht.convert_tja(
+                text, course, warn=lambda w, c=course: piece["warnings"].append(
+                    "%s: %s" % (c, w)))
             lv = cdata["meta"].get("LEVEL")
             try:
                 if lv:
                     piece["levels"][course] = int(float(lv))
-            except ValueError:
+            except (ValueError, OverflowError):
                 pass
+        if not piece["charts"]:
+            raise ValueError("%s: no charts (no #START ... #END with notes)"
+                             % p.name)
         return piece
     if kind == "audio":
         name = p.stem
@@ -133,90 +145,135 @@ def load(path):
     return piece
 
 
-def group(pieces):
-    """Merge pieces with the same id into songs (first title/wave wins)."""
+def group(pieces, out_id=None, warn=None):
+    """Merge pieces with the same id into songs (first title/wave wins).
+    With `out_id` every piece belongs to that one song -- e.g. a TJA and the
+    game's song_<id>.nus3bank. A course given twice keeps the first one."""
     songs = {}
     for pc in pieces:
-        s = songs.setdefault(pc["id"], {"id": pc["id"], "title": "", "wave": "",
-                                        "charts": {}, "levels": {},
-                                        "audio": None, "sources": set()})
+        sid = out_id or pc["id"]
+        s = songs.setdefault(sid, {"id": sid, "title": "", "wave": "",
+                                   "charts": {}, "levels": {},
+                                   "audio": None, "sources": set()})
         s["title"] = s["title"] or pc["title"]
         s["wave"] = s["wave"] or pc["wave"]
-        s["charts"].update(pc["charts"])
-        s["levels"].update(pc["levels"])
+        for course, sht in pc["charts"].items():
+            if course in s["charts"]:
+                if warn:
+                    warn("%s: %s given twice; kept the first" % (sid, course))
+                continue
+            s["charts"][course] = sht
+            if course in pc["levels"]:
+                s["levels"][course] = pc["levels"][course]
         s["audio"] = s["audio"] or pc["audio"]
         s["sources"].add(pc["kind"])
     return list(songs.values())
 
 
+def _route_notes(sht):
+    """Notes a player meets on each route ([n] for an unbranched chart)."""
+    m = tja2sht.parse_sht(sht)
+    _div, rts = sht_export.routes(m)
+    if not sht_export.is_branched(m):
+        return [sum(len(r[0]) for r in rts)]
+    return [sum(len(r[b]) for r in rts) for b in range(3)]
+
+
 def write(song, out_dir, formats, players=("1p",), out_id=None, log=print,
-          written=None):
+          written=None, errors=None, protect=()):
     """Write a song in each of `formats` ('sht', 'tja', 'bin', 'vag').
     Returns the written paths (also appended to `written` as they land, so
-    a later failure does not hide what was already written)."""
+    a later failure does not hide what was already written). Each file is
+    tried on its own: a failure goes to `errors` (raised when None) and the
+    rest still get written. Paths in `protect` (the inputs) are never
+    overwritten."""
     out = pathlib.Path(out_dir)
     sid = out_id or song["id"]
     written = [] if written is None else written
+    raise_errors = errors is None
+    errors = [] if errors is None else errors
+    keep = {pathlib.Path(x).resolve() for x in protect}
     charts = song["charts"]
+
+    def put(dst, make, what):
+        try:
+            if dst.resolve() in keep:
+                raise ValueError("would overwrite the input %s; pick another "
+                                 "output folder" % dst)
+            data = make()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+            written.append(dst)
+            return True
+        except Exception as e:
+            if raise_errors:
+                raise
+            errors.append("%s %s: %s" % (sid, what, e))
+            log("FAILED %s" % errors[-1])
+            return False
+
     if "sht" in formats:
         for course, sht in charts.items():
-            n = len(tja2sht.parse_sht(sht)["notes"])
+            ok = all([put(out / ("%s%s_%s" % (sid, pl, LETTER[course])) / "sht",
+                          lambda: sht, "sht " + course) for pl in players])
+            if not ok:
+                continue
+            per = _route_notes(sht)
             limit = tja2sht.DIFFICULTY_NOTE_LIMIT.get(course)
-            for pl in players:
-                d = out / ("%s%s_%s" % (sid, pl, LETTER[course]))
-                d.mkdir(parents=True, exist_ok=True)
-                (d / "sht").write_bytes(sht)
-                written.append(d / "sht")
             note = ""
-            if limit is not None and n > limit:
+            if limit is not None and tja2sht.limit_note_count(
+                    tja2sht.parse_sht(sht)) > limit:
                 note = " — over the retail %s max (%d); check in game" % (
                     course, limit)
-            log("sht  %s %s: %d notes%s" % (sid, course, n, note))
+            log("sht  %s %s: %s notes%s" % (
+                sid, course, "/".join(map(str, per)), note))
     if "tja" in formats and charts:
-        text = sht_export.sht_to_tja(
-            charts, title=song["title"] or sid, wave=song["wave"] or (sid + ".ogg"),
-            levels=song["levels"])
         dst = out / (sid + ".tja")
-        out.mkdir(parents=True, exist_ok=True)
-        dst.write_text(text, encoding="utf-8")
-        written.append(dst)
-        log("tja  %s: %s" % (sid, dst))
+        if put(dst, lambda: sht_export.sht_to_tja(
+                charts, title=song["title"] or sid,
+                wave=song["wave"] or (sid + ".ogg"),
+                levels=song["levels"]).encode("utf-8-sig"), "tja"):
+            log("tja  %s: %s" % (sid, dst))
     if "bin" in formats:
         for course, sht in charts.items():
-            d = out / sid
-            d.mkdir(parents=True, exist_ok=True)
-            dst = d / ("%s_%s.bin" % (sid, LETTER[course]))
-            dst.write_bytes(sht_export.sht_to_gen3_bin(
-                sht, course=course, stars=song["levels"].get(course)))
-            written.append(dst)
-            log("bin  %s %s: %s" % (sid, course, dst))
+            dst = out / sid / ("%s_%s.bin" % (sid, LETTER[course]))
+            if put(dst, lambda: sht_export.sht_to_gen3_bin(
+                    sht, course=course, stars=song["levels"].get(course)),
+                    "bin " + course):
+                log("bin  %s %s: %s" % (sid, course, dst))
     if "vag" in formats and song.get("audio"):
         dst = out / (sid + ".vag")
-        out.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(gen3_convert.convert_audio(song["audio"]))
-        written.append(dst)
-        log("vag  %s: %s" % (sid, dst))
+        if put(dst, lambda: gen3_convert.convert_audio(song["audio"]), "vag"):
+            log("vag  %s: %s" % (sid, dst))
+    if raise_errors and errors:
+        raise RuntimeError("; ".join(errors))
     return written
 
 
 def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print):
-    """Load, group and write. Returns (songs, written paths, errors)."""
+    """Load, group and write. Returns (songs, written paths, errors).
+    `out_id` makes every input one song with that id."""
     pieces, errors = [], []
     for p in paths:
         try:
-            pieces.append(load(p))
+            pc = load(p)
         except Exception as e:
             errors.append("%s: %s" % (pathlib.Path(p).name, e))
             log("skip %s" % errors[-1])
-    songs = group(pieces)
+            continue
+        for w in pc["warnings"]:
+            log("note %s: %s" % (pathlib.Path(p).name, w))
+        pieces.append(pc)
+    songs = group(pieces, out_id=out_id, warn=lambda w: log("note " + w))
     written = []
     for s in songs:
-        try:
-            write(s, out_dir, formats, players=players,
-                  out_id=out_id if len(songs) == 1 else None, log=log,
-                  written=written)
-        except Exception as e:
-            errors.append("%s: %s" % (s["id"], e))
+        n0, e0 = len(written), len(errors)
+        write(s, out_dir, formats, players=players, log=log,
+              written=written, errors=errors, protect=paths)
+        if len(written) == n0 and len(errors) == e0:
+            errors.append("%s: nothing to write as %s (%s)" % (
+                s["id"], "/".join(sorted(formats)),
+                "no charts" if not s["charts"] else "no nus3bank audio"))
             log("FAILED %s" % errors[-1])
     return songs, written, errors
 
@@ -224,7 +281,7 @@ def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print):
 # --- GUI -------------------------------------------------------------------
 
 try:
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QThread, Signal
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QPlainTextEdit, QFileDialog, QMessageBox, QListWidget, QCheckBox,
@@ -235,6 +292,31 @@ except ImportError:                                            # headless / CLI
 
 if QDialog is not None:
     from taiko2x6.app.i18n import tr
+
+    class _ConvertWorker(QThread):
+        """Runs convert() off the UI thread (vgmstream and decrypting many
+        fumens take a while); log lines come back through a signal."""
+        line = Signal(str)
+        done = Signal(object)
+
+        def __init__(self, kwargs, parent=None):
+            super().__init__(parent)
+            self.kwargs = kwargs
+
+        def run(self):
+            try:
+                self.done.emit(convert(log=self.line.emit, **self.kwargs))
+            except Exception as e:                  # report, never vanish
+                self.done.emit(e)
+
+    def _quick_kind(p):
+        """Cheap filter for folder drops: by name only (load() checks the
+        contents). Gen3 fumens must look like <id>_<e/n/h/m/x>.bin, so a
+        datatable/*.bin or a duet <id>_m_1.bin isn't picked up."""
+        suf, name = p.suffix.lower(), p.name.lower()
+        if suf in (".tja", ".sht", ".nus3bank") or name == "sht":
+            return True
+        return suf == ".bin" and sht_export.course_from_name(p) is not None
 
     class ChartConverterDialog(QDialog):
         """Drop in TJA / sht / Gen3 .bin / nus3bank files, tick the formats
@@ -362,7 +444,7 @@ if QDialog is not None:
                 p = pathlib.Path(u.toLocalFile())
                 if p.is_dir():
                     paths += [str(x) for x in sorted(p.rglob("*"))
-                              if x.is_file() and detect(x)]
+                              if x.is_file() and _quick_kind(x)]
                 elif p.is_file():
                     paths.append(str(p))
             self.add_paths(paths)
@@ -382,8 +464,8 @@ if QDialog is not None:
                 QMessageBox.warning(self, self.windowTitle(),
                                     tr("Add at least one file."))
                 return
-            if not formats - {"vag"} and not any(
-                    detect(p) == "audio" for p in paths):
+            if not formats or (formats == {"vag"} and not any(
+                    p.lower().endswith(".nus3bank") for p in paths)):
                 QMessageBox.warning(self, self.windowTitle(),
                                     tr("Tick at least one format to write."))
                 return
@@ -395,18 +477,33 @@ if QDialog is not None:
                             if c.isChecked()) or ("1p",)
             self.b_go.setEnabled(False)
             self.log.clear()
-            try:
-                songs, written, errors = convert(
-                    paths, out, formats, players=players,
-                    out_id=self.ed_id.text().strip() or None, log=self._say)
-                self._say(tr("done: {s} songs, {f} files written, {e} problems")
-                          .format(s=len(songs), f=len(written), e=len(errors)))
-            finally:
-                self.b_go.setEnabled(True)
+            self._worker = _ConvertWorker(dict(
+                paths=paths, out_dir=out, formats=formats, players=players,
+                out_id=self.ed_id.text().strip() or None), self)
+            self._worker.line.connect(self._say)
+            self._worker.done.connect(self._finished)
+            self._worker.start()
+
+        def _finished(self, res):
+            self.b_go.setEnabled(True)
+            if isinstance(res, Exception):
+                self._say("FAILED %r" % res)
+                QMessageBox.critical(self, self.windowTitle(), str(res))
+                return
+            songs, written, errors = res
+            self._say(tr("done: {s} songs, {f} files written, {e} problems")
+                      .format(s=len(songs), f=len(written), e=len(errors)))
+
+        def reject(self):
+            w = getattr(self, "_worker", None)
+            if w is not None and w.isRunning():
+                QMessageBox.information(self, self.windowTitle(), tr(
+                    "Still converting; close the window when it is done."))
+                return
+            super().reject()
 
         def _say(self, s):
             self.log.appendPlainText(str(s))
-            self.log.repaint()
 
 
 def main(argv=None):
@@ -421,12 +518,24 @@ def main(argv=None):
     ap.add_argument("--id", help="output song id (one song only)")
     ap.add_argument("--players", default="1p", help="sht: 1p, 2p or 1p,2p")
     a = ap.parse_args(argv)
-    fm = {x.strip() for x in a.to.split(",") if x.strip()}
+    fm = {x.strip().lower() for x in a.to.split(",") if x.strip()}
     bad = fm - {"sht", "tja", "bin", "vag"}
-    if bad:
-        ap.error("unknown format(s): %s" % ", ".join(sorted(bad)))
-    _s, _w, errors = convert(a.inputs, a.out, fm,
-                             players=tuple(a.players.split(",")), out_id=a.id)
+    if bad or not fm:
+        ap.error("unknown format(s): %s" % (", ".join(sorted(bad)) or a.to))
+    players = tuple(dict.fromkeys(
+        x.strip().lower() for x in a.players.split(",") if x.strip()))
+    if not players or set(players) - {"1p", "2p"}:
+        ap.error("--players takes 1p, 2p or 1p,2p")
+    paths = []
+    for x in a.inputs:
+        p = pathlib.Path(x)
+        if p.is_dir():                  # a folder: every chart/audio in it
+            paths += [str(f) for f in sorted(p.rglob("*"))
+                      if f.is_file() and detect(f)]
+        else:
+            paths.append(x)
+    _s, w, errors = convert(paths, a.out, fm, players=players, out_id=a.id)
+    print("%d files written, %d problems" % (len(w), len(errors)))
     return 1 if errors else 0
 
 

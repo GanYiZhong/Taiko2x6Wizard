@@ -151,26 +151,6 @@ def find_charts(archive, sid: str) -> list:
 # --------------------------------------------------------------------------- #
 #  audio/chart sync gap (auto-detect)
 # --------------------------------------------------------------------------- #
-def _first_note_time_ms(model) -> float | None:
-    """Absolute time (ms) of the chart's first note, from a parsed sht model."""
-    tracks = model.get("tracks") or []
-    notes = model.get("notes") or []
-    if not tracks or not notes:
-        return None
-    for i, t in enumerate(tracks):
-        for s in t["subtracks"]:
-            if s["noteCount"] > 0 and s["noteIndexSt"] <= 0 < s["noteIndexSt"] + s["noteCount"]:
-                # positions are 1/48 of a 4/4 bar, not of the measure
-                bpm = float(t.get("bpm") or 0.0)
-                bar_ms = 240000.0 / bpm if bpm > 0 else 0.0
-                pos = notes[0].get("measure", 0)
-                return float(t["time"]) + (pos / 48.0) * bar_ms
-    for t in tracks:
-        if any(s["noteCount"] > 0 for s in t["subtracks"]):
-            return float(t["time"])
-    return float(tracks[0]["time"])
-
-
 def prepare_tja_for_game(tja_text: str) -> dict:
     """Neutralise the TJA OFFSET: bake it into the audio, blank-lead the chart.
 
@@ -383,7 +363,7 @@ def build_song(archive, sid: str, title: str, lyricist: str = "", composer: str 
                 # let the user confirm in-game (dense X JAPAN Easy/Normal courses can
                 # legitimately exceed the retail max).
                 limit = tja2sht.DIFFICULTY_NOTE_LIMIT.get(course)
-                ncount = len(parsed_sht["notes"])
+                ncount = tja2sht.limit_note_count(parsed_sht)
                 if limit is not None and ncount > limit:
                     summary["warnings"].append(
                         f"chart {grp['name']}: {ncount} notes exceeds the retail "

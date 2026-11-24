@@ -45,7 +45,7 @@ taiko2x6/
 | `song_replacer.py` | Swap one existing song's parts (chart/audio/texture) in place; can source from a Gen3 folder. |
 | `omnimix_maker.py` | Fuse songs from several Taiko 7…14 images into one target (dedup by song id, verbatim asset copy — Taiko 7 charts converted via `sht_t7`, auto song-limit patch, partition grow). |
 | `omnimix_gui.py` | GUI for the Omnimix Maker (Tools menu). |
-| `generators.py` | Placeholder chart/audio generators (uses `tja2sht`, `vagtool`). |
+| `generators.py` | VAG generator: wav/ogg → the game's VAG, to a folder (uses `vagtool`). |
 
 ### `bineditors/` — per-song database `.bin` editors (auto-discovered)
 | Module | Table |
@@ -65,10 +65,12 @@ folder registers it with the Explorer.
 ### `charts/` — fumen
 | Module | Role |
 |--------|------|
-| `tja2sht.py` | Convert TJA → SHT (SYSTEM256 chart). Position grid is 1/48 of a measure (`POS_DIV=48`, an engine limit). |
+| `chart_convert.py` | The chart converter (Tools menu and CLI): TJA, SHT and Gen3 fumen `.bin` in any direction, plus nus3bank → VAG. |
+| `tja2sht.py` | Parse TJA and SHT; convert TJA → SHT with all three branch routes. Position grid is 1/48 of a 4/4 bar (`POS_DIV=48`). |
+| `sht_export.py` | SHT → TJA and SHT → Gen3 fumen (header, soul-gauge table, encryption). |
 | `sht_validator.py` | Validate / sanity-check SHT charts. |
 | `sht_t7.py` | Convert Taiko 7 charts (112-byte measure records, integer time/BPM) to the Gen2 136-byte layout. |
-| `gen3_convert.py` | Decrypt Gen3 (Nijiiro) fumen (AES-256-CBC + gzip) and convert to SHT; decodes audio via `vgmstream`. |
+| `gen3_convert.py` | Decrypt Gen3 (Nijiiro) fumen (AES-256-CBC + gzip) and convert to SHT; decodes nus3bank audio via `vgmstream`. |
 | `gen3_song.py` | Load a Gen3 song directory and map it to `song_builder` kwargs (title, charts, stars, audio). |
 
 ### `audio/`

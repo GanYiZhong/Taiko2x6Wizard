@@ -267,7 +267,7 @@ Taiko2x6Wizard/
 │   ├── archive/                DATA.000 + list.bin model, read / save / rebuild
 │   ├── songs/                  song add / replace / DB manager, Omnimix
 │   ├── bineditors/             per-song .bin table editors (auto-discovered)
-│   ├── charts/                 TJA / Gen3 -> SHT, SHT validator
+│   ├── charts/                 TJA / SHT / Gen3 chart converter, SHT validator
 │   ├── audio/                  VAG, hd/bd sound banks, playback
 │   ├── graphics/               TIM2, title art, SWG sprites, flipbooks
 │   ├── ps2/                    PS2 HDD (APA/PFS), memory card, ISO, image tools

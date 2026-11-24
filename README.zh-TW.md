@@ -240,7 +240,7 @@ Taiko2x6Wizard/
 │   ├── archive/                DATA.000 + list.bin 模型、讀取／存檔／重建
 │   ├── songs/                  歌曲新增／替換、資料庫管理、Omnimix
 │   ├── bineditors/             各 .bin 資料表編輯器（自動偵測）
-│   ├── charts/                 TJA／虹版 → SHT、SHT 檢查工具
+│   ├── charts/                 TJA／SHT／虹版譜面互轉、SHT 檢查工具
 │   ├── audio/                  VAG、hd/bd 音效庫、播放器
 │   ├── graphics/               TIM2、曲名貼圖、SWG 精靈、逐格動畫
 │   ├── ps2/                    PS2 硬碟（APA/PFS）、記憶卡、ISO、映像檔工具

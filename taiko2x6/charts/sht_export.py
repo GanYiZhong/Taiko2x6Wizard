@@ -133,13 +133,20 @@ def _hp_table():
 
 def hp_values(course, stars, n_notes):
     """Soul-gauge (good, ok, bad) for a chart, as the game's own charts set it."""
-    c = "oni" if course == "ura" else course
+    c = _norm_course(course)
+    c = "oni" if c == "ura" else c
     stars = min(10, max(1, int(stars or DEFAULT_STARS[c])))
-    if not 0 < n_notes <= len(_hp_table()):
-        return 10, 5, -20
     key = "%s-%s" % (c.capitalize(), _STAR_KEY[c][stars])
-    row = _hp_table()[n_notes - 1]
-    return int(row["good_" + key]), int(row["ok_" + key]), int(row["bad_" + key])
+    table = _hp_table()
+    i = min(max(1, int(n_notes)), len(table)) - 1
+    # The table's values fall to 0 for very long charts (~2300+ notes),
+    # which would make the gauge impossible to fill: use the last row that
+    # still gives something.
+    while i > 0 and int(table[i]["good_" + key]) <= 0:
+        i -= 1
+    row = table[i]
+    return (max(1, int(row["good_" + key])), max(1, int(row["ok_" + key])),
+            int(row["bad_" + key]))
 
 
 def sht_to_gen3(sht, course="oni", stars=None, score_init=0, score_diff=0):
@@ -170,7 +177,8 @@ def sht_to_gen3(sht, course="oni", stars=None, score_init=0, score_diff=0):
                 if ty in _BALLOON:
                     a, c = max(0, int(n["balloonHitCount"])), 0
                 else:
-                    a, c = min(65535, score_init), min(65535, score_diff * 4)
+                    a = min(65535, max(0, score_init))
+                    c = min(65535, max(0, score_diff * 4))
                 ln = int(n["longNoteLength"])
                 dur = float(ln) if ty in _ROLL and ln > 0 else 0.0
                 body += struct.pack("<ifiiHHf", ty, n["measure"] / 48.0 * bar,
@@ -271,34 +279,50 @@ class _Course:
             k += 1
         bar = _bar_ms(tr[k])
         p = int(round((ms - tr[k]["time"]) / bar * 48 * _SUB)) if bar > 0 else 0
-        if p >= self.n48[k] * _SUB and k + 1 < len(tr):
+        if (p >= self.n48[k] * _SUB and k + 1 < len(tr)
+                and ms >= tr[k + 1]["time"] - 1e-6):
             return k + 1, 0
+        # an end in the pause before the next track stays in this one
         return k, max(0, min(p, self.n48[k] * _SUB - 1))
 
     def _fill(self, b):
         g = self.grid[b]
+        ends = []
         for k, r in enumerate(self.rts):
             # TJA reads a measure left to right (BALLOON counts too); the sht
             # does not always list a measure's notes in that order.
+            last = self.n48[k] * _SUB - 1
             for n in sorted(r[b], key=lambda n: n["measure"]):
                 ty = int(n["type"])
                 ch = _TJA_CHAR.get(ty)
                 if ch is None:
                     continue
                 pos = int(n["measure"]) * _SUB
+                # two notes on one 1/48 slot (a chart denser than the grid):
+                # the second goes to the next free fine cell, not over it
+                while pos in g[k] and pos < last:
+                    pos += 1
                 g[k][pos] = ch
                 if ty in _BALLOON:
                     self.balloons[b].append(max(0, int(n["balloonHitCount"])))
                 if ty in _ROLL:
                     t = self.tracks[k]
                     start = t["time"] + pos / (48.0 * _SUB) * _bar_ms(t)
-                    ln = max(1, int(n["longNoteLength"]))
-                    ek, ep = self._locate(start + ln)
-                    if (ek, ep) <= (k, pos):
-                        ek, ep = k, pos + 1
-                    while ep in g[ek] and ep < self.n48[ek] * _SUB - 1:
-                        ep += 1
-                    g[ek].setdefault(ep, "8")
+                    ends.append((k, pos, start + max(1, int(n["longNoteLength"]))))
+        # Roll ends go in after every note, so no note can land on (and
+        # erase) one. A taken cell moves the end back towards its roll.
+        for k, pos, end_ms in ends:
+            ek, ep = self._locate(end_ms)
+            if (ek, ep) <= (k, pos):
+                ek, ep = k, pos + 1
+            while ep in g[ek] and (ek, ep) > (k, pos + 1):
+                if ep == 0:
+                    ek -= 1
+                    ep = self.n48[ek] * _SUB
+                ep -= 1
+            while ep in g[ek] and ep < self.n48[ek] * _SUB - 1:
+                ep += 1
+            g[ek].setdefault(ep, "8")
 
     def branch_points(self):
         if not self.div:
@@ -418,6 +442,10 @@ def sht_to_tja(charts, title="", subtitle="", wave="", levels=None,
     lead = next(models[c] for c in reversed(order) if c in models)
     origin = float(lead["tracks"][0]["time"])
     bpm = float(lead["tracks"][0]["bpm"])
+
+    def one_line(v):
+        return " ".join(str(v or "").split())
+    title, subtitle, wave = one_line(title), one_line(subtitle), one_line(wave)
     lines = ["TITLE:%s" % title]
     if subtitle:
         lines.append("SUBTITLE:%s" % subtitle)
@@ -443,14 +471,17 @@ def sht_to_tja(charts, title="", subtitle="", wave="", levels=None,
             bps = c.branch_points()
             first = bps[0] if bps else len(c.tracks)
             # BALLOON in file order, for players without per-route lists
-            pre = [n for k in range(first) for n in c.rts[k][0]
+            pre = [n for k in range(first)
+                   for n in sorted(c.rts[k][0], key=lambda n: n["measure"])
                    if n["type"] in _BALLOON]
             seq += [max(0, int(n["balloonHitCount"])) for n in pre]
             for i, k0 in enumerate(bps):
                 k1 = bps[i + 1] if i + 1 < len(bps) else len(c.tracks)
                 for b in range(3):
                     seq += [max(0, int(n["balloonHitCount"]))
-                            for k in range(k0, k1) for n in c.rts[k][b]
+                            for k in range(k0, k1)
+                            for n in sorted(c.rts[k][b],
+                                            key=lambda n: n["measure"])
                             if n["type"] in _BALLOON]
             if seq:
                 lines.append("BALLOON:%s" % ",".join(map(str, seq)))
@@ -482,13 +513,12 @@ def song_id_of(path):
 
 def course_from_name(name):
     """Guess the course from a chart file/folder name (…_e / …1p_m / …_x)."""
-    stem = pathlib.Path(name).stem.lower()
-    parts = [pathlib.Path(name).parent.name.lower(), stem]
-    for s in parts:
-        for suf, c in (("_e", "easy"), ("_n", "normal"), ("_h", "hard"),
-                       ("_m", "oni"), ("_x", "ura")):
-            if s.endswith(suf):
-                return c
+    p = pathlib.Path(name)
+    s = (p.parent.name if p.name.lower() == "sht" else p.stem).lower()
+    for suf, c in (("_e", "easy"), ("_n", "normal"), ("_h", "hard"),
+                   ("_m", "oni"), ("_x", "ura")):
+        if s.endswith(suf):
+            return c
     return None
 
 
@@ -518,10 +548,12 @@ def main(argv=None):
 
     if a.to == "tja":
         charts = {course_of(p): pathlib.Path(p).read_bytes() for p in a.sht}
+        if a.stars and len(charts) > 1:
+            ap.error("--stars sets one course's level; give one sht with it")
         lv = {c: a.stars for c in charts} if a.stars else None
         text = sht_to_tja(charts, title=a.title, wave=a.wave, levels=lv)
         out = a.out or str(pathlib.Path(a.sht[0]).with_suffix(".tja"))
-        pathlib.Path(out).write_text(text, encoding="utf-8")
+        pathlib.Path(out).write_text(text, encoding="utf-8-sig")
         print("wrote %s" % out)
         return 0
     for p in a.sht:
@@ -529,7 +561,10 @@ def main(argv=None):
         data = sht_to_gen3_bin(pathlib.Path(p).read_bytes(), course=c,
                                stars=a.stars, encrypt=not a.plain)
         src = pathlib.Path(p)
-        name = (src.parent.name if src.name.lower() == "sht" else src.stem)
+        # the Gen3 name, as chart_convert writes it: <id>_<letter>.bin
+        name = "%s_%s" % (song_id_of(src), {"easy": "e", "normal": "n",
+                                            "hard": "h", "oni": "m",
+                                            "ura": "x"}[c])
         dst = pathlib.Path(a.out or src.parent) / (name + ".bin")
         dst.write_bytes(data)
         print("wrote %s (%s, %d bytes)" % (dst, c, len(data)))
