@@ -343,6 +343,64 @@ def _musicinfo_rows(raw: bytes) -> list:
     return out
 
 
+# Song-select preview: where the select screen starts playing the song (ms).
+# Each row ends with four preview words [start, start+3000, start, start+5000]
+# (T7 has its own fade marks there); TK14 also keeps the start in column 12.
+# The rows are 26 ints in T13/T14, 25 in T11T/T12T and 21 in T7..T10, so the
+# start is always the fourth word from the end.
+_PREVIEW_COL_T14 = 12
+_PREVIEW_TAIL_T14 = 22
+
+
+def musicinfo_previews(raw: bytes) -> dict:
+    """{song id: preview start in ms} from musicinfo.bin (T7..T14 layouts)."""
+    import struct
+    from taiko2x6.bineditors import bineditor_musicinfo as MI
+    if len(raw) < 0x34:
+        return {}
+    if struct.unpack_from("<I", raw, 0x20)[0] == MI.HEADER_SIZE_T14:
+        m = MI.parse(raw)
+        rows, pool = [list(r) for r in m.sec0], m.pool
+    else:
+        hdr = struct.unpack_from("<13I", raw, 0)
+        count, o0, o5 = hdr[0], hdr[7], hdr[12]
+        if not count or (o0 - 0x34) % count or o5 > len(raw):
+            return {}
+        rs = (o0 - 0x34) // count
+        if rs < 32:
+            return {}
+        rows = [list(struct.unpack_from("<%di" % (rs // 4), raw, 0x34 + i * rs))
+                for i in range(count)]
+        pool = raw[o5:]
+    out = {}
+    for r in rows:
+        if not 0 <= r[0] < len(pool):
+            continue
+        sid = pool[r[0]:pool.find(b"\0", r[0])].decode("ascii", "replace")
+        if sid and r[-4] > 0:
+            out[sid] = r[-4]
+    return out
+
+
+def set_musicinfo_previews(raw: bytes, previews: dict) -> bytes:
+    """TK14 musicinfo.bin with {song id: preview start ms} written the way
+    TK14's own rows hold it (column 12 and [s, s+3000, s, s+5000])."""
+    from taiko2x6.bineditors import bineditor_musicinfo as MI
+    if not previews:
+        return raw
+    m = MI.parse(raw)
+    pool = m.pool
+    for rec in m.sec0:
+        o = rec[0]
+        sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
+        st = previews.get(sid)
+        if st is None or st <= 0:
+            continue
+        rec[_PREVIEW_COL_T14] = st
+        rec[_PREVIEW_TAIL_T14:_PREVIEW_TAIL_T14 + 4] = [st, st + 3000, st, st + 5000]
+    return MI.serialize(m)
+
+
 def read_song_meta(archive) -> dict:
     """{sid: {"stars":[e,n,h,o], "genre":int}} read via SongManager.
 
@@ -545,6 +603,8 @@ class PlanItem:
     # gauge / judgement / scoring per difficulty, from the song's first
     # trusted source (see read_play_fields); None keeps the template's
     play: list = None
+    # song-select preview start (ms) from the same source; None keeps it
+    preview: int = None
 
 
 @dataclass
@@ -562,6 +622,8 @@ class MergePlan:
     order: dict = field(default_factory=dict)
     # target rows whose gauge / scoring values are corrected: sid -> play
     play_fixes: dict = field(default_factory=dict)
+    # target rows whose preview start is corrected: sid -> ms
+    preview_fixes: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
@@ -646,6 +708,7 @@ def plan_merge(target, sources, log=lambda s: None,
 
         metas = {}
         plays = {}
+        previews = {}
         unlisted = {}
         for spec, src in opened:
             meta = read_song_meta(src)
@@ -655,6 +718,11 @@ def plan_merge(target, sources, log=lambda s: None,
             except Exception as exc:
                 log(f"{spec.label}: no gauge/scoring values ({exc})")
                 plays[spec.label] = {}
+            try:
+                previews[spec.label] = musicinfo_previews(
+                    song_builder._read_named(src, "musicinfo.bin"))
+            except Exception:
+                previews[spec.label] = {}
             try:
                 rows = _musicinfo_rows(song_builder._read_named(src, "musicinfo.bin"))
             except Exception:
@@ -686,8 +754,8 @@ def plan_merge(target, sources, log=lambda s: None,
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
         fixes = _vote_genres(target, opened, items, log, metas)
         star_fixes = _target_star_fixes(target, opened, metas, log)
-        gfix, sfix, order, play_fixes = _resolve_trusted(target, opened, items, metas,
-                                                         log, plays)
+        gfix, sfix, order, play_fixes, preview_fixes = _resolve_trusted(
+            target, opened, items, metas, log, plays, previews)
         for sid, g in gfix.items():
             fixes.setdefault(sid, g)          # the C-POP refiling wins
         star_fixes.update(sfix)
@@ -701,7 +769,8 @@ def plan_merge(target, sources, log=lambda s: None,
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
                      skipped_titles=skipped_titles, genre_fixes=fixes,
-                     star_fixes=star_fixes, order=order, play_fixes=play_fixes)
+                     star_fixes=star_fixes, order=order, play_fixes=play_fixes,
+                     preview_fixes=preview_fixes)
 
 
 def _valid_stars(st) -> bool:
@@ -771,7 +840,8 @@ def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
     return fixes
 
 
-def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=None):
+def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=None,
+                     previews=None):
     """Genre, stars and folder order of every song from its first trusted source.
 
     The first source is the base release (stock TK14). Any other archive in
@@ -792,6 +862,8 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
     and scoring values the same way: added songs get them on `it.play`, and
     target songs an earlier merge added (cloned from its template row, so
     every one of them had the template's gauge) get them as play fixes.
+    `previews` ({label: musicinfo_previews(...)}) does the same for the
+    song-select preview start (returned last, as target preview fixes).
     """
     from taiko2x6.songs import song_builder
 
@@ -810,8 +882,9 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
         return ids, g, t14
 
     plays = plays or {}
+    previews = previews or {}
     if not opened:
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, {}
     srcs = [(spec.label, *info(src)) for spec, src in opened]
     base_ids = set(srcs[0][1])
     base_t14 = srcs[0][3]
@@ -841,13 +914,23 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
                 return plays[label][sid]
         return None
 
-    rank, gfix, sfix, pfix = {}, {}, {}, {}
+    def first_preview(sid):
+        for label, pos, _g in trusted:
+            v = previews.get(label, {}).get(sid)
+            if sid in pos and v:
+                return v
+        return None
+
+    rank, gfix, sfix, pfix, vfix = {}, {}, {}, {}, {}
     if tgt_derived:
         for sid in tgt_ids:
             if sid not in base_ids:
                 pl = first_play(sid)
                 if pl:
                     pfix[sid] = pl
+                pv = first_preview(sid)
+                if pv:
+                    vfix[sid] = pv
     for sid in tgt_ids:
         hit = first(sid)
         if not hit:
@@ -877,12 +960,15 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
     nplay = 0
     for it in items:
         it.play = first_play(it.sid)
+        it.preview = first_preview(it.sid)
         nplay += bool(it.play)
     log(f"trust: {len(gfix)} target songs refiled, {len(sfix)} target ratings and "
         f"{regenre} added songs' folders taken from their first trusted source")
     log(f"gauge/scoring: {nplay}/{len(items)} added songs and {len(pfix)} earlier-"
         f"merged target songs take their source's values")
-    return gfix, sfix, rank, pfix
+    log(f"preview: {sum(1 for it in items if it.preview)}/{len(items)} added songs "
+        f"and {len(vfix)} earlier-merged target songs take their source's start")
+    return gfix, sfix, rank, pfix, vfix
 
 
 def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None):
@@ -933,37 +1019,49 @@ def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None
             f"target songs no source has values for")
 
 
-def repair_play_fields(target, sources, log=lambda s: None):
-    """New tuning.bin for an already built Omnimix, or None if nothing changes.
+def repair_song_db(target, sources, log=lambda s: None) -> dict:
+    """{file name: new bytes} that fix an already built Omnimix, empty if
+    nothing changes.
 
-    Builds before the gauge fix cloned every added song's soul-gauge and
-    scoring values from the template row. `sources` must start with the base
-    release (stock TK14), then the games the songs came from; each song the
-    base does not have takes the values of its first trusted source, as a
-    fresh build would. Needs a QApplication when a source is Taiko 7.
+    Builds before these fixes cloned every added song's soul-gauge / scoring
+    values (tuning.bin) and song-select preview start (musicinfo.bin) from
+    the template row. `sources` must start with the base release (stock
+    TK14), then the games the songs came from; each song the base does not
+    have takes the values of its first trusted source, as a fresh build would.
+    Needs a QApplication when a source is Taiko 7.
     """
     from taiko2x6.songs import song_builder
     from taiko2x6.bineditors import bineditor_tuning as TU
     tuning = song_builder._read_named(target, "tuning.bin")
+    music = song_builder._read_named(target, "musicinfo.bin")
     if not TU.is_t14_layout(tuning):
         raise ValueError("target is not a Taiko 14 tuning layout")
-    opened, plays = [], {}
+    opened, plays, previews = [], {}, {}
     try:
         for spec in sources:
             src = open_pair(spec.list_path, spec.data_path, spec.fmt)
             opened.append((spec, src))
             plays[spec.label] = read_play_fields(src)
-        _g, _s, _r, pfix = _resolve_trusted(target, opened, [], {}, log, plays)
+            previews[spec.label] = musicinfo_previews(
+                song_builder._read_named(src, "musicinfo.bin"))
+        _g, _s, _r, pfix, vfix = _resolve_trusted(target, opened, [], {}, log,
+                                                  plays, previews)
         _estimate_missing_play(target, opened, [], pfix, log)
     finally:
         for _spec, src in opened:
             src.close()
-    out = TU.set_t14_play_fields_by_id(tuning, pfix)
-    return None if out == tuning else out
+    out = {}
+    tu = TU.set_t14_play_fields_by_id(tuning, pfix)
+    if tu != tuning:
+        out["tuning.bin"] = tu
+    mi = set_musicinfo_previews(music, vfix)
+    if mi != music:
+        out["musicinfo.bin"] = mi
+    return out
 
 
-def repair_image_play_fields(img, partition, sources, tmpdir, log=lambda s: None) -> bool:
-    """Run repair_play_fields on an .img partition and write the result back
+def repair_image_song_db(img, partition, sources, tmpdir, log=lambda s: None) -> bool:
+    """Run repair_song_db on an .img partition and write the result back
     (undo-journaled). DATA.000 keeps its size: a gamedata group that no longer
     fits its sectors moves into dead space (Archive.save). Returns whether
     anything was written. PCSX2 must be closed."""
@@ -972,26 +1070,28 @@ def repair_image_play_fields(img, partition, sources, tmpdir, log=lambda s: None
     lp, dp = extract_partition(img, partition, tmpdir / "in", log)
     arc = open_pair(lp, dp)
     try:
-        new = repair_play_fields(arc, sources, log)
-        if new is None:
-            log("gauge values already right; nothing to write")
+        new = repair_song_db(arc, sources, log)
+        if not new:
+            log("song DB already right; nothing to write")
             return False
-        g, e = song_builder.find_named_entry(arc, "tuning.bin")
-        arc.stage_replace(g["index"], e["index"], new)
+        for name, data in new.items():
+            g, e = song_builder.find_named_entry(arc, name)
+            arc.stage_replace(g["index"], e["index"], data)
         ol, od = tmpdir / "list.bin", tmpdir / "DATA.000"
         arc.save(ol, od, allow_relayout=True)
     finally:
         arc.close()
     check = open_pair(ol, od)
     try:
-        if song_builder._read_named(check, "tuning.bin") != new:
-            raise ValueError("repaired archive did not read back; nothing written")
+        for name, data in new.items():
+            if song_builder._read_named(check, name) != data:
+                raise ValueError(f"repaired {name} did not read back; nothing written")
     finally:
         check.close()
     if od.stat().st_size != Path(dp).stat().st_size:
         raise ValueError("DATA.000 would change size; nothing written")
     write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
-    log("gauge values written")
+    log(f"written: {', '.join(new)}")
     return True
 
 
@@ -1100,6 +1200,11 @@ def precompute_db(target, plan, template_id=None) -> dict:
     mi = res.get(MUSICINFO) or song_builder._read_named(target, "musicinfo.bin")
     out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {},
                                getattr(plan, "order", None) or {})
+    # Added rows were cloned from the template, preview start included, so
+    # every added song previewed from the template song's position.
+    prev = dict(getattr(plan, "preview_fixes", None) or {})
+    prev.update({it.sid: it.preview for it in plan.items if getattr(it, "preview", None)})
+    out = set_musicinfo_previews(out, prev)
     if out != mi:
         res[MUSICINFO] = out
     star_fixes = getattr(plan, "star_fixes", None) or {}
