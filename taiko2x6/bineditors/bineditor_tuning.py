@@ -281,6 +281,142 @@ def set_t14_stars_by_id(data: bytes, stars: dict) -> bytes:
     return bytes(out)
 
 
+# --------------------------------------------------------------------------- #
+#  per-chart gameplay fields (soul gauge, judgement, scoring)
+#
+#  A T14 record holds one 28-int block per difficulty d starting at column
+#  3 + 28*d: [chart-file offset, star, then the gameplay fields]. Columns are
+#  given below relative to 28*d, so the star is column 4 and the soul-gauge
+#  gains per GOOD / OK / BAD are columns 12 / 13 / 14. Column 30 (the slot
+#  just before the next chart's offset) exists only in T14.
+#
+#  The same values sit in the older layouts, shifted: a T8..T13 record's ints
+#  6..26 are T14 columns 5..25. Taiko 7 has no scoring pair (its ints 7 and 8
+#  are 0) and one int less: its int 6 is column 5 and its ints 9..25 are
+#  columns 9..25. Song ids that both games ship carry identical values.
+# --------------------------------------------------------------------------- #
+T14_DIFF_STRIDE = 28
+T14_PLAY_COLS = tuple(range(5, 31))
+_T8_TO_T14 = {6 + j: 5 + j for j in range(21)}
+_T7_TO_T14 = {6: 5, **{i: i for i in range(9, 26)}}
+
+
+def _t14_rows(data: bytes):
+    cnt = struct.unpack_from("<I", data, 0)[0]
+    ps = 4 + cnt * T14_REC
+    for i in range(cnt):
+        rec = 4 + i * T14_REC
+        off = ps + struct.unpack_from("<i", data, rec)[0]
+        yield data[off:data.find(b"\0", off)].decode("ascii", "replace"), rec
+
+
+def t14_play_fields(data: bytes) -> dict:
+    """{song id: [ {col: value} per difficulty, or None ]} (T14 layout)."""
+    if not is_t14_layout(data):
+        raise ValueError("not a Taiko 14 tuning.bin")
+    out = {}
+    for sid, rec in _t14_rows(data):
+        diffs = []
+        for d in range(4):
+            star = struct.unpack_from("<i", data, rec + 4 * (4 + T14_DIFF_STRIDE * d))[0]
+            diffs.append(None if star <= 0 else {
+                c: struct.unpack_from("<i", data, rec + 4 * (c + T14_DIFF_STRIDE * d))[0]
+                for c in T14_PLAY_COLS})
+        out[sid] = diffs
+    return out
+
+
+def _mapped(rec_ints, mapping) -> dict | None:
+    if rec_ints[5] <= 0:                 # no chart on this difficulty
+        return None
+    return {col: rec_ints[i] for i, col in mapping.items()}
+
+
+def t8_play_fields(data: bytes) -> dict:
+    """{song id: [ {T14 col: value} per difficulty, or None ]} (T8..T13)."""
+    pool = _find_pool_offset(data)
+    count = struct.unpack_from("<i", data, 0)[0]
+    if count <= 0 or not 0 <= pool - count * T8_SONG < RECORD_SIZE:
+        raise ValueError("not a T8-layout tuning.bin")
+    base = pool - struct.unpack_from("<i", data, 8)[0]
+    out = {}
+    for k in range(count):
+        blk = k * T8_SONG
+        off = base + struct.unpack_from("<i", data, blk + 4)[0]
+        if not 0 <= off < len(data):
+            continue
+        sid = data[off:data.find(bytes(1), off)].decode("ascii", "replace")
+        out[sid] = [_mapped(struct.unpack_from("<27i", data, blk + r * RECORD_SIZE),
+                            _T8_TO_T14) for r in range(RECORDS_PER_BLOCK)]
+    return out
+
+
+def t7_play_fields(data: bytes) -> list:
+    """[[ {T14 col: value} per difficulty, or None ], ...] in block (song)
+    order, like t7_stars (Taiko 7 has no scoring pair: those columns are left
+    out, so the target keeps its own)."""
+    if not is_t7_layout(data):
+        raise ValueError("not a Taiko 7 tuning.bin")
+    song = T7_BLOCK_1P + T7_BLOCK_2P
+    rs = T7_RECORD_INTS * 4
+    count = struct.unpack_from("<i", data, 0)[0]
+    return [[_mapped(struct.unpack_from("<26i", data, k * song + r * rs), _T7_TO_T14)
+             for r in range(RECORDS_PER_BLOCK)] for k in range(count)]
+
+
+def set_t14_play_fields_by_id(data: bytes, fields: dict) -> bytes:
+    """Copy of a Taiko 14 tuning.bin with {song id: [ {col: value} or None
+    per difficulty ]} written. A difficulty is only written when the target
+    has a chart there (star > 0); the star itself is never touched."""
+    if not is_t14_layout(data):
+        raise ValueError("not a Taiko 14 tuning.bin")
+    out = bytearray(data)
+    for sid, rec in _t14_rows(data):
+        diffs = fields.get(sid)
+        if not diffs:
+            continue
+        for d, cols in enumerate(diffs[:4]):
+            star = struct.unpack_from("<i", out, rec + 4 * (4 + T14_DIFF_STRIDE * d))[0]
+            if not cols or star <= 0:
+                continue
+            for c, v in cols.items():
+                if c == 4 or not 5 <= c <= 30:
+                    continue
+                struct.pack_into("<i", out, rec + 4 * (c + T14_DIFF_STRIDE * d), int(v))
+    return bytes(out)
+
+
+# Soul-gauge gains of a chart nobody shipped values for. On every stock TK14
+# chart GOOD * hits is a constant per (difficulty, stars) to within 1%, OK is
+# a fixed share of GOOD and BAD a fixed multiple, so 769 of its 770
+# unbranched charts are reproduced to within 1 by these tables (measured on
+# the stock TK14 .0000 archive; hits = don/ka notes of the chart).
+_GAUGE_K = {
+    0: {1: 16684, 2: 15770, 3: 15785, 4: 13645, 5: 13629},
+    1: {1: 15200, 2: 15222, 3: 14400, 4: 14208, 5: 13328, 6: 13315, 7: 13320},
+    2: {1: 12800, 2: 12988, 3: 13776, 4: 14475, 5: 14794, 6: 14562, 7: 14536,
+        8: 14632},
+    3: {1: 14000, 2: 14134, 3: 14099, 4: 14124, 5: 14134, 6: 14105, 7: 14130,
+        8: 14292, 9: 13088, 10: 13123},
+}
+_GAUGE_BAD = {
+    0: {s: 0.5 for s in range(1, 11)},
+    1: {1: 0.5, 2: 0.5, 3: 0.5, 4: 0.75, **{s: 1.0 for s in range(5, 11)}},
+    2: {1: 0.75, 2: 0.75, 3: 1.0, 4: 1.167, **{s: 1.25 for s in range(5, 11)}},
+    3: {**{s: 1.6 for s in range(1, 8)}, 8: 2.0, 9: 2.0, 10: 2.0},
+}
+
+
+def estimate_gauge(diff: int, stars: int, hits: int) -> tuple:
+    """(GOOD, OK, BAD) soul-gauge gains for difficulty 0..3 (easy..oni)."""
+    ks = _GAUGE_K[diff]
+    s = min(max(int(stars), min(ks)), max(ks))
+    good = max(1, int(ks[s] / max(1, int(hits))))
+    ok = int(good * (0.5 if diff == 3 else 0.75))
+    bad = -int(good * _GAUGE_BAD[diff][min(max(int(stars), 1), 10)])
+    return good, ok, bad
+
+
 def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_INDEX):
     """Tile [0, pool_offset) into song-player blocks.
 

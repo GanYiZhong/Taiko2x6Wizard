@@ -388,6 +388,72 @@ def read_song_meta(archive) -> dict:
     return meta
 
 
+def read_play_fields(archive) -> dict:
+    """{sid: [ {T14 tuning column: value} or None per difficulty ]}: each
+    chart's soul-gauge gains, judgement and scoring values from the archive's
+    tuning.bin, in Taiko 14 column numbers (bineditor_tuning.t14_play_fields).
+    Needs a QApplication for Taiko 7 (ids come from SongManager there)."""
+    from taiko2x6.songs import song_builder
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    tuning = song_builder._read_named(archive, "tuning.bin")
+    if TU.is_t14_layout(tuning):
+        return TU.t14_play_fields(tuning)
+    if TU.is_t7_layout(tuning):
+        from taiko2x6.songs.song_manager import SongManager
+        sm = SongManager(song_builder._read_named(archive, "musicinfo.bin"), tuning,
+                         song_builder._read_named(archive, "streaminfo.bin"))
+        rows = TU.t7_play_fields(tuning)
+        return {s.id: rows[s.k] for s in sm._songs if s.k < len(rows)}
+    try:
+        return TU.t8_play_fields(tuning)
+    except ValueError:
+        return {}
+
+
+_GAUGE_HITS = {1, 2, 3, 4, 5, 7, 8, 11, 13}     # don / ka note types (sht)
+
+
+def _fumen_index(archive) -> dict:
+    """{(sid, letter): (group, entry)} of the archive's 1P charts."""
+    out = {}
+    for g in archive.layout.groups:
+        m = _FUMEN_RE.match(g["name"])
+        if m and m["pl"] == "1p":
+            files = archive.layout.files_for_group(g)
+            if files:
+                out[(m["id"], m["d"])] = (g, files[0])
+    return out
+
+
+def estimated_play(archive, sid, stars, index=None) -> list:
+    """Soul-gauge gains estimated from the song's own charts in `archive`
+    (bineditor_tuning.estimate_gauge), for a song no release ships tuning
+    values for. [ {12: good, 13: ok, 14: bad} or None per difficulty ]."""
+    from taiko2x6.charts import sht_export, tja2sht
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    index = index if index is not None else _fumen_index(archive)
+    out = []
+    for d, letter in enumerate("enhm"):
+        hit = index.get((sid, letter))
+        st = (stars or [0] * 4)[d] if d < len(stars or []) else 0
+        if not hit or not st or st <= 0:
+            out.append(None)
+            continue
+        try:
+            model = tja2sht.parse_sht(archive.read_file(*hit))
+            _br, rts = sht_export.routes(model)
+            n = sum(1 for trk in rts for x in trk[0] if x["type"] in _GAUGE_HITS)
+        except Exception:
+            out.append(None)
+            continue
+        if n <= 0:
+            out.append(None)
+            continue
+        g, o, b = TU.estimate_gauge(d, st, n)
+        out.append({12: g, 13: o, 14: b})
+    return out
+
+
 # --------------------------------------------------------------------------- #
 #  harvesting one song's assets (verbatim)
 # --------------------------------------------------------------------------- #
@@ -476,6 +542,9 @@ class PlanItem:
     stars: list
     genre: int
     assets: dict = field(default_factory=dict)
+    # gauge / judgement / scoring per difficulty, from the song's first
+    # trusted source (see read_play_fields); None keeps the template's
+    play: list = None
 
 
 @dataclass
@@ -491,6 +560,8 @@ class MergePlan:
     star_fixes: dict = field(default_factory=dict)
     # sid -> sort key inside its genre block (see _resolve_trusted)
     order: dict = field(default_factory=dict)
+    # target rows whose gauge / scoring values are corrected: sid -> play
+    play_fixes: dict = field(default_factory=dict)
 
     @property
     def total_after(self) -> int:
@@ -574,10 +645,16 @@ def plan_merge(target, sources, log=lambda s: None,
                 seen_titles.setdefault(_title_key(sid, titles[sid]), sid)
 
         metas = {}
+        plays = {}
         unlisted = {}
         for spec, src in opened:
             meta = read_song_meta(src)
             metas[spec.label] = meta
+            try:
+                plays[spec.label] = read_play_fields(src)
+            except Exception as exc:
+                log(f"{spec.label}: no gauge/scoring values ({exc})")
+                plays[spec.label] = {}
             try:
                 rows = _musicinfo_rows(song_builder._read_named(src, "musicinfo.bin"))
             except Exception:
@@ -609,10 +686,12 @@ def plan_merge(target, sources, log=lambda s: None,
             log(f"{spec.label}: +{sum(1 for it in items if it.source_label == spec.label)} new")
         fixes = _vote_genres(target, opened, items, log, metas)
         star_fixes = _target_star_fixes(target, opened, metas, log)
-        gfix, sfix, order = _resolve_trusted(target, opened, items, metas, log)
+        gfix, sfix, order, play_fixes = _resolve_trusted(target, opened, items, metas,
+                                                         log, plays)
         for sid, g in gfix.items():
             fixes.setdefault(sid, g)          # the C-POP refiling wins
         star_fixes.update(sfix)
+        _estimate_missing_play(target, opened, items, play_fixes, log)
     finally:
         for _spec, src in opened:
             src.close()
@@ -622,7 +701,7 @@ def plan_merge(target, sources, log=lambda s: None,
         log(f"same title under another id, skipped: {len(skipped_titles)}")
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
                      skipped_titles=skipped_titles, genre_fixes=fixes,
-                     star_fixes=star_fixes, order=order)
+                     star_fixes=star_fixes, order=order, play_fixes=play_fixes)
 
 
 def _valid_stars(st) -> bool:
@@ -692,7 +771,7 @@ def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
     return fixes
 
 
-def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
+def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=None):
     """Genre, stars and folder order of every song from its first trusted source.
 
     The first source is the base release (stock TK14). Any other archive in
@@ -705,9 +784,14 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
     For each song the first source in `opened` order (newest first) that
     holds it as trusted data decides its genre and stars; songs no trusted
     source knows keep what they have. Returns (target genre fixes, target
-    star fixes, rank) where rank[sid] = (source index, row in that source)
-    orders each genre block like the games it came from. C-POP songs are
-    left to the C-POP rule.
+    star fixes, rank, target play fixes) where rank[sid] = (source index, row
+    in that source) orders each genre block like the games it came from.
+    C-POP songs are left to the C-POP rule.
+
+    `plays` ({label: read_play_fields(...)}) supplies each chart's soul-gauge
+    and scoring values the same way: added songs get them on `it.play`, and
+    target songs an earlier merge added (cloned from its template row, so
+    every one of them had the template's gauge) get them as play fixes.
     """
     from taiko2x6.songs import song_builder
 
@@ -725,8 +809,9 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
             t14 = False
         return ids, g, t14
 
+    plays = plays or {}
     if not opened:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     srcs = [(spec.label, *info(src)) for spec, src in opened]
     base_ids = set(srcs[0][1])
     base_t14 = srcs[0][3]
@@ -750,7 +835,19 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
                 return n, label, pos[sid], g[sid]
         return None
 
-    rank, gfix, sfix = {}, {}, {}
+    def first_play(sid):
+        for label, pos, _g in trusted:
+            if sid in pos and any(plays.get(label, {}).get(sid) or ()):
+                return plays[label][sid]
+        return None
+
+    rank, gfix, sfix, pfix = {}, {}, {}, {}
+    if tgt_derived:
+        for sid in tgt_ids:
+            if sid not in base_ids:
+                pl = first_play(sid)
+                if pl:
+                    pfix[sid] = pl
     for sid in tgt_ids:
         hit = first(sid)
         if not hit:
@@ -777,9 +874,92 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None):
         st = metas.get(label, {}).get(it.sid, {}).get("stars")
         if _valid_stars(st):
             it.stars = list(st)
+    nplay = 0
+    for it in items:
+        it.play = first_play(it.sid)
+        nplay += bool(it.play)
     log(f"trust: {len(gfix)} target songs refiled, {len(sfix)} target ratings and "
         f"{regenre} added songs' folders taken from their first trusted source")
-    return gfix, sfix, rank
+    log(f"gauge/scoring: {nplay}/{len(items)} added songs and {len(pfix)} earlier-"
+        f"merged target songs take their source's values")
+    return gfix, sfix, rank, pfix
+
+
+def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None):
+    """Gauge estimates for the songs _resolve_trusted found no values for:
+    added songs (from the chart in their own source) and target songs an
+    earlier merge added that still carry the template row's gauge."""
+    from taiko2x6.songs import song_builder
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    by_label = {spec.label: src for spec, src in opened}
+    idx = {}
+
+    def index(arc, key):
+        if key not in idx:
+            idx[key] = _fumen_index(arc)
+        return idx[key]
+
+    n_items = 0
+    for it in items:
+        if it.play or it.source_label not in by_label:
+            continue
+        arc = by_label[it.source_label]
+        try:
+            est = estimated_play(arc, it.sid, it.stars, index(arc, it.source_label))
+        except Exception as exc:
+            log(f"gauge estimate for {it.sid} skipped ({exc})")
+            continue
+        if any(est):
+            it.play = est
+            n_items += 1
+    n_tgt = 0
+    try:
+        tuning = song_builder._read_named(target, "tuning.bin")
+        if TU.is_t14_layout(tuning) and opened:
+            cur, stars = TU.t14_play_fields(tuning), TU.t14_stars(tuning)
+            base = set(_ordered_ids(opened[0][1]))
+            tmpl = cur.get(pick_template_id(target))
+            for sid, f in cur.items():
+                if sid in base or sid in play_fixes or f != tmpl or not tmpl:
+                    continue
+                est = estimated_play(target, sid, stars.get(sid), index(target, None))
+                if any(est):
+                    play_fixes[sid] = est
+                    n_tgt += 1
+    except Exception as exc:
+        log(f"gauge estimate for target songs skipped ({exc})")
+    if n_items or n_tgt:
+        log(f"gauge: estimated from the charts for {n_items} added and {n_tgt} "
+            f"target songs no source has values for")
+
+
+def repair_play_fields(target, sources, log=lambda s: None):
+    """New tuning.bin for an already built Omnimix, or None if nothing changes.
+
+    Builds before the gauge fix cloned every added song's soul-gauge and
+    scoring values from the template row. `sources` must start with the base
+    release (stock TK14), then the games the songs came from; each song the
+    base does not have takes the values of its first trusted source, as a
+    fresh build would. Needs a QApplication when a source is Taiko 7.
+    """
+    from taiko2x6.songs import song_builder
+    from taiko2x6.bineditors import bineditor_tuning as TU
+    tuning = song_builder._read_named(target, "tuning.bin")
+    if not TU.is_t14_layout(tuning):
+        raise ValueError("target is not a Taiko 14 tuning layout")
+    opened, plays = [], {}
+    try:
+        for spec in sources:
+            src = open_pair(spec.list_path, spec.data_path, spec.fmt)
+            opened.append((spec, src))
+            plays[spec.label] = read_play_fields(src)
+        _g, _s, _r, pfix = _resolve_trusted(target, opened, [], {}, log, plays)
+        _estimate_missing_play(target, opened, [], pfix, log)
+    finally:
+        for _spec, src in opened:
+            src.close()
+    out = TU.set_t14_play_fields_by_id(tuning, pfix)
+    return None if out == tuning else out
 
 
 def _ordered_ids(archive):
@@ -896,6 +1076,17 @@ def precompute_db(target, plan, template_id=None) -> dict:
         tu = res.get(TUNING) or song_builder._read_named(target, "tuning.bin")
         if TU.is_t14_layout(tu):
             res[TUNING] = TU.set_t14_stars_by_id(tu, star_fixes)
+    # Every added row was cloned from the template, gauge and scoring
+    # included: without this the soul gauge filled at the template song's
+    # rate, so the clear line was wrong on every added chart.
+    play = dict(getattr(plan, "play_fixes", None) or {})
+    play.update({it.sid: it.play for it in plan.items if getattr(it, "play", None)})
+    if play:
+        from taiko2x6.songs.song_manager import TUNING
+        from taiko2x6.bineditors import bineditor_tuning as TU
+        tu = res.get(TUNING) or song_builder._read_named(target, "tuning.bin")
+        if TU.is_t14_layout(tu):
+            res[TUNING] = TU.set_t14_play_fields_by_id(tu, play)
     return res
 
 

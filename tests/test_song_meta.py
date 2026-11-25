@@ -135,7 +135,7 @@ def test_resolve_trusted_ignores_songs_a_mod_added(monkeypatch):
     metas = {"t13": {"x": {"stars": [2, 3, 4, 5]}, "z": {"stars": [1, 2, 3, 4]}},
              "mod": {"x": {"stars": [4, 7, 8, 10]}}}
     z = O.PlanItem(sid="z", source_label="t13", stars=[1, 1, 1, 1], genre=4)
-    gfix, sfix, rank = O._resolve_trusted(arcs["tgt"], opened, [z], metas)
+    gfix, sfix, rank, _pfix = O._resolve_trusted(arcs["tgt"], opened, [z], metas)
     assert gfix == {"x": 0} and sfix == {"x": [2, 3, 4, 5]}   # y: no trusted source
     assert z.genre == 6 and z.stars == [1, 2, 3, 4]
     assert rank["a"] == (0, 0) and rank["x"] == (2, 0) and "y" not in rank
@@ -169,7 +169,7 @@ def test_resolve_trusted_same_format_mod_is_untrusted(monkeypatch):
     monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: arc.name)
     monkeypatch.setattr(TU, "is_t14_layout", lambda raw: raw in ("base", "pack", "tgt"))
     opened = [(SimpleNamespace(label=k), arcs[k]) for k in ("base", "pack", "t13")]
-    gfix, _sfix, rank = O._resolve_trusted(arcs["tgt"], opened, [], {})
+    gfix, _sfix, rank, _pfix = O._resolve_trusted(arcs["tgt"], opened, [], {})
     assert gfix == {"x": 3} and rank["x"] == (2, 0)
 
 
@@ -194,7 +194,7 @@ def test_plan_skips_ids_missing_from_song_list(monkeypatch):
     monkeypatch.setattr(O, "read_song_meta", lambda arc: {})
     monkeypatch.setattr(O, "song_titles", lambda arc: {})
     monkeypatch.setattr(O, "_target_star_fixes", lambda *a, **k: {})
-    monkeypatch.setattr(O, "_resolve_trusted", lambda *a, **k: ({}, {}, {}))
+    monkeypatch.setattr(O, "_resolve_trusted", lambda *a, **k: ({}, {}, {}, {}))
     spec = SimpleNamespace(label="src", list_path="l", data_path="d", fmt=2)
     plan = O.plan_merge(tgt, [spec])
     assert [it.sid for it in plan.items] == ["b"]
