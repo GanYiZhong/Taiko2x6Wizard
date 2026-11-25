@@ -18,6 +18,7 @@ def _stock(monkeypatch):
     for va, imm in T._DIFF_TIMER_SITES.items():
         put(va, 0x284F0000 | imm)
     put(T._SELECT_STATE, T._SELECT_UPDATE)
+    put(T._PLAYED_SITE, T._PLAYED_ORIG)
     from taiko2x6.exe import select_folders as SF
     for va, word in {**SF.ORIG, **SF.OLD_SITES}.items():
         put(va, word)
@@ -60,7 +61,8 @@ def test_all_on_then_some_off(monkeypatch):
     assert T.boot_patch_state(out) == {'skip_notice': True, 'skip_copyright': False,
                                        'freeze_select_timer': True,
                                        'disable_diff_timer': False,
-                                       'category_folders': True}
+                                       'category_folders': True,
+                                       'show_played_songs': True}
 
 
 def test_old_credits_patch_reads_off_and_is_undone(monkeypatch):
@@ -191,3 +193,27 @@ def test_category_folders_refuse_an_unknown_site(monkeypatch):
         struct.pack_into("<I", buf, va - T.DELTA, 0x12345678)
         with pytest.raises(T.TaikoExeError):
             T.patch_folders(bytes(buf), **QUIET)
+
+
+def test_show_played_songs_only_flips_the_branch(monkeypatch):
+    stock = _stock(monkeypatch)
+    out = T.set_boot_patches(stock, {'show_played_songs': True}, **QUIET)
+    diff = [i for i in range(0, len(stock), 4) if stock[i:i + 4] != out[i:i + 4]]
+    assert diff == [T._PLAYED_SITE - T.DELTA]
+    assert struct.unpack_from("<I", out, diff[0])[0] == 0x54000015   # bnel $zero,$zero
+    buf = bytearray(stock)
+    struct.pack_into("<I", buf, T._PLAYED_SITE - T.DELTA, 0x12345678)
+    import pytest
+    with pytest.raises(T.TaikoExeError):
+        T.patch_show_played(bytes(buf), **QUIET)
+
+
+def test_category_folders_back_on_over_an_older_build(monkeypatch):
+    from taiko2x6.exe import select_folders as SF
+    stock = _stock(monkeypatch)
+    out = bytearray(T.set_boot_patches(stock, {'category_folders': True}, **QUIET))
+    off = bytearray(T.set_boot_patches(bytes(out), {'category_folders': False}, **QUIET))
+    off[SF.CAVE_VA - T.DELTA + 0x40] ^= 0xFF        # stubs of another build
+    again = T.set_boot_patches(bytes(off), {'category_folders': True}, **QUIET)
+    assert T.boot_patch_state(again)['category_folders']
+    assert again[SF.CAVE_VA - T.DELTA:][:0x100] == out[SF.CAVE_VA - T.DELTA:][:0x100]

@@ -767,6 +767,47 @@ def patch_skip_copyright(dec: bytes, log=print) -> bytes:
     return bytes(buf)
 
 
+# Songs already played this credit. The select list's row filter sub_138688
+# hides a song whose ctx->arrayA[musicID] != -1 (it was picked on an earlier
+# stage of this credit): `bnel $t5,$t6` returns "hidden". Making that branch
+# `bnel $zero,$zero` (never taken; its delay slot is annulled just as when
+# the song had not been played) keeps every song in the list.
+_PLAYED_SITE = 0x00138720
+_PLAYED_ORIG = 0x55AE0015      # bnel $t5, $t6, loc_138778
+_PLAYED_NEW = 0x54000015       # bnel $zero, $zero, loc_138778  (never taken)
+
+
+def is_played_shown(dec: bytes) -> bool:
+    return struct.unpack_from('<I', dec, _PLAYED_SITE - DELTA)[0] == _PLAYED_NEW
+
+
+def patch_show_played(dec: bytes, log=print) -> bytes:
+    """Keep songs already played this credit in the song-select list."""
+    buf = bytearray(dec)
+    o = _PLAYED_SITE - DELTA
+    cur = struct.unpack_from('<I', buf, o)[0]
+    if cur == _PLAYED_NEW:
+        log(f'{_PLAYED_SITE:08X}  played songs already shown')
+        return bytes(buf)
+    if cur != _PLAYED_ORIG:
+        raise TaikoExeError(
+            f'{_PLAYED_SITE:08X}: expected `bnel $t5,$t6` ({_PLAYED_ORIG:#010x}, '
+            f'got {cur:#010x}) — refusing')
+    struct.pack_into('<I', buf, o, _PLAYED_NEW)
+    log(f'{_PLAYED_SITE:08X}  bnel $t5,$t6 -> bnel $zero,$zero   '
+        f'(songs played this credit stay in the list)')
+    return bytes(buf)
+
+
+def unpatch_show_played(dec: bytes, log=print) -> bytes:
+    buf = bytearray(dec)
+    o = _PLAYED_SITE - DELTA
+    if struct.unpack_from('<I', buf, o)[0] == _PLAYED_NEW:
+        struct.pack_into('<I', buf, o, _PLAYED_ORIG)
+        log(f'{_PLAYED_SITE:08X}  restored (played songs hidden again)')
+    return bytes(buf)
+
+
 # --------------------------------------------------------------------------- #
 #  HDD image I/O
 # --------------------------------------------------------------------------- #
@@ -983,6 +1024,9 @@ BOOT_PATCHES = {
                            unpatch_difficulty_timer),
     'category_folders': ('Song select as category folders',
                          is_folders_on, patch_folders, unpatch_folders),
+    'show_played_songs': ('Keep songs already played this credit in the list',
+                          is_played_shown, patch_show_played,
+                          unpatch_show_played),
 }
 
 
@@ -1473,6 +1517,8 @@ else:
                                    'never runs out.',
             'disable_diff_timer': 'The difficulty (course) select never '
                                   'auto-starts after 30 s.',
+            'show_played_songs': 'A song played earlier in the same credit '
+                                 'is not hidden from the song select.',
             'category_folders': 'Song select shows only the category cards; '
                                 'don on a card opens that folder, both ka '
                                 'close it.',
