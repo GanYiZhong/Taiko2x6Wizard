@@ -122,6 +122,10 @@ class Archive:
 
         affected = sorted(self.affected_groups())
         changed = 0
+        # where every group currently sits: [start, end) byte ranges
+        spans = {g["index"]: (g["sector"] * SECTOR_SIZE,
+                              g["sector"] * SECTOR_SIZE + g["packed_size"])
+                 for g in layout.groups}
         for n, gi in enumerate(affected):
             group = layout.groups[gi]
             if progress:
@@ -133,18 +137,32 @@ class Archive:
             )
             encoded = core.encode_group_payload(new_payload, group["compression"])
             max_bytes = core.group_capacity_bytes(layout, len(full), group)
+            sector = group["sector"]
             if len(encoded) > max_bytes:
-                raise ValueError(
-                    f"group '{group['name']}' no longer fits its DATA sector range "
-                    f"(encoded={len(encoded)} > available={max_bytes}). "
-                    f"Make the replacement smaller."
-                )
-            start = group["sector"] * SECTOR_SIZE
-            clear_len = max(group["packed_size"], len(encoded))
+                hole = self._free_hole(spans, gi, len(encoded), len(full)) \
+                    if allow_relayout else None
+                if hole is None:
+                    raise ValueError(
+                        f"group '{group['name']}' no longer fits its DATA sector range "
+                        f"(encoded={len(encoded)} > available={max_bytes}). "
+                        f"Make the replacement smaller.")
+                # Move it into unused space INSIDE the current DATA: growing
+                # DATA.000 on an HDD image left the game on LOADING, while a
+                # same-size DATA with the group moved into a hole boots.
+                old = sector * SECTOR_SIZE
+                shared = any(s == old for k, (s, _e) in spans.items() if k != gi)
+                if not shared:      # another group may alias the same sectors
+                    full[old:old + group["packed_size"]] = b"\0" * group["packed_size"]
+                sector = hole // SECTOR_SIZE
+            start = sector * SECTOR_SIZE
+            clear_len = max(group["packed_size"], len(encoded)) \
+                if sector == group["sector"] else len(encoded)
             full[start:start + clear_len] = b"\0" * clear_len
             full[start:start + len(encoded)] = encoded
+            spans[gi] = (start, start + len(encoded))
 
             gw = dict(group)
+            gw["sector"] = sector
             gw["packed_size"] = len(encoded)
             gw["unpacked_size"] = len(new_payload)
             # Content changed -> recompute the game-validated content hash, else
@@ -160,6 +178,18 @@ class Archive:
         if progress:
             progress(len(affected), len(affected), "done")
         return {"changed_groups": changed, "files": len(self.replacements)}
+
+    @staticmethod
+    def _free_hole(spans: dict, gi: int, size: int, data_len: int):
+        """Byte offset of the first sector-aligned gap between groups (other
+        than group gi itself) that holds `size` bytes, or None. Gaps are the
+        dead space earlier relocations left behind; DATA does not grow."""
+        ranges = sorted(v for k, v in spans.items() if k != gi)
+        for (_s, end), (nxt, _e) in zip(ranges, ranges[1:]):
+            start = -(-end // SECTOR_SIZE) * SECTOR_SIZE
+            if nxt - start >= size:
+                return start
+        return None
 
     def _patch_group(self, group, entries, original_payload, allow_relayout):
         """Mirror of core conservative patch but driven by self.replacements."""

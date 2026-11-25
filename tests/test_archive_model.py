@@ -135,3 +135,25 @@ def test_cli_patch_overwrite_makes_backup(archive_pair, tmp_path):
         assert a.read_file(g, e) == b"Q" * 280
     finally:
         a.close()
+
+
+def test_free_hole_finds_dead_space_between_groups():
+    S = core.SECTOR_SIZE
+    spans = {0: (0, 3 * S), 1: (10 * S, 11 * S - 5), 2: (20 * S, 21 * S), 3: (3 * S, 4 * S)}
+    # group 1 grows: its own old slot counts as free, so 4S..20S is one gap
+    assert Archive._free_hole(spans, 1, 6 * S, 30 * S) == 4 * S
+    assert Archive._free_hole(spans, 1, 16 * S, 30 * S) == 4 * S
+    assert Archive._free_hole(spans, 1, 17 * S, 30 * S) is None   # DATA never grows
+    assert Archive._free_hole(spans, 0, 2 * S, 30 * S) == 4 * S   # not over group 1
+
+
+def test_save_relayout_without_a_hole_still_refuses(archive_pair):
+    lp, dp = archive_pair
+    before = (_sha(lp), _sha(dp))
+    a = Archive(lp, dp)
+    g, e = _find(a, "song.xyz", "xyz_m.sht")
+    a.stage_replace(g["index"], e["index"], bytes((i * 31) & 0xFF for i in range(50_000)))
+    a.close()
+    with pytest.raises(ValueError):
+        a.save(lp, dp, allow_relayout=True)
+    assert (_sha(lp), _sha(dp)) == before

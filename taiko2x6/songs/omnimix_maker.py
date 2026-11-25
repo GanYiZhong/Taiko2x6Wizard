@@ -962,6 +962,39 @@ def repair_play_fields(target, sources, log=lambda s: None):
     return None if out == tuning else out
 
 
+def repair_image_play_fields(img, partition, sources, tmpdir, log=lambda s: None) -> bool:
+    """Run repair_play_fields on an .img partition and write the result back
+    (undo-journaled). DATA.000 keeps its size: a gamedata group that no longer
+    fits its sectors moves into dead space (Archive.save). Returns whether
+    anything was written. PCSX2 must be closed."""
+    from taiko2x6.songs import song_builder
+    tmpdir = Path(tmpdir)
+    lp, dp = extract_partition(img, partition, tmpdir / "in", log)
+    arc = open_pair(lp, dp)
+    try:
+        new = repair_play_fields(arc, sources, log)
+        if new is None:
+            log("gauge values already right; nothing to write")
+            return False
+        g, e = song_builder.find_named_entry(arc, "tuning.bin")
+        arc.stage_replace(g["index"], e["index"], new)
+        ol, od = tmpdir / "list.bin", tmpdir / "DATA.000"
+        arc.save(ol, od, allow_relayout=True)
+    finally:
+        arc.close()
+    check = open_pair(ol, od)
+    try:
+        if song_builder._read_named(check, "tuning.bin") != new:
+            raise ValueError("repaired archive did not read back; nothing written")
+    finally:
+        check.close()
+    if od.stat().st_size != Path(dp).stat().st_size:
+        raise ValueError("DATA.000 would change size; nothing written")
+    write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
+    log("gauge values written")
+    return True
+
+
 def _ordered_ids(archive):
     from taiko2x6.songs import song_builder
     return song_builder.song_ids(archive)
