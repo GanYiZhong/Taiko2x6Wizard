@@ -288,3 +288,45 @@ def encode_indexed4_into_template(template: bytes, indices, palette_rgba) -> byt
     out[lay["img_start"]:lay["img_start"] + lay["image_size"]] = packed
     out[lay["clut_start"]:lay["clut_start"] + lay["clut_size"]] = clut[: lay["clut_size"]]
     return bytes(out)
+
+
+def crop_transparent_bottom(data: bytes, row_align: int = 8):
+    """Drop the fully transparent rows under a 4-bit indexed TIM2's picture.
+
+    The select screen draws title textures at their own size from the top
+    edge, so the rows under the last visible pixel never show; cutting them
+    changes nothing on screen but the bytes the game loads. The new height is
+    rounded up to `row_align` rows (8 keeps the file and pixel data multiples
+    of 16 bytes, which the GS upload needs: odd heights came out garbled).
+    Returns the cropped TIM2, or None when it is not a single 4-bit picture
+    with a 32-bit CLUT or nothing can be cut."""
+    import numpy as np
+    try:
+        lay = first_picture_layout(data)
+    except ValueError:
+        return None
+    pictures = struct.unpack_from("<H", data, 6)[0]
+    w, h = lay["width"], lay["height"]
+    if (pictures != 1 or lay["image_type"] != 4 or w % 2
+            or lay["clut_size"] != lay["clut_colors"] * 4
+            or lay["image_size"] != w * h // 2
+            or lay["clut_start"] + lay["clut_size"] > len(data)):
+        return None
+    img = np.frombuffer(data, np.uint8, lay["image_size"], lay["img_start"]).reshape(h, w // 2)
+    alpha = np.frombuffer(data, np.uint8, lay["clut_size"], lay["clut_start"]).reshape(-1, 4)[:, 3]
+    seen = (alpha[img & 0x0F] > 0) | (alpha[img >> 4] > 0)
+    rows = np.nonzero(seen.any(axis=1))[0]
+    keep = int(rows[-1]) + 1 if len(rows) else 1
+    keep = -(-keep // row_align) * row_align
+    if keep >= h:
+        return None
+    pixels = img[:keep].tobytes()
+    clut = data[lay["clut_start"]:lay["clut_start"] + lay["clut_size"]]
+    base = lay["base"]
+    head = bytearray(data[:lay["img_start"]])
+    header_size = struct.unpack_from("<H", head, base + 12)[0]
+    struct.pack_into("<III", head, base, header_size + len(pixels) + len(clut),
+                     len(clut), len(pixels))
+    struct.pack_into("<H", head, base + 0x16, keep)
+    tail = data[lay["clut_start"] + lay["clut_size"]:]
+    return bytes(head) + pixels + clut + tail

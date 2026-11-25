@@ -43,6 +43,8 @@ class Archive:
 
         # pending edits: (group_index, file_index) -> new bytes
         self.replacements: dict[tuple[int, int], bytes] = {}
+        # groups to rebuild tightly at their new (smaller) decompressed size
+        self.compact: set[int] = set()
 
     # -- lifecycle ------------------------------------------------------------
     def close(self):
@@ -91,15 +93,22 @@ class Archive:
     def stage_replace(self, group_index: int, file_index: int, data: bytes):
         self.replacements[(group_index, file_index)] = data
 
+    def stage_compact(self, group_index: int):
+        """Rebuild this group tightly on save and let its decompressed size
+        shrink. The game allocates a group's decompressed size when it loads
+        it, so shrinking files only frees game memory with this."""
+        self.compact.add(group_index)
+
     def discard_edits(self):
         self.replacements.clear()
+        self.compact.clear()
 
     @property
     def dirty(self) -> bool:
-        return bool(self.replacements)
+        return bool(self.replacements or self.compact)
 
     def affected_groups(self) -> set[int]:
-        return {gi for (gi, _fi) in self.replacements}
+        return {gi for (gi, _fi) in self.replacements} | self.compact
 
     # -- save (conservative in-place patch) -----------------------------------
     def save(self, out_list: Path, out_data: Path, allow_relayout: bool,
@@ -197,7 +206,7 @@ class Archive:
         updated = [dict(e) for e in entries]
         payload = bytearray(original_payload)
 
-        if not allow_relayout:
+        if not allow_relayout and gi not in self.compact:
             for i, entry in enumerate(updated):
                 key = (gi, entry["index"])
                 if key not in self.replacements:
@@ -216,7 +225,8 @@ class Archive:
                 entry["size"] = len(new_file)
             return bytes(payload), updated
 
-        # relayout: rebuild the group tightly, keeping the decompressed size.
+        # relayout: rebuild the group tightly, keeping the decompressed size
+        # (or, for a compacted group, at its new size with the usual trailer)
         rebuilt = bytearray()
         for entry in updated:
             key = (gi, entry["index"])
@@ -230,6 +240,11 @@ class Archive:
             entry["offset"] = new_off
             entry["size"] = len(file_data)
             rebuilt.extend(file_data)
+        if gi in self.compact:
+            end = core.align(len(rebuilt) + core.PAYLOAD_TRAILER_SIZE, core.PAYLOAD_ALIGN)
+            if end < len(original_payload):
+                rebuilt.extend(b"\0" * (end - len(rebuilt)))
+                return bytes(rebuilt), updated
         if len(rebuilt) > len(original_payload):
             raise ValueError(
                 f"group '{group['name']}' grew past its decompressed size "

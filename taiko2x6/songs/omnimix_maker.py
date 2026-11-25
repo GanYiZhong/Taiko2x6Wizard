@@ -1095,6 +1095,82 @@ def repair_image_song_db(img, partition, sources, tmpdir, log=lambda s: None) ->
     return True
 
 
+# Shared select-screen title textures (select_full/short in the first,
+# select_non in the second). The game loads each group whole into its heap.
+TITLE_TEXTURE_GROUPS = ("music_texture.music_select",
+                        "music_texture.music_select_music")
+
+
+def _trim_title_file(gn: str, data: bytes) -> bytes:
+    from taiko2x6.graphics import tim2
+    if gn not in TITLE_TEXTURE_GROUPS:
+        return data
+    return tim2.crop_transparent_bottom(data) or data
+
+
+def trim_title_textures(archive, log=lambda s: None) -> int:
+    """Stage every title texture with its transparent bottom rows cut off, and
+    compact both groups so their decompressed size shrinks too.
+
+    Why: the game loads each of these groups whole into the EE heap, which
+    already reaches the stack at the top of RAM. With ~600 songs the select
+    textures cost 8 MB more than stock, and on the 2nd song of a credit the
+    difficulty select could no longer get 3.97 MB in one piece for
+    music_select_music, so it hung on 「ちょっとまってね」 (memalign
+    returned 0 in sub_104DB0). The pictures draw from their top edge at their
+    own size, so the screen does not change. Returns the bytes saved."""
+    saved = 0
+    for g in archive.layout.groups:
+        if g["name"] not in TITLE_TEXTURE_GROUPS:
+            continue
+        for e in archive.layout.files_for_group(g):
+            data = archive.read_file(g, e)
+            new = _trim_title_file(g["name"], data)
+            if len(new) < len(data):
+                archive.stage_replace(g["index"], e["index"], new)
+                saved += len(data) - len(new)
+        archive.stage_compact(g["index"])
+    log(f"title textures: {saved / 2**20:.1f} MB of transparent rows cut")
+    return saved
+
+
+def trim_image_title_textures(img, partition, tmpdir, log=lambda s: None) -> bool:
+    """trim_title_textures on an .img partition, written back undo-journaled.
+    DATA.000 keeps its size. Returns whether anything was written. PCSX2 must
+    be closed."""
+    tmpdir = Path(tmpdir)
+    lp, dp = extract_partition(img, partition, tmpdir / "in", log)
+    arc = open_pair(lp, dp)
+    try:
+        if not trim_title_textures(arc, log):
+            log("title textures already trimmed; nothing to write")
+            return False
+        want = {}
+        for g in arc.layout.groups:
+            if g["name"] in TITLE_TEXTURE_GROUPS:
+                want[g["name"]] = {e["name"]: arc.read_file(g, e)
+                                   for e in arc.layout.files_for_group(g)}
+        ol, od = tmpdir / "list.bin", tmpdir / "DATA.000"
+        arc.save(ol, od, allow_relayout=True)
+    finally:
+        arc.close()
+    check = open_pair(ol, od)
+    try:
+        for g in check.layout.groups:
+            if g["name"] in want:
+                got = {e["name"]: check.read_file(g, e)
+                       for e in check.layout.files_for_group(g)}
+                if got != want[g["name"]]:
+                    raise ValueError(f"{g['name']} did not read back; nothing written")
+                log(f"{g['name']}: {g['unpacked_size'] / 2**20:.2f} MB in game memory")
+    finally:
+        check.close()
+    if od.stat().st_size != Path(dp).stat().st_size:
+        raise ValueError("DATA.000 would change size; nothing written")
+    write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
+    return True
+
+
 def _ordered_ids(archive):
     from taiko2x6.songs import song_builder
     return song_builder.song_ids(archive)
@@ -1521,6 +1597,11 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
         result["audio_saved"] = before - after
         compact = repack
 
+    # cut the transparent rows off every select title texture: the game
+    # loads these groups whole, and 600 songs' worth no longer fits the heap
+    trim_title_textures(target, log)
+    for gn, files in extra_files.items():
+        extra_files[gn] = [(fn, _trim_title_file(gn, data)) for fn, data in files]
     for fn, data in precomputed_db.items():
         ent = song_builder.find_named_entry(target, fn)
         if ent:
