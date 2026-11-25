@@ -18,6 +18,12 @@ def _stock(monkeypatch):
     for va, imm in T._DIFF_TIMER_SITES.items():
         put(va, 0x284F0000 | imm)
     put(T._SELECT_STATE, T._SELECT_UPDATE)
+    from taiko2x6.exe import select_folders as SF
+    for va, word in {**SF.ORIG, **SF.OLD_SITES}.items():
+        put(va, word)
+    fcave = bytes((i * 7) % 253 for i in range(SF.CAVE_LEN))
+    buf[SF.CAVE_VA - T.DELTA:SF.CAVE_VA - T.DELTA + SF.CAVE_LEN] = fcave
+    monkeypatch.setattr(SF, "CAVE_STOCK_SHA1", hashlib.sha1(fcave).hexdigest())
     buf[T._COUNTER_STR - T.DELTA:T._COUNTER_STR - T.DELTA + 8] = b"counter\0"
     cave = bytes(i % 251 for i in range(T._FREEZE_LEN))
     buf[T._FREEZE_VA - T.DELTA:T._FREEZE_VA - T.DELTA + T._FREEZE_LEN] = cave
@@ -37,7 +43,8 @@ def test_each_switch_round_trips(monkeypatch):
         state = T.boot_patch_state(on)
         assert state[key] and sum(state.values()) == 1, key
         off = T.set_boot_patches(on, {key: False}, **QUIET)
-        if key in ('freeze_select_timer', 'skip_copyright'):   # code stays in its cave
+        if key in ('freeze_select_timer', 'skip_copyright',
+                   'category_folders'):                         # code stays in its cave
             assert not T.boot_patch_state(off)[key]
         else:
             assert off == stock, key
@@ -51,7 +58,8 @@ def test_all_on_then_some_off(monkeypatch):
                              **QUIET)
     assert T.boot_patch_state(out) == {'skip_notice': True, 'skip_copyright': False,
                                        'freeze_select_timer': True,
-                                       'disable_diff_timer': False}
+                                       'disable_diff_timer': False,
+                                       'category_folders': True}
 
 
 def test_old_credits_patch_reads_off_and_is_undone(monkeypatch):
@@ -111,3 +119,70 @@ def test_credits_stub_refuses_unknown_bytes(monkeypatch):
     import pytest
     with pytest.raises(T.TaikoExeError):
         T.patch_skip_copyright(bytes(buf), **QUIET)
+
+
+def _jal(va):
+    return 0x0C000000 | ((va >> 2) & 0x3FFFFFF)
+
+
+def test_category_folders_hook_filter_and_pick(monkeypatch):
+    from taiko2x6.exe import select_folders as SF
+    stock = _stock(monkeypatch)
+    out = T.set_boot_patches(stock, {'category_folders': True}, **QUIET)
+    _cave, stubs = SF.build()
+    word = lambda b, va: struct.unpack_from("<I", b, va - T.DELTA)[0]
+    assert word(out, SF.SITE_FILTER) == _jal(stubs['filter'])
+    assert word(out, SF.SITE_PICK) == _jal(stubs['pick'])
+    o = SF.CAVE_VA - T.DELTA
+    assert word(out, SF.CAVE_VA) == 0                     # no folder open
+    cards = out[o + 8:o + 24]
+    # only the cards open a folder: the one each heads
+    assert {g: cards[g] - 1 for g in range(16) if cards[g]} == SF.HEADER_GENRE
+    off = T.set_boot_patches(out, {'category_folders': False}, **QUIET)
+    for va, orig in SF.ORIG.items():
+        assert word(off, va) == orig
+    # turning it back on finds its own stubs in the cave
+    again = T.set_boot_patches(off, {'category_folders': True}, **QUIET)
+    assert again == out
+
+
+def test_category_folders_upgrade_early_builds(monkeypatch):
+    from taiko2x6.exe import select_folders as SF
+    buf = bytearray(_stock(monkeypatch))
+    put = lambda va, w: struct.pack_into("<I", buf, va - T.DELTA, w)
+    # the first build: filter and settle hooks into the DMA-buffer stub
+    put(SF.SITE_FILTER, _jal(SF.OLD_CAVE_VA + 0x20))
+    put(SF.SITE_SETTLE, _jal(SF.OLD_CAVE_VA + 0x80))
+    o = SF.OLD_CAVE_VA - T.DELTA
+    buf[o + 0x20:o + 0x24] = bytes.fromhex('e0ffbd27')
+    buf[o + 0x40] = 0x99
+    assert T.folders_need_upgrade(bytes(buf))
+    out = T.set_boot_patches(bytes(buf), {}, **QUIET)          # fixed unasked
+    assert T.boot_patch_state(out)['category_folders']
+    assert not T.folders_need_upgrade(out)
+    for va, word in SF.OLD_SITES.items():
+        assert struct.unpack_from("<I", out, va - T.DELTA)[0] == word
+    assert not any(out[o:o + SF.OLD_CAVE_LEN])
+    # turning an early build off cleans it up the same way
+    off = T.set_boot_patches(bytes(buf), {'category_folders': False}, **QUIET)
+    assert not T.boot_patch_state(off)['category_folders']
+    assert struct.unpack_from("<I", off, SF.SITE_FILTER - T.DELTA)[0] == SF.ORIG[SF.SITE_FILTER]
+    assert not any(off[o:o + SF.OLD_CAVE_LEN])
+
+
+def test_category_folders_refuse_a_used_cave(monkeypatch):
+    import pytest
+    from taiko2x6.exe import select_folders as SF
+    buf = bytearray(_stock(monkeypatch))
+    buf[SF.CAVE_VA - T.DELTA + 0x40] ^= 0xFF
+    with pytest.raises(T.TaikoExeError):
+        T.patch_folders(bytes(buf), **QUIET)
+
+
+def test_category_folders_refuse_an_unknown_site(monkeypatch):
+    import pytest
+    from taiko2x6.exe import select_folders as SF
+    buf = bytearray(_stock(monkeypatch))
+    struct.pack_into("<I", buf, SF.SITE_PICK - T.DELTA, 0x12345678)
+    with pytest.raises(T.TaikoExeError):
+        T.patch_folders(bytes(buf), **QUIET)

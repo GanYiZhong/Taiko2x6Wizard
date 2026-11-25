@@ -945,6 +945,29 @@ def unpatch_freeze_select_timer(dec: bytes, log=print) -> bytes:
     return bytes(buf)
 
 
+def is_folders_on(dec: bytes) -> bool:
+    from taiko2x6.exe import select_folders
+    return select_folders.is_on(dec, DELTA)
+
+
+def folders_need_upgrade(dec: bytes) -> bool:
+    from taiko2x6.exe import select_folders
+    return select_folders.needs_upgrade(dec, DELTA)
+
+
+def patch_folders(dec: bytes, log=print) -> bytes:
+    from taiko2x6.exe import select_folders
+    try:
+        return select_folders.patch(dec, DELTA, log)
+    except select_folders.FolderPatchError as exc:
+        raise TaikoExeError(str(exc)) from None
+
+
+def unpatch_folders(dec: bytes, log=print) -> bytes:
+    from taiko2x6.exe import select_folders
+    return select_folders.unpatch(dec, DELTA, log)
+
+
 # key -> (label, is_on, turn_on, turn_off)
 BOOT_PATCHES = {
     'skip_notice': ('Skip the boot Notice screen',
@@ -958,6 +981,8 @@ BOOT_PATCHES = {
     'disable_diff_timer': ('Disable the difficulty-select 30 s timeout',
                            is_diff_timer_disabled, patch_difficulty_timer,
                            unpatch_difficulty_timer),
+    'category_folders': ('Song select as category folders',
+                         is_folders_on, patch_folders, unpatch_folders),
 }
 
 
@@ -967,11 +992,13 @@ def boot_patch_state(dec: bytes) -> dict:
 
 def set_boot_patches(dec: bytes, wanted: dict, log=print) -> bytes:
     """Turn each patch named in `wanted` on (True) or off (False). An old
-    credits skip (see copyright_needs_upgrade) is fixed unless `wanted` turns
-    it off."""
+    credits skip (see copyright_needs_upgrade) or an early category-folders
+    build (folders_need_upgrade) is fixed unless `wanted` turns it off."""
     out = dec
     if copyright_needs_upgrade(out) and wanted.get('skip_copyright', True):
         out = patch_skip_copyright(out, log)
+    if folders_need_upgrade(out) and wanted.get('category_folders', True):
+        out = patch_folders(out, log)
     for key, on in wanted.items():
         _label, is_on, turn_on, turn_off = BOOT_PATCHES[key]
         if bool(is_on(out)) == bool(on):
@@ -1446,6 +1473,8 @@ else:
                                    'never runs out.',
             'disable_diff_timer': 'The difficulty (course) select never '
                                   'auto-starts after 30 s.',
+            'category_folders': 'Song select shows only the category cards; '
+                                'don on a card opens that folder.',
         }
 
         def __init__(self, parent=None, default_img=''):
