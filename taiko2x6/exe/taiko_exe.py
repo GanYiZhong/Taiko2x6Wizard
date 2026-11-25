@@ -1474,7 +1474,8 @@ else:
             'disable_diff_timer': 'The difficulty (course) select never '
                                   'auto-starts after 30 s.',
             'category_folders': 'Song select shows only the category cards; '
-                                'don on a card opens that folder.',
+                                'don on a card opens that folder, both ka '
+                                'close it.',
         }
 
         def __init__(self, parent=None, default_img=''):

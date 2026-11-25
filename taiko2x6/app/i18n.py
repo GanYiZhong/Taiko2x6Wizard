@@ -368,5 +368,5 @@ ZH_TW: dict[str, str] = {
     "The song-select countdown stays on screen but never runs out.": "選歌倒數仍會顯示，但不會歸零。",
     "The difficulty (course) select never auto-starts after 30 s.": "難度選擇不會在 30 秒後自動開始。",
     "Song select as category folders": "選歌改成類別資料夾",
-    "Song select shows only the category cards; don on a card opens that folder.": "選歌只顯示類別卡，在卡上按咚才打開那個資料夾。",
+    "Song select shows only the category cards; don on a card opens that folder, both ka close it.": "選歌只顯示類別卡，在卡上按咚打開資料夾，同時按左右咔關閉。",
 }

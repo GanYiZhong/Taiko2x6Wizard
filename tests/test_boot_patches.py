@@ -21,6 +21,7 @@ def _stock(monkeypatch):
     from taiko2x6.exe import select_folders as SF
     for va, word in {**SF.ORIG, **SF.OLD_SITES}.items():
         put(va, word)
+    struct.pack_into("<3I", buf, SF.SITE_CMD - T.DELTA, *SF.ORIG_CMD)
     fcave = bytes((i * 7) % 253 for i in range(SF.CAVE_LEN))
     buf[SF.CAVE_VA - T.DELTA:SF.CAVE_VA - T.DELTA + SF.CAVE_LEN] = fcave
     monkeypatch.setattr(SF, "CAVE_STOCK_SHA1", hashlib.sha1(fcave).hexdigest())
@@ -133,6 +134,8 @@ def test_category_folders_hook_filter_and_pick(monkeypatch):
     word = lambda b, va: struct.unpack_from("<I", b, va - T.DELTA)[0]
     assert word(out, SF.SITE_FILTER) == _jal(stubs['filter'])
     assert word(out, SF.SITE_PICK) == _jal(stubs['pick'])
+    assert struct.unpack_from("<3I", out, SF.SITE_CMD - T.DELTA) == (
+        _jal(stubs['cmd']), 0, 0x00400008)                 # jal cmd; nop; jr v0
     o = SF.CAVE_VA - T.DELTA
     assert word(out, SF.CAVE_VA) == 0                     # no folder open
     cards = out[o + 8:o + 24]
@@ -141,6 +144,7 @@ def test_category_folders_hook_filter_and_pick(monkeypatch):
     off = T.set_boot_patches(out, {'category_folders': False}, **QUIET)
     for va, orig in SF.ORIG.items():
         assert word(off, va) == orig
+    assert struct.unpack_from("<3I", off, SF.SITE_CMD - T.DELTA) == SF.ORIG_CMD
     # turning it back on finds its own stubs in the cave
     again = T.set_boot_patches(off, {'category_folders': True}, **QUIET)
     assert again == out
@@ -182,7 +186,8 @@ def test_category_folders_refuse_a_used_cave(monkeypatch):
 def test_category_folders_refuse_an_unknown_site(monkeypatch):
     import pytest
     from taiko2x6.exe import select_folders as SF
-    buf = bytearray(_stock(monkeypatch))
-    struct.pack_into("<I", buf, SF.SITE_PICK - T.DELTA, 0x12345678)
-    with pytest.raises(T.TaikoExeError):
-        T.patch_folders(bytes(buf), **QUIET)
+    for va in (SF.SITE_PICK, SF.SITE_CMD):
+        buf = bytearray(_stock(monkeypatch))
+        struct.pack_into("<I", buf, va - T.DELTA, 0x12345678)
+        with pytest.raises(T.TaikoExeError):
+            T.patch_folders(bytes(buf), **QUIET)
