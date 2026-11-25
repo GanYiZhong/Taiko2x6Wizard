@@ -1,9 +1,9 @@
 name: rolling release
 
 # Every push to main rebuilds the Windows and Linux binaries and replaces the
-# assets of the single "rolling" pre-release. Pushing a tag v1.2.3 builds the
-# same binaries and publishes them as release v1.2.3, with the notes in
-# release/NOTES-1.2.3.md.
+# single "rolling" release, which is marked Latest. Pushing a tag v1.2.3 builds
+# the same binaries and publishes them as release v1.2.3 (Latest until the
+# next push to main), with the notes in release/NOTES-1.2.3.md.
 
 on:
   push:
@@ -138,6 +138,6 @@ jobs:
           gh release delete rolling --cleanup-tag --yes || true
           gh release create rolling dist/* \
             --target "$GITHUB_SHA" \
-            --prerelease \
+            --latest \
             --title "Rolling build (${short})" \
             --notes-file notes.md
