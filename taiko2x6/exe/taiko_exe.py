@@ -576,6 +576,24 @@ _F_CHILD = 0x00191398               # (root, id) -> clip
 _F_STOP = 0x00193D68                # clip.stop()
 _COUNTER_STR = 0x003A78F0           # "counter"
 _FREEZE_SECONDS = 120               # remaining time = total frames - frame
+# The cave's last 32 bytes belong to the credits-skip entry stub (see
+# _entry_code); the freeze wrapper only ever writes the bytes before them.
+_ENTRY_LEN = 32
+_ENTRY_VA = _FREEZE_VA + _FREEZE_LEN - _ENTRY_LEN                # 0x214F98
+_FREEZE_HEAD = _FREEZE_LEN - _ENTRY_LEN
+_ENTRY_STOCK = bytes.fromhex('9000b5df8000b4df7000b3df6000b2df'
+                             '5000b1df4000b0df0800e003c000bd27')
+
+
+def _freeze_cave_is_free(cave: bytes, code: bytes) -> bool:
+    """The 392-byte cave holds the stock (unused) libc tail, zeros, or our
+    own code; its last 32 bytes may already hold the credits-skip stub."""
+    import hashlib
+    head, tail = cave[:_FREEZE_HEAD], cave[_FREEZE_HEAD:]
+    if tail == _entry_code():
+        tail = _ENTRY_STOCK
+    return (hashlib.sha1(head + tail).hexdigest() == _FREEZE_STOCK_SHA1
+            or not any(head) or head.startswith(code))
 
 
 def _freeze_code() -> bytes:
@@ -618,7 +636,7 @@ def _freeze_code() -> bytes:
     a.j(_SELECT_UPDATE)
     a.addiu('sp', 'sp', 32)
     code = a.finish()
-    assert len(code) <= _FREEZE_LEN
+    assert len(code) <= _FREEZE_HEAD
     return code
 
 
@@ -628,7 +646,6 @@ def is_select_timer_frozen(dec: bytes) -> bool:
 
 def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
     """Stop the song-select countdown (it stays on screen but never runs out)."""
-    import hashlib
     buf = bytearray(dec)
     st = _SELECT_STATE - DELTA
     cur = struct.unpack_from('<I', buf, st)[0]
@@ -641,12 +658,11 @@ def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
         raise TaikoExeError(
             f'{_SELECT_STATE:08X}: expected the select update {_SELECT_UPDATE:#x} '
             f'(got {cur:#x}) — refusing')
-    if (cur not in (_FREEZE_VA, _FREEZE_VA_V1) and hashlib.sha1(cave).hexdigest() != _FREEZE_STOCK_SHA1
-            and cave != bytes(_FREEZE_LEN) and not cave.startswith(code)):
+    if cur not in (_FREEZE_VA, _FREEZE_VA_V1) and not _freeze_cave_is_free(cave, code):
         raise TaikoExeError(f'{_FREEZE_VA:08X}: cave area is not free — refusing')
     if bytes(buf[_COUNTER_STR - DELTA:_COUNTER_STR - DELTA + 8]) != b'counter\0':
         raise TaikoExeError(f'{_COUNTER_STR:08X}: "counter" string not found — refusing')
-    buf[_FREEZE_VA - DELTA:_FREEZE_VA - DELTA + _FREEZE_LEN] = code + bytes(_FREEZE_LEN - len(code))
+    buf[_FREEZE_VA - DELTA:_FREEZE_VA - DELTA + _FREEZE_HEAD] = code + bytes(_FREEZE_HEAD - len(code))
     struct.pack_into('<I', buf, st, _FREEZE_VA)
     log(f'{_SELECT_STATE:08X}  select update -> {_FREEZE_VA:08X}  '
         f'(song-select countdown frozen)')
@@ -661,6 +677,13 @@ def patch_freeze_select_timer(dec: bytes, log=print) -> bytes:
 # the credits state. sub_1462E0 and sub_147378 already take that LoopAttract
 # branch in the stock game, so the next state runs from a known context.
 #
+# The slot does not point at LoopAttract directly: the credits state's exit
+# (LicenseAdvertiseWait, sub_146CB8) is also what re-enables coin entry,
+# sub_135C28 = `dword_3A6638->+0xA3C = 1`, which the attract demo play clears
+# (sub_135C38). Jumping straight to LoopAttract left it 0 after the first demo,
+# so the title screen ignored the drum until a reboot. The slot points at a
+# 32-byte stub that sets the flag and tail-jumps to LoopAttract.
+#
 # Older versions NOPed branches inside the credits state itself: 0x146CDC tore
 # the SWF controller down while it was still loading and crashed the EE, and
 # 0x14CA18 / 0x14CF3C did not shorten the screen. They are restored here.
@@ -672,10 +695,44 @@ _OLD_COPYRIGHT  = ((0x00146CDC, 0x54400035),    # bnezl $v0, loc_146DB4
                    (0x0014CF3C, 0x50400009))    # beqzl $v0, loc_14CF64
 
 
+_ENTRY_OBJ = 0x003A6638       # dword_3A6638: the coin-entry manager
+_ENTRY_FLAG = 0xA3C           # +0xA3C: coin entry enabled (sub_135C28 sets 1)
+
+
+def _entry_code() -> bytes:
+    a = song_tables._Asm(_ENTRY_VA)
+    a.lui('t0', _ENTRY_OBJ >> 16)
+    a.lw('t0', _ENTRY_OBJ & 0xFFFF, 't0')
+    a.addiu('t1', 'zero', 1)
+    a.sw('t1', _ENTRY_FLAG, 't0')           # what sub_135C28 does
+    a.j(_COPYRIGHT_NEW)                     # then LoopAttract(a0, a1)
+    a.nop()
+    code = a.finish()
+    assert len(code) <= _ENTRY_LEN
+    return code + bytes(_ENTRY_LEN - len(code))
+
+
+def _slot(dec) -> int:
+    return struct.unpack_from('<I', dec, _COPYRIGHT_SLOT - DELTA)[0]
+
+
+def _entry_tail(dec) -> bytes:
+    return bytes(dec[_ENTRY_VA - DELTA:_ENTRY_VA - DELTA + _ENTRY_LEN])
+
+
 def is_copyright_skipped(dec: bytes) -> bool:
-    return (struct.unpack_from('<I', dec, _COPYRIGHT_SLOT - DELTA)[0] == _COPYRIGHT_NEW
+    """Credits skipped, by either the current stub or the older direct jump
+    (which kept coin entry off after the first demo; patch_skip_copyright
+    upgrades it)."""
+    return (_slot(dec) in (_COPYRIGHT_NEW, _ENTRY_VA)
             and all(struct.unpack_from('<I', dec, va - DELTA)[0] == w
                     for va, w in _OLD_COPYRIGHT))
+
+
+def copyright_needs_upgrade(dec: bytes) -> bool:
+    """The credits skip is the old direct `LoopAttract` jump (title ignores the
+    drum after the first attract demo)."""
+    return _slot(dec) == _COPYRIGHT_NEW
 
 
 def patch_skip_copyright(dec: bytes, log=print) -> bytes:
@@ -685,39 +742,28 @@ def patch_skip_copyright(dec: bytes, log=print) -> bytes:
         if struct.unpack_from('<I', buf, va - DELTA)[0] == 0:
             struct.pack_into('<I', buf, va - DELTA, word)
             log(f'{va:08X}  restored (old credits-skip patch)')
-    o = _COPYRIGHT_SLOT - DELTA
-    cur = struct.unpack_from('<I', buf, o)[0]
-    if cur == _COPYRIGHT_NEW:
+    code = _entry_code()
+    cur = _slot(buf)
+    if cur == _ENTRY_VA and _entry_tail(buf) == code:
         log(f'{_COPYRIGHT_SLOT:08X}  credits screen already skipped')
         return bytes(buf)
-    if cur != _COPYRIGHT_ORIG:
+    if cur not in (_COPYRIGHT_ORIG, _COPYRIGHT_NEW, _ENTRY_VA):
         raise TaikoExeError(
             f'{_COPYRIGHT_SLOT:08X}: expected the LicenseAdvertiseInit handler '
             f'({_COPYRIGHT_ORIG:#010x}, got {cur:#010x}) — refusing')
-    struct.pack_into('<I', buf, o, _COPYRIGHT_NEW)
-    log(f'{_COPYRIGHT_SLOT:08X}  LicenseAdvertiseInit -> LoopAttract   '
-        f'(License/credits screen skipped)')
-    return bytes(buf)
-    if cur != _COPYRIGHT_ORIG:
-        raise TaikoExeError(
-            f'{_COPYRIGHT_SITE:08X}: expected `beqzl $v0` ({_COPYRIGHT_ORIG:#010x}, '
-            f'got {cur:#010x}) — refusing')
-    struct.pack_into('<I', buf, o, 0)   # nop
-    log(f'{_COPYRIGHT_SITE:08X}  beqzl -> nop   (License/credits screen skipped)')
-    return bytes(buf)
-    if cur != _COPYRIGHT_ORIG:
-        raise TaikoExeError(
-            f'{_COPYRIGHT_BEQ:08X}: expected `beq $v0,$t7` ({_COPYRIGHT_ORIG:#010x}, '
-            f'got {cur:#010x}) — refusing')
-    struct.pack_into('<I', buf, o, 0)   # nop
-    log(f'{_COPYRIGHT_BEQ:08X}  beq -> nop   (License/credits screen skipped)')
-    return bytes(buf)
-    if cur != _COPYRIGHT_ORIG:
-        raise TaikoExeError(
-            f'{_COPYRIGHT_BNEZL:08X}: expected `bnezl $v0` ({_COPYRIGHT_ORIG:#010x}, '
-            f'got {cur:#010x}) — refusing')
-    struct.pack_into('<I', buf, o, 0)   # nop
-    log(f'{_COPYRIGHT_BNEZL:08X}  bnezl $v0 -> nop   (License/credits screen skipped)')
+    leftover_v1 = False
+    if struct.unpack_from('<I', buf, _SELECT_STATE - DELTA)[0] == _FREEZE_VA_V1:
+        # the earliest select-freeze build ran code in these bytes: move it
+        buf = bytearray(patch_freeze_select_timer(bytes(buf), log))
+        leftover_v1 = True
+    tail = _entry_tail(buf)
+    if tail not in (code, _ENTRY_STOCK, bytes(_ENTRY_LEN)) and not leftover_v1:
+        raise TaikoExeError(f'{_ENTRY_VA:08X}: stub area is not free — refusing')
+    buf[_ENTRY_VA - DELTA:_ENTRY_VA - DELTA + _ENTRY_LEN] = code
+    struct.pack_into('<I', buf, _COPYRIGHT_SLOT - DELTA, _ENTRY_VA)
+    log(f'{_COPYRIGHT_SLOT:08X}  LicenseAdvertiseInit -> {_ENTRY_VA:08X} '
+        f'(coin entry on, then LoopAttract)   (License/credits screen skipped'
+        + (', fixed the old direct jump' if cur == _COPYRIGHT_NEW else '') + ')')
     return bytes(buf)
 
 
@@ -874,7 +920,7 @@ def unpatch_skip_copyright(dec: bytes, log=print) -> bytes:
             struct.pack_into('<I', buf, va - DELTA, word)
             log(f'{va:08X}  restored (old credits-skip patch)')
     o = _COPYRIGHT_SLOT - DELTA
-    if struct.unpack_from('<I', buf, o)[0] == _COPYRIGHT_NEW:
+    if struct.unpack_from('<I', buf, o)[0] in (_COPYRIGHT_NEW, _ENTRY_VA):
         struct.pack_into('<I', buf, o, _COPYRIGHT_ORIG)
         log(f'{_COPYRIGHT_SLOT:08X}  LicenseAdvertiseInit restored (credits shown)')
     return bytes(buf)
@@ -920,8 +966,12 @@ def boot_patch_state(dec: bytes) -> dict:
 
 
 def set_boot_patches(dec: bytes, wanted: dict, log=print) -> bytes:
-    """Turn each patch named in `wanted` on (True) or off (False)."""
+    """Turn each patch named in `wanted` on (True) or off (False). An old
+    credits skip (see copyright_needs_upgrade) is fixed unless `wanted` turns
+    it off."""
     out = dec
+    if copyright_needs_upgrade(out) and wanted.get('skip_copyright', True):
+        out = patch_skip_copyright(out, log)
     for key, on in wanted.items():
         _label, is_on, turn_on, turn_off = BOOT_PATCHES[key]
         if bool(is_on(out)) == bool(on):
