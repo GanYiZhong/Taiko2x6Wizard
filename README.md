@@ -157,6 +157,11 @@ let the GUI fill it in as you browse.
     hardware.** *Remove* deletes the files and the game uses the card again.
   - *Card image*: the original, hardware-tested method — patches the card's
     `IRXARC.BIN` and `T14LOAD` (a `.bak` of the card is made first).
+  - *Build*: **keyboard + dummy JVS** (default, hardware-tested) plays with no
+    I/O board attached. **Keyboard only** (`--kbdonly`) is for a machine that
+    keeps its real I/O board: the board works as before and the keyboard adds
+    to it (built from the same source without the dummy-JVS hooks; not yet
+    tested on hardware).
   - Before installing, the image's `taiko` is decrypted and checked: KBD2EE
     overwrites seven fixed code blocks and uses a fixed memory area, so on a
     different `taiko` build it would corrupt live code. A mismatch refuses
@@ -181,6 +186,11 @@ let the GUI fill it in as you browse.
   rewritten to the Gen2 layout (notes unchanged; all 645 T7 charts pass the
   chart validator), and its difficulty stars are read with T7's own
   `tuning.bin` layout. Not yet played in-game.
+  The select title textures lose their fully transparent bottom rows, which
+  frees about 3 MB of game memory; without it a ~600-song build hung on the
+  2nd song of a credit. *Repair existing Omnimix* (same dialog) applies this,
+  and with the build's sources also the gauge values and preview starts, to an
+  Omnimix made by an older version without rebuilding it.
 
 > ⚠️ **Safety.** When writing to a PS2 HDD `.img`, **close PCSX2 first** — it
 > locks the image for writing (reads are fine while it runs). Working on

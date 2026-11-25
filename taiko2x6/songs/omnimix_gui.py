@@ -209,7 +209,15 @@ class OmnimixDialog(QDialog):
         self.b_prev = QPushButton(tr("Preview plan")); self.b_prev.clicked.connect(self._preview)
         self.b_build = QPushButton(tr("Build Omnimix")); self.b_build.clicked.connect(self._build)
         self.b_build.setEnabled(False)
+        self.b_repair = QPushButton(tr("Repair existing Omnimix"))
+        self.b_repair.setToolTip(tr(
+            "Brings an Omnimix built with an older version up to date without "
+            "rebuilding it: trims the select title textures (the 2nd song of a "
+            "credit no longer hangs) and, with the same sources as the build "
+            "(stock TK14 first), fixes gauge values and preview starts."))
+        self.b_repair.clicked.connect(self._repair)
         b_close = QPushButton(tr("Close")); b_close.clicked.connect(self.reject)
+        btns.addWidget(self.b_repair)
         btns.addWidget(self.b_prev); btns.addWidget(self.b_build); btns.addWidget(b_close)
         lay.addLayout(btns)
         self._sync_target()
@@ -483,6 +491,56 @@ class OmnimixDialog(QDialog):
                                             "and (for .img) writes it back. Please wait…"))
         self._start(task, self._after_build, tr("Building…"))
 
+    def _repair(self):
+        if not self._target_is_img() or not self.ed_timg.text().strip():
+            QMessageBox.warning(self, tr("Omnimix Maker"),
+                                tr("Repair works on a HDD .img target. Choose one."))
+            return
+        img = self.ed_timg.text().strip()
+        if not self.ed_tpart.text().strip():
+            part = _pick_partition(self, img)
+            if not part:
+                return
+            self.ed_tpart.setText(part)
+        tpart = self.ed_tpart.text().strip()
+        sources = list(self._sources)
+        note = (tr("Sources: {n} (gauge values and preview starts are fixed too).").format(
+                    n=len(sources)) if sources else
+                tr("No sources added: only the title textures are trimmed."))
+        if QMessageBox.question(
+                self, tr("Repair existing Omnimix"),
+                tr("Repair partition {part} of\n{img}\nin place?").format(part=tpart, img=img)
+                + "\n\n" + note) != QMessageBox.Yes:
+            return
+
+        def task(log):
+            self._tmproot = Path(tempfile.mkdtemp(prefix="omnimix_"))
+            specs = []
+            for i, s in enumerate(sources):
+                if s["kind"] == "img":
+                    lp, dp = OM.extract_partition(s["img"], s["partition"],
+                                                  self._tmproot / f"src{i}", log)
+                elif s["kind"] == "iso":
+                    lp, dp = OM.iso_extract_pair(s["iso"], self._tmproot / f"src{i}", log)
+                else:
+                    lp, dp = s["list"], s["data"]
+                specs.append(OM.SourceSpec(s["label"], str(lp), str(dp)))
+            return {"written": OM.repair_image(img, tpart, specs,
+                                               self._tmproot / "target", log)}
+
+        self.log.clear()
+        self._start(task, self._after_repair, tr("Repairing…"))
+
+    def _after_repair(self, res):
+        if self._is_err(res):
+            return
+        msg = (tr("Repaired and written back.") if res["written"]
+               else tr("Nothing to repair: this Omnimix is up to date."))
+        self.log.appendPlainText("\n" + msg)
+        self._cleanup_tmp()
+        self._end(tr("done"))
+        QMessageBox.information(self, tr("Repair existing Omnimix"), msg)
+
     def _confirm_write(self, is_img, img, tpart):
         where = (f"partition {tpart} of\n{img}" if is_img
                  else f"{self.ed_timg.text().strip()}")
@@ -526,7 +584,7 @@ class OmnimixDialog(QDialog):
         self._worker.start()
 
     def _begin(self, stage=""):
-        for b in (self.b_prev, self.b_build):
+        for b in (self.b_prev, self.b_build, self.b_repair):
             b.setEnabled(False)
         self.progress.setRange(0, 0)          # busy until a "n/total" line shows up
         self.progress.setFormat("")
@@ -535,6 +593,7 @@ class OmnimixDialog(QDialog):
 
     def _end(self, stage=""):
         self.b_prev.setEnabled(True)
+        self.b_repair.setEnabled(True)
         self._tick.stop(); self._update_time()
         self.progress.setRange(0, 1); self.progress.setValue(1 if stage == tr("done") else 0)
         self.progress.setFormat("")

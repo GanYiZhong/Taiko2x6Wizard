@@ -53,7 +53,19 @@ __all__ = [
 ]
 
 MODULE = "KBD2EE"
-IRX_SHA256_PREFIX = "34F1CC379FB27157"          # the hardware-validated build
+# Two builds of the module (same source, gen_blob.py with/without --kbdonly):
+#   full    keyboard + dummy JVS: boots and plays with NO I/O board attached.
+#           The exact binary validated on hardware.
+#   kbdonly keyboard only, for a machine that still has its real I/O board:
+#           none of the dummy-JVS hooks (node-count gate, enumeration exit,
+#           the four JVS wait loops) is applied, so the board keeps working
+#           and the keyboard adds to it. Built with the toolchain that
+#           reproduces the full build bit for bit; not yet tested on hardware.
+VARIANTS = {
+    "full": ("KBD2EE.irx", "34F1CC379FB27157"),
+    "kbdonly": ("KBD2EE_kbdonly.irx", "719C4379EF7E31CA"),
+}
+IRX_SHA256_PREFIX = VARIANTS["full"][1]          # the hardware-validated build
 HDD_NAMES = ("IRXARC.BIN;1", "IRXARC.BIN")      # see module docstring
 # T14LOAD module-name list: one free slot + a zero run used as a string cave
 PTR_OFF, STR_OFF, STR_VA = 0x32664, 0x34AC4, 0x01033AC4
@@ -91,14 +103,17 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()[:16].upper()
 
 
-def bundled_irx() -> bytes:
-    """The bundled KBD2EE.irx (checked against the validated build)."""
-    p = Path(__file__).resolve().parent / "data" / "KBD2EE.irx"
+def bundled_irx(variant: str = "full") -> bytes:
+    """A bundled KBD2EE build (see VARIANTS), checked against its hash."""
+    if variant not in VARIANTS:
+        raise KeyboardPatchError(f"unknown build {variant!r} (full / kbdonly)")
+    name, sha = VARIANTS[variant]
+    p = Path(__file__).resolve().parent / "data" / name
     if not p.is_file():
         raise KeyboardPatchError(f"bundled module missing: {p}")
     data = p.read_bytes()
-    if _sha(data) != IRX_SHA256_PREFIX:
-        raise KeyboardPatchError(f"{p.name} is not the validated build "
+    if _sha(data) != sha:
+        raise KeyboardPatchError(f"{p.name} is not the expected {variant} build "
                                  f"(sha256 {_sha(data)})")
     return data
 
@@ -203,12 +218,14 @@ def _irxarc_info(raw: bytes) -> dict:
     if info["installed"]:
         e = ents[names.index(MODULE)]
         stored = bytes(blob[e[2]:e[2] + e[3]])      # size field is 16-aligned
-        try:
-            ref = bundled_irx()
-            info["matches_bundled"] = stored[:len(ref)] == ref and \
-                not any(stored[len(ref):])
-        except KeyboardPatchError:
-            pass
+        for variant in VARIANTS:
+            try:
+                ref = bundled_irx(variant)
+            except KeyboardPatchError:
+                continue
+            if stored[:len(ref)] == ref and not any(stored[len(ref):]):
+                info["build"] = variant
+        info["matches_bundled"] = "build" in info
         info["count"] = names.count(MODULE)
     return info
 
@@ -546,6 +563,9 @@ def _main(argv=None) -> int:
         if name == "install":
             sp.add_argument("--no-check", action="store_true",
                             help="skip the taiko compatibility check")
+            sp.add_argument("--kbdonly", action="store_true",
+                            help="keyboard only, for a machine that keeps its "
+                                 "real I/O board (default: keyboard + dummy JVS)")
     fp = sub.add_parser("files", help="patch dumped IRXARC.BIN + T14LOAD")
     fp.add_argument("--in", dest="src", required=True)
     fp.add_argument("--out", dest="dst", required=True)
@@ -567,14 +587,15 @@ def _main(argv=None) -> int:
                                        a.target if card else a.card, log=print)
             return 1 if problems else 0
         elif a.cmd == "install":
+            irx = bundled_irx("kbdonly" if a.kbdonly else "full")
             if card:
                 if a.no_check:
-                    card_install(a.target)
+                    card_install(a.target, irx)
                 else:
-                    card_install(a.target, img=a.img, partition=a.partition)
+                    card_install(a.target, irx, img=a.img, partition=a.partition)
             else:
-                hdd_install(a.target, a.card, a.partition, check=not a.no_check,
-                            t14load=a.t14load)
+                hdd_install(a.target, a.card, a.partition, irx=irx,
+                            check=not a.no_check, t14load=a.t14load)
             print("done. Unplug and replug the keyboard once after boot.")
         else:
             card_remove(a.target) if card else hdd_remove(a.target, a.partition)
@@ -633,6 +654,18 @@ else:
             self.rb_hdd.setChecked(True)
             ml.addWidget(self.rb_hdd); ml.addWidget(self.rb_card)
             lay.addWidget(mode)
+
+            build = QGroupBox("Which build")
+            bl = QVBoxLayout(build)
+            self.rb_full = QRadioButton(
+                "Keyboard + dummy JVS — play with NO I/O board attached "
+                "(the hardware-tested build)")
+            self.rb_kbdonly = QRadioButton(
+                "Keyboard only — the machine keeps its real I/O board, the "
+                "keyboard works alongside it (not yet tested on hardware)")
+            self.rb_full.setChecked(True)
+            bl.addWidget(self.rb_full); bl.addWidget(self.rb_kbdonly)
+            lay.addWidget(build)
 
             grid = QGridLayout()
             self.ed_target = QLineEdit(default_img)
@@ -779,9 +812,10 @@ else:
             if not t or not self._confirm("Install", t):
                 return
             t14 = self._opt(self.ed_t14)
+            irx = bundled_irx("kbdonly" if self.rb_kbdonly.isChecked() else "full")
             if self.rb_hdd.isChecked():
                 src = self._opt(self.ed_card)
-                self._run(lambda log: hdd_install(t, src, log=log, t14load=t14))
+                self._run(lambda log: hdd_install(t, src, irx=irx, log=log, t14load=t14))
             else:
                 img = self._opt(self.ed_img)
                 if not img and QMessageBox.question(
@@ -789,7 +823,7 @@ else:
                         "No HDD image chosen, so the game executable cannot be "
                         "checked. Install on the card anyway?") != QMessageBox.Yes:
                     return
-                self._run(lambda log: card_install(t, log=log, img=img))
+                self._run(lambda log: card_install(t, irx, log=log, img=img))
 
         def _remove(self):
             t = self._target()

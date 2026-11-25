@@ -1060,23 +1060,35 @@ def repair_song_db(target, sources, log=lambda s: None) -> dict:
     return out
 
 
-def repair_image_song_db(img, partition, sources, tmpdir, log=lambda s: None) -> bool:
-    """Run repair_song_db on an .img partition and write the result back
-    (undo-journaled). DATA.000 keeps its size: a gamedata group that no longer
-    fits its sectors moves into dead space (Archive.save). Returns whether
-    anything was written. PCSX2 must be closed."""
+def repair_image(img, partition, sources, tmpdir, log=lambda s: None,
+                 song_db: bool = True, titles: bool = True) -> bool:
+    """Bring an already built Omnimix on an .img partition up to date, in one
+    pass written back undo-journaled: `song_db` runs repair_song_db (needs
+    `sources`, base release first), `titles` runs trim_title_textures (the
+    2nd-song hang). DATA.000 keeps its size: a gamedata group that no longer
+    fits its sectors moves into dead space (Archive.save). Every changed file
+    is read back before anything is written. Returns whether anything was
+    written. PCSX2 must be closed."""
     from taiko2x6.songs import song_builder
     tmpdir = Path(tmpdir)
     lp, dp = extract_partition(img, partition, tmpdir / "in", log)
     arc = open_pair(lp, dp)
     try:
-        new = repair_song_db(arc, sources, log)
-        if not new:
-            log("song DB already right; nothing to write")
-            return False
+        new = repair_song_db(arc, sources, log) if song_db and sources else {}
+        if song_db and not sources:
+            log("no sources given: song DB (gauge, previews) left as it is")
         for name, data in new.items():
             g, e = song_builder.find_named_entry(arc, name)
             arc.stage_replace(g["index"], e["index"], data)
+        trimmed = trim_title_textures(arc, log) if titles else 0
+        if not new and not trimmed:
+            log("nothing to repair; nothing written")
+            return False
+        want = {}
+        for g in arc.layout.groups:
+            if trimmed and g["name"] in TITLE_TEXTURE_GROUPS:
+                for e in arc.layout.files_for_group(g):
+                    want[(g["name"], e["name"])] = arc.read_file(g, e)
         ol, od = tmpdir / "list.bin", tmpdir / "DATA.000"
         arc.save(ol, od, allow_relayout=True)
     finally:
@@ -1086,13 +1098,29 @@ def repair_image_song_db(img, partition, sources, tmpdir, log=lambda s: None) ->
         for name, data in new.items():
             if song_builder._read_named(check, name) != data:
                 raise ValueError(f"repaired {name} did not read back; nothing written")
+        for g in check.layout.groups:
+            if trimmed and g["name"] in TITLE_TEXTURE_GROUPS:
+                for e in check.layout.files_for_group(g):
+                    if check.read_file(g, e) != want.get((g["name"], e["name"])):
+                        raise ValueError(f"{g['name']} did not read back; nothing written")
+                log(f"{g['name']}: {g['unpacked_size'] / 2**20:.2f} MB in game memory")
     finally:
         check.close()
     if od.stat().st_size != Path(dp).stat().st_size:
         raise ValueError("DATA.000 would change size; nothing written")
     write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
-    log(f"written: {', '.join(new)}")
+    log(f"written: {', '.join(list(new) + (['title textures'] if trimmed else []))}")
     return True
+
+
+def repair_image_song_db(img, partition, sources, tmpdir, log=lambda s: None) -> bool:
+    """repair_image for the song DB only (gauge values, preview starts)."""
+    return repair_image(img, partition, sources, tmpdir, log, titles=False)
+
+
+def trim_image_title_textures(img, partition, tmpdir, log=lambda s: None) -> bool:
+    """repair_image for the title textures only (see trim_title_textures)."""
+    return repair_image(img, partition, [], tmpdir, log, song_db=False)
 
 
 # Shared select-screen title textures (select_full/short in the first,
@@ -1132,43 +1160,6 @@ def trim_title_textures(archive, log=lambda s: None) -> int:
         archive.stage_compact(g["index"])
     log(f"title textures: {saved / 2**20:.1f} MB of transparent rows cut")
     return saved
-
-
-def trim_image_title_textures(img, partition, tmpdir, log=lambda s: None) -> bool:
-    """trim_title_textures on an .img partition, written back undo-journaled.
-    DATA.000 keeps its size. Returns whether anything was written. PCSX2 must
-    be closed."""
-    tmpdir = Path(tmpdir)
-    lp, dp = extract_partition(img, partition, tmpdir / "in", log)
-    arc = open_pair(lp, dp)
-    try:
-        if not trim_title_textures(arc, log):
-            log("title textures already trimmed; nothing to write")
-            return False
-        want = {}
-        for g in arc.layout.groups:
-            if g["name"] in TITLE_TEXTURE_GROUPS:
-                want[g["name"]] = {e["name"]: arc.read_file(g, e)
-                                   for e in arc.layout.files_for_group(g)}
-        ol, od = tmpdir / "list.bin", tmpdir / "DATA.000"
-        arc.save(ol, od, allow_relayout=True)
-    finally:
-        arc.close()
-    check = open_pair(ol, od)
-    try:
-        for g in check.layout.groups:
-            if g["name"] in want:
-                got = {e["name"]: check.read_file(g, e)
-                       for e in check.layout.files_for_group(g)}
-                if got != want[g["name"]]:
-                    raise ValueError(f"{g['name']} did not read back; nothing written")
-                log(f"{g['name']}: {g['unpacked_size'] / 2**20:.2f} MB in game memory")
-    finally:
-        check.close()
-    if od.stat().st_size != Path(dp).stat().st_size:
-        raise ValueError("DATA.000 would change size; nothing written")
-    write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
-    return True
 
 
 def _ordered_ids(archive):

@@ -165,3 +165,35 @@ def test_hdd_install_requires_key_for_check(pfs_image, monkeypatch):
     with pytest.raises(K.KeyboardPatchError, match="T14LOAD"):
         K.hdd_install(img, src, log=lambda s: None)          # check is on by default
     assert K.hdd_status(img)["installed"] is False             # nothing written
+
+
+def _patched_blocks(irx):
+    """Hook blocks found in `irx` with exactly one word replaced."""
+    out = set()
+    for va, words in K.HOOK_BLOCKS.items():
+        for pos in range(0, len(irx) - 16, 4):
+            got = struct.unpack_from("<4I", irx, pos)
+            if sum(g != w for g, w in zip(got, words)) == 1:
+                out.add(va)
+                break
+    return out
+
+
+def test_kbdonly_build_has_none_of_the_dummy_jvs_hooks():
+    """kbdonly is the full build minus the dummy-JVS hooks: the six blocks
+    that fake an I/O board are in the full build's table and absent from the
+    keyboard-only one (its single keyboard hook is folded into code)."""
+    dummy = set(K.HOOK_BLOCKS) - {0x00186A20}
+    assert _patched_blocks(K.bundled_irx("full")) == set(K.HOOK_BLOCKS)
+    kbd = K.bundled_irx("kbdonly")
+    assert len(kbd) == 6465
+    assert not (_patched_blocks(kbd) & dummy)
+
+
+def test_status_names_the_installed_build():
+    for variant in K.VARIANTS:
+        patched = K.patch_irxarc(_fake_irxarc(), K.bundled_irx(variant))
+        info = K._irxarc_info(patched)
+        assert info["build"] == variant and info["matches_bundled"]
+    with pytest.raises(K.KeyboardPatchError):
+        K.bundled_irx("other")
