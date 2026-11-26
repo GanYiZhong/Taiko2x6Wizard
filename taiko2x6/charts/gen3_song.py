@@ -53,20 +53,28 @@ def _load_table(root, name):
     return _cache[key]
 
 
+def _index(root, name, field):
+    """{item[field]: item} for a datatable, built once (first entry wins, as
+    the linear scans it replaces did). Looking songs up one by one used to
+    scan thousands of items per song, which made loading a library quadratic."""
+    key = (str(root), name, field)
+    if key not in _cache:
+        idx = {}
+        for it in _load_table(root, name)["items"]:
+            idx.setdefault(it.get(field), it)
+        _cache[key] = idx
+    return _cache[key]
+
+
 def music_info(root, sid):
     """The musicinfo.bin entry for `sid`, or None."""
-    for it in _load_table(root, "musicinfo.bin")["items"]:
-        if it.get("id") == sid:
-            return it
-    return None
+    return _index(root, "musicinfo.bin", "id").get(sid)
 
 
 def words(root, key, lang="japaneseText"):
     """A wordlist.bin string, or ''."""
-    for it in _load_table(root, "wordlist.bin")["items"]:
-        if it.get("key") == key:
-            return it.get(lang, "") or ""
-    return ""
+    it = _index(root, "wordlist.bin", "key").get(key)
+    return (it.get(lang, "") or "") if it else ""
 
 
 def _pick_chart(folder, sid, suffix):
