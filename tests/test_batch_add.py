@@ -79,6 +79,7 @@ def _make_archive(tmp_path, name="base"):
     for p in ("1p", "2p"):
         for letter in "enhm":
             groups.append(("fumen.tmpl%s_%s" % (p, letter), [("sht", b"S" * 200)]))
+    groups.sort(key=lambda g: g[0].encode("latin-1"))   # real archives are name-sorted
     lb, db = build_archive(groups)
     d = tmp_path / name
     d.mkdir()
@@ -212,6 +213,80 @@ def test_batch_identical_to_single_song_path(songs_dir, arch, tmp_path):
         cur.close()
     assert bytes(batch.new_archive[0]) == bytes(last[0])
     assert bytes(batch.new_archive[1]) == bytes(last[1])
+
+
+def _sequential(items, tmp_path, name):
+    """The old path: one add_new_song (full rebuild) per song, re-opened between."""
+    cur = Archive(*_make_archive(tmp_path, name))
+    last = None
+    try:
+        for n, it in enumerate(items):
+            db_pre, stars = SB.prepare_new_song_db(cur, it.sid, "tmpl", it.tja_text)
+            last = SB.add_new_song(cur, it.sid, it.title, "tmpl", tja_text=it.tja_text,
+                                   audio_path=it.audio, precomputed_db=db_pre,
+                                   stars=stars)
+            d = tmp_path / ("%s_step%d" % (name, n))
+            d.mkdir()
+            (d / "LIST.BIN").write_bytes(bytes(last[0]))
+            (d / "DATA.000").write_bytes(bytes(last[1]))
+            cur.close()
+            cur = Archive(d / "LIST.BIN", d / "DATA.000")
+    finally:
+        cur.close()
+    return last
+
+
+def _open(tmp_path, name, pair):
+    d = tmp_path / name
+    d.mkdir()
+    (d / "LIST.BIN").write_bytes(bytes(pair[0]))
+    (d / "DATA.000").write_bytes(bytes(pair[1]))
+    return Archive(d / "LIST.BIN", d / "DATA.000")
+
+
+def test_batch_rebuilds_once(songs_dir, arch, monkeypatch):
+    from taiko2x6.archive import archive_builder
+    calls = []
+    real = archive_builder.build_archive
+    monkeypatch.setattr(archive_builder, "build_archive",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+    batch_add.BatchBuilder(arch, "tmpl").run_all(_items(songs_dir, arch))
+    assert len(calls) == 1
+
+
+def test_batch_skips_failed_song_only(songs_dir, arch, tmp_path):
+    items = _items(songs_dir, arch, with_broken=False)
+    bad = batch_add.BuildItem(sid="zbad", title="Bad", kind="tja",
+                              tja_text=items[0].tja_text, audio=str(tmp_path / "nope.wav"))
+    mixed = [items[0], bad, items[1], items[2]]
+    res = batch_add.BatchBuilder(arch, "tmpl").run_all(mixed)
+    assert [r.ok for r in res.items] == [True, False, True, True]
+    assert not arch.replacements
+    last = _sequential(items, tmp_path, "good_only")
+    assert bytes(res.new_archive[0]) == bytes(last[0])
+    assert bytes(res.new_archive[1]) == bytes(last[1])
+
+
+def test_batch_equivalent_when_db_bins_outgrow(songs_dir, arch, tmp_path, monkeypatch):
+    """DB bins that no longer fit their slot are appended: placement may differ
+    from the sequential path, decoded content must not."""
+    def compute(archive, new_id, k_src, stars):
+        cur = json.loads(SB._read_named(archive, "tuning.bin"))["ids"] + [new_id]
+        enc = lambda d: json.dumps(d).encode().ljust(900 + 3000 * len(cur), b" ")
+        return {"tuning.bin": enc({"ids": cur}), "musicinfo.bin": enc({"n": len(cur)}),
+                "streaminfo.bin": enc({"n": len(cur)})}
+    monkeypatch.setattr(SB, "compute_db_add", compute)
+    items = _items(songs_dir, arch, with_broken=False)
+    batch = batch_add.BatchBuilder(arch, "tmpl").run_all(items)
+    last = _sequential(items, tmp_path, "grow")
+    a, b = _open(tmp_path, "ob", batch.new_archive), _open(tmp_path, "os", last)
+    try:
+        assert _read_all(a) == _read_all(b)
+        assert [g["name"] for g in a.layout.groups] == [g["name"] for g in b.layout.groups]
+        assert len(batch.new_archive[1]) <= len(last[1])
+    finally:
+        a.close()
+        b.close()
 
 
 def test_dialog_batch_flow(songs_dir, arch, tmp_path, monkeypatch):

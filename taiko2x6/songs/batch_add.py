@@ -7,25 +7,23 @@ Two layers:
   * scan / build logic (no widgets): `scan_sources` finds songs (TJA + audio, or
     Gen3 song folders), `BatchBuilder` builds the ticked ones one after another
     by calling the SAME functions the single-song Song Builder calls
-    (`song_builder.prepare_new_song_db` + `song_builder.add_new_song`). Nothing
+    (`song_builder.prepare_new_song_db` + `song_builder.stage_new_song`). Nothing
     here re-implements the build.
   * `BatchAddDialog`: a table of what was found (title, editable new id,
     courses + stars, audio, problems), untick what you do not want, Build.
 
 Adding a song creates new groups, which needs a full rebuild of DATA.000 (see
-add_new_song). So song N+1 is built on top of the archive rebuilt after song N:
-each result is parked in a temp folder and re-opened. The caller's archive is
-never touched (its pending edits are folded into the first rebuild exactly as
-in the single-song path); the final (list_bytes, data_bytes) is handed back the
-same way the single-song dialog does and written through the same prompt.
+add_new_song). The batch stages every song (DB bins staged on the archive so
+song N+1 sees song N; new groups collected) and rebuilds ONCE at the end. The
+caller's pending edits are restored afterwards; the final (list_bytes,
+data_bytes) is handed back the same way the single-song dialog does and
+written through the same prompt.
 """
 from __future__ import annotations
 
 import logging
 import os
 import re
-import shutil
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -287,11 +285,20 @@ class BatchResult:
 
 
 class BatchBuilder:
-    """Builds items one after another on top of `archive`.
+    """Builds items on top of `archive` with ONE final DATA.000 rebuild.
+
+    Each song is staged (`song_builder.stage_new_song`): its three DB bins are
+    staged on the archive, so the next song's DB step sees the previous songs
+    (exactly what re-opening a rebuilt archive used to give), and its new
+    groups / extra select files are collected. `build_final` then calls
+    archive_builder.build_archive once with everything. Unchanged groups keep
+    their sectors, new groups are appended. The caller's archive is restored to
+    its starting pending edits by `close()`.
 
     Step API (the dialog interleaves a worker thread between prepare and
     finish): `prepare(item)` on the GUI thread returns a `task(log)` to run
-    anywhere; `finish(item, res)` folds the outcome in. `run_all` does the lot
+    anywhere; `finish(item, res)` folds the outcome in; `build_final(log)` does
+    the single rebuild (any thread); `close()` releases. `run_all` does the lot
     synchronously.
     """
 
@@ -300,18 +307,18 @@ class BatchBuilder:
         self.template_sid = template_sid
         self.log = log
         self.result = BatchResult()
-        self._cur = archive
-        self._tmp = None
-        self._step = 0
+        self._base = (dict(archive.replacements), set(archive.compact))
         self._snap = None
-        self._last = None                  # newest (list_bytes, data_bytes)
+        self._groups: list = []
+        self._extra: dict = {}
+        self._closed = False
 
     # -- steps -----------------------------------------------------------------
     def prepare(self, item: BuildItem):
-        """GUI thread: DB step for `item`; returns task(log) -> add_new_song result."""
-        cur = self._cur
-        # add_new_song stages the DB bins on the archive it is given; remember
-        # what was staged so the user's own archive is left exactly as it was.
+        """GUI thread: DB step for `item`; returns task(log) -> stage_new_song result."""
+        cur = self.original
+        # stage_new_song stages the DB bins on the archive; remember what was
+        # there so a failed song can be rolled back.
         self._snap = (dict(cur.replacements), set(cur.compact))
         if item.kind == "gen3":
             from taiko2x6.charts import gen3_song
@@ -321,7 +328,7 @@ class BatchBuilder:
 
             def task(log):
                 kw = gen3_song.to_builder_kwargs(item.gen3, log=log)
-                return SB.add_new_song(
+                return SB.stage_new_song(
                     cur, item.sid, title=item.title, template_sid=self.template_sid,
                     lyricist=item.lyricist, composer=item.composer,
                     copyright_=item.copyright_, charts=kw["charts"],
@@ -332,7 +339,7 @@ class BatchBuilder:
                 cur, item.sid, self.template_sid, item.tja_text)
 
             def task(log):
-                return SB.add_new_song(
+                return SB.stage_new_song(
                     cur, item.sid, title=item.title, template_sid=self.template_sid,
                     lyricist=item.lyricist, composer=item.composer,
                     copyright_=item.copyright_, tja_text=item.tja_text,
@@ -341,26 +348,26 @@ class BatchBuilder:
         return task
 
     def abandon(self):
-        """Undo what a failed step staged on the current archive."""
+        """Undo what a failed step staged on the archive."""
         if self._snap is not None:
             rep, comp = self._snap
-            self._cur.replacements = rep
-            self._cur.compact = comp
+            self.original.replacements = rep
+            self.original.compact = comp
             self._snap = None
 
     def finish(self, item: BuildItem, res) -> ItemResult:
-        """Fold one task outcome in. `res` is add_new_song's tuple or an error."""
+        """Fold one task outcome in. `res` is stage_new_song's tuple or an error."""
         if isinstance(res, tuple) and len(res) == 3 and res[0] is SB._BUILD_ERROR:
             self.abandon()
             return self._record(item, False, str(res[1]))
-        list_bytes, data_bytes, summ = res
-        self.abandon()
+        new_groups, extra_files, summ = res
         if summ["errors"]:
+            self.abandon()
             return self._record(item, False, "; ".join(summ["errors"]))
-        try:
-            self._advance(list_bytes, data_bytes)
-        except Exception as exc:
-            return self._record(item, False, "re-open failed: %s" % exc)
+        self._snap = None                  # keep this song's staged DB bins
+        self._groups.extend(new_groups)
+        for gname, files in extra_files.items():
+            self._extra.setdefault(gname, []).extend(files)
         msg = "; ".join(summ.get("warnings", []))
         return self._record(item, True, msg)
 
@@ -373,26 +380,20 @@ class BatchBuilder:
         self.result.items.append(r)
         return r
 
-    def _advance(self, list_bytes, data_bytes):
-        """Park the rebuilt archive on disk and make it the base for the next song."""
-        from taiko2x6.archive.archive_model import Archive
-        if self._tmp is None:
-            self._tmp = tempfile.mkdtemp(prefix="taiko_batch_")
-        self._step += 1
-        d = Path(self._tmp) / ("s%d" % self._step)
-        d.mkdir()
-        lp, dp = d / "LIST.BIN", d / "DATA.000"
-        lp.write_bytes(bytes(list_bytes))
-        dp.write_bytes(data_bytes)
-        nxt = Archive(lp, dp, getattr(self.original, "fmt", 2))
-        if self._cur is not self.original:
-            self._cur.close()
-        self._cur = nxt
-        self._last = (list_bytes, data_bytes)
-        # older step files are no longer needed
-        if self._step > 1:
-            shutil.rmtree(Path(self._tmp) / ("s%d" % (self._step - 1)),
-                          ignore_errors=True)
+    # -- the one rebuild -------------------------------------------------------
+    def build_final(self, log=None):
+        """Rebuild DATA.000 once with every built song; any thread. Sets and
+        returns result.new_archive ((list_bytes, data_bytes) or None)."""
+        if not self.result.built:
+            self.result.new_archive = None
+            return None
+        from taiko2x6.archive import archive_builder
+        log = log or self.log
+        log("rebuilding DATA.000 once (+%d groups, %d songs)..."
+            % (len(self._groups), self.result.built))
+        self.result.new_archive = archive_builder.build_archive(
+            self.original, self._groups, self._extra)
+        return self.result.new_archive
 
     # -- whole run -------------------------------------------------------------
     def run_all(self, items, progress=None) -> BatchResult:
@@ -411,22 +412,19 @@ class BatchBuilder:
                     self.fail(item, exc)
                     continue
                 self.finish(item, res)
+            self.build_final()
         finally:
             self.close()
         return self.result
 
     def close(self):
-        """Release temp files; sets result.new_archive to the newest build."""
-        self.result.new_archive = self._last
-        if self._cur is not self.original:
-            try:
-                self._cur.close()
-            except Exception:
-                pass
-            self._cur = self.original
-        if self._tmp:
-            shutil.rmtree(self._tmp, ignore_errors=True)
-            self._tmp = None
+        """Give the caller's archive back its starting pending edits."""
+        if self._closed:
+            return
+        self._closed = True
+        self.original.replacements = dict(self._base[0])
+        self.original.compact = set(self._base[1])
+        self._snap = None
 
 
 def items_from_candidates(cands, lyricist="", composer="", copyright_="") -> list:
@@ -762,7 +760,7 @@ try:
             item = self._queue.pop(0)
             n = self._total - len(self._queue)
             self.lbl_status.setText(
-                tr("Building {i}/{n}: {sid} — rebuilding DATA.000, please wait…")
+                tr("Building {i}/{n}: {sid}…")
                 .format(i=n, n=self._total, sid=item.sid))
             self._log(tr("[{i}/{n}] {sid} — {title}").format(
                 i=n, n=self._total, sid=item.sid, title=item.title))
@@ -796,6 +794,27 @@ try:
 
         def _done(self):
             b = self._builder
+            if not b.result.built:
+                self._finalize(None)
+                return
+            self.lbl_status.setText(
+                tr("Rebuilding DATA.000 once for all songs, please wait…"))
+            from taiko2x6.songs.song_builder import _BuildWorker
+            self._worker = _BuildWorker(lambda log: b.build_final(log))
+            self._worker.log_sig.connect(self._log)
+            self._worker.done_sig.connect(self._finalize)
+            self._worker.start()
+
+        def _finalize(self, res):
+            w = self._worker
+            if w is not None:
+                w.wait()
+                w.deleteLater()
+                self._worker = None
+            b = self._builder
+            if isinstance(res, tuple) and len(res) == 3 and res[0] is SB._BUILD_ERROR:
+                b.result.new_archive = None
+                self._log(tr("FAILED: {err}").format(err=res[1]))
             b.close()
             self.result = b.result
             self._builder = None
