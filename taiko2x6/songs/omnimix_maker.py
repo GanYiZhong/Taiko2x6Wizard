@@ -1541,23 +1541,136 @@ def fix_genre_jumps(m) -> None:
             sec6[slot] = first
 
 
+# Bump when resample_vag / resample_sinc / encode_vag output could change, so
+# stale cache entries are never reused.
+AUDIO_ENCODER_VERSION = 2
+AUDIO_CACHE_MAX_BYTES = 6 * 2**30
+_CACHE_MAGIC = b"T2X6AC1\0"
+
+
+def _audio_cache_path(cache, raw, rate, mono):
+    """Content-addressed entry path: (hash of input bytes, rate, mono, encoder)."""
+    import hashlib, os
+    return os.path.join(cache, "%s_%d%s_v%d.vag" % (
+        hashlib.sha1(raw).hexdigest(), rate or 0, "m" if mono else "",
+        AUDIO_ENCODER_VERSION))
+
+
+def _cache_read(path):
+    """Verified entry bytes, or None (missing or corrupt; corrupt is deleted)."""
+    import hashlib, os
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+    except OSError:
+        return None
+    n = len(_CACHE_MAGIC)
+    if (blob[:n] == _CACHE_MAGIC and len(blob) >= n + 20
+            and hashlib.sha1(blob[n + 20:]).digest() == blob[n:n + 20]):
+        try:
+            os.utime(path)                      # LRU stamp for the size cap
+        except OSError:
+            pass
+        return blob[n + 20:]
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return None
+
+
+def _cache_write(path, out):
+    """Atomic write: unique temp file in the same dir, then os.replace."""
+    import hashlib, os
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "wb") as f:
+            f.write(_CACHE_MAGIC + hashlib.sha1(out).digest())
+            f.write(out)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def prune_audio_cache(cache, max_bytes=AUDIO_CACHE_MAX_BYTES):
+    """Delete least-recently-used entries until the cache fits max_bytes."""
+    import os
+    ents = []
+    try:
+        for e in os.scandir(cache):
+            if e.is_file():
+                if e.name.endswith(".tmp"):
+                    continue
+                st = e.stat()
+                ents.append((st.st_mtime, st.st_size, e.path))
+    except OSError:
+        return 0
+    total = sum(e[1] for e in ents)
+    removed = 0
+    for _mt, size, path in sorted(ents):
+        if total <= max_bytes:
+            break
+        try:
+            os.remove(path)
+            total -= size
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _resample_job(args):
     raw, rate, cache, mono = args
-    import hashlib, os
     from taiko2x6.audio import vagtool
     path = None
     if cache:
-        path = os.path.join(cache, "%s_%d%s.vag" % (hashlib.sha1(raw).hexdigest(),
-                                                    rate or 0, "m" if mono else ""))
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return f.read()
+        path = _audio_cache_path(cache, raw, rate, mono)
+        hit = _cache_read(path)
+        if hit is not None:
+            return hit
     out = vagtool.resample_vag(raw, rate, mono=mono)
     if path:
-        with open(path + ".tmp", "wb") as f:
-            f.write(out)
-        os.replace(path + ".tmp", path)
+        _cache_write(path, out)
     return out
+
+
+def _resample_many(jobs, rate, cache, mono, workers=None, log=lambda s: None):
+    """Resample every raw stream in `jobs`; ordered like the input.
+
+    Cache hits are resolved here (hashing runs in threads: hashlib drops the
+    GIL), so only misses are pickled to worker processes - and biggest first,
+    for load balance. Workers write the cache entries themselves."""
+    from concurrent.futures import ThreadPoolExecutor
+    n = len(jobs)
+    outs = [None] * n
+    todo = list(range(n))
+    paths = [None] * n
+    if cache:
+        import os
+        os.makedirs(cache, exist_ok=True)
+        with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 2)) as ex:
+            def look(i):
+                p = _audio_cache_path(cache, jobs[i], rate, mono)
+                return p, _cache_read(p)
+            for i, (p, hit) in enumerate(ex.map(look, range(n))):
+                paths[i] = p
+                outs[i] = hit
+        todo = [i for i in range(n) if outs[i] is None]
+        log(f"  audio cache: {n - len(todo)} hit, {len(todo)} to encode")
+    todo.sort(key=lambda i: -len(jobs[i]))
+    # cache=None for the workers' key work: the parent already knows the path
+    res = _map_parallel(_resample_job,
+                        [(jobs[i], rate, None, mono) for i in todo], workers, log)
+    for i, r in zip(todo, res):
+        outs[i] = r
+        if cache:
+            _cache_write(paths[i], r)
+    if cache:
+        prune_audio_cache(cache)
+    return outs
 
 
 def _map_parallel(func, items, workers=None, log=lambda s: None):
@@ -1566,16 +1679,22 @@ def _map_parallel(func, items, workers=None, log=lambda s: None):
     import os
     from concurrent.futures import ProcessPoolExecutor
     n = len(items)
+    if n == 0:
+        return []
+    w = max(1, min(workers or os.cpu_count() or 2, n))
     try:
         out = []
-        with ProcessPoolExecutor(max_workers=workers or os.cpu_count() or 2) as ex:
+        if w == 1:
+            raise RuntimeError("single worker")
+        with ProcessPoolExecutor(max_workers=w) as ex:
             for i, r in enumerate(ex.map(func, items, chunksize=1), 1):
                 out.append(r)
                 if i % 25 == 0 or i == n:
                     log(f"  audio {i}/{n}")
         return out
     except Exception as exc:                     # pragma: no cover - fallback
-        log(f"  parallel audio failed ({exc}); continuing in one process")
+        if str(exc) != "single worker":
+            log(f"  parallel audio failed ({exc}); continuing in one process")
         return [func(x) for x in items]
 
 
@@ -1690,12 +1809,8 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
         log(f"re-encoding {len(jobs)} song streams "
             f"({'mono' if audio_mono else 'stereo'}, {audio_rate or 'original'} Hz) "
             f"({before / 2**30:.2f} GiB)…")
-        if audio_cache:
-            import os
-            os.makedirs(audio_cache, exist_ok=True)
-        outs = _map_parallel(_resample_job,
-                             [(j[2], audio_rate, audio_cache, audio_mono) for j in jobs],
-                             workers, log)
+        outs = _resample_many([j[2] for j in jobs], audio_rate, audio_cache,
+                              audio_mono, workers, log)
         for (kind, ref, raw), new in zip(jobs, outs):
             if new is raw or new == raw:
                 continue
