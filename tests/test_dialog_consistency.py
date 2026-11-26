@@ -114,6 +114,7 @@ def _factories():
     from taiko2x6.songs import (generators, omnimix_gui, song_builder,
                                 song_manager, song_replacer, sync_preview)
     song_builder.sync_preview = sync_preview
+    from taiko2x6.app import archive_compare
 
     def sound_bank():
         from taiko2x6.audio import hdbd
@@ -190,12 +191,15 @@ def _factories():
         "GuideDialog": lambda: guide.GuideDialog(),
         "AboutDialog": lambda: about.AboutDialog(),
         "UpdateDialog": lambda: about.UpdateDialog(autostart=False),
+        "ArchiveCompareDialog": archive_compare.ArchiveCompareDialog,
+        "ComparePreviewDialog": lambda: archive_compare.ComparePreviewDialog(
+            "g/f.bin", b"hello\n", bytes(range(40)), "A", "B"),
         "OpenWithDialog": lambda: drop_router.OpenWithDialog(
             "a.img", drop_router.candidates("hdd")),
     }
 
 
-NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SyncPreviewDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'AboutDialog', 'UpdateDialog','OpenWithDialog', 'BackupsUndoDialog', 'ImageReplaceDialog']
+NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SyncPreviewDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'AboutDialog', 'UpdateDialog', 'OpenWithDialog', 'BackupsUndoDialog', 'ImageReplaceDialog', 'ArchiveCompareDialog', 'ComparePreviewDialog']
 
 
 @pytest.fixture(autouse=True)
