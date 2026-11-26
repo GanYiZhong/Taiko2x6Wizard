@@ -90,16 +90,38 @@ def _gen3_stars(path, sid, course):
         return None
 
 
+def _branch_line(text, score):
+    """1-based line of the first #BRANCHSTART (of a score condition when
+    `score`), counted the way parse_tja splits lines; None if absent."""
+    for n, raw in enumerate(
+            text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
+        parts = raw.split("//", 1)[0].strip().split(None, 1)
+        if not parts or parts[0].upper() != "#BRANCHSTART":
+            continue
+        if not score or (len(parts) > 1
+                         and parts[1].strip().lower().startswith("s")):
+            return n
+    return None
+
+
+def _note(piece, text, course, w):
+    piece["warnings"].append("%s: %s" % (course, w))
+    piece["warn_items"].append(
+        (course, w, _branch_line(text, w.startswith("score branch"))))
+
+
 def load(path):
     """Read one input. Returns a song piece:
     {"id", "kind", "title", "wave", "charts": {course: sht}, "levels": {},
-     "audio": path or None, "warnings": []}."""
+     "audio": path or None, "warnings": [],
+     "warn_items": [(course, message, tja_line or None)]}."""
     p = pathlib.Path(path)
     kind = detect(p)
     if kind is None:
         raise ValueError("%s: not a TJA, sht, Gen3 fumen or nus3bank" % p.name)
     piece = {"id": None, "kind": kind, "title": "", "wave": "", "charts": {},
-             "levels": {}, "audio": None, "warnings": []}
+             "levels": {}, "audio": None, "warnings": [],
+             "warn_items": []}
     if kind == "tja":
         text = read_text(p)
         parsed = tja2sht.parse_tja(text)
@@ -111,8 +133,7 @@ def load(path):
             if course is None or not cdata.get("measures"):
                 continue
             piece["charts"][course] = tja2sht.convert_tja(
-                text, course, warn=lambda w, c=course: piece["warnings"].append(
-                    "%s: %s" % (c, w)))
+                text, course, warn=lambda w, c=course: _note(piece, text, c, w))
             lv = cdata["meta"].get("LEVEL")
             try:
                 if lv:
@@ -250,30 +271,70 @@ def write(song, out_dir, formats, players=("1p",), out_id=None, log=print,
     return written
 
 
+def _report_rows(pieces, out_id, outputs, song_errors, dups, failed):
+    """One row per input file: status, outputs of its song, courses, notes."""
+    rows = list(failed)
+    for pc in pieces:
+        sid = out_id or pc["id"]
+        outs = [str(x) for x in outputs.get(sid, [])]
+        msgs = [{"level": "warning", "text": "%s: %s" % (c, m), "line": ln}
+                for c, m, ln in pc["warn_items"]]
+        msgs += [{"level": "warning", "text": d, "line": None}
+                 for d in dups if d.startswith(sid + ":")]
+        errs = song_errors.get(sid, [])
+        if sid not in outputs:                  # cancelled before this song
+            msgs.append({"level": "warning", "line": None,
+                         "text": "not converted (cancelled)"})
+        msgs += [{"level": "error", "text": e, "line": None} for e in errs]
+        if errs and not outs:
+            status = "error"
+        elif errs or any(m["level"] == "warning" for m in msgs):
+            status = "warning"
+        else:
+            status = "ok"
+        rows.append({"input": pc["path"], "status": status, "outputs": outs,
+                     "courses": [c for c in COURSES if c in pc["charts"]],
+                     "messages": msgs})
+    return rows
+
+
 def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print,
-            cancel=None):
+            cancel=None, report=None):
     """Load, group and write. Returns (songs, written paths, errors).
     `out_id` makes every input one song with that id.
 
     `cancel()` is polled between input files and between songs (never inside
     a song's write), so a cancel leaves only whole files behind: the songs
-    already written stay, the rest are not started."""
-    pieces, errors = [], []
+    already written stay, the rest are not started.
+
+    `report`, when a list, receives one dict per input file: {"input",
+    "status" ok/warning/error, "outputs", "courses", "messages": [{"level",
+    "text", "line"}]} -- the data behind the results table."""
+    pieces, errors, failed = [], [], []
     for p in paths:
         if cancel is not None and cancel():
             log("cancelled")
+            if report is not None:
+                report.extend(failed)
             return [], [], errors
         try:
             pc = load(p)
         except Exception as e:
             errors.append("%s: %s" % (pathlib.Path(p).name, e))
             log("skip %s" % errors[-1])
+            failed.append({"input": str(p), "status": "error", "outputs": [],
+                           "courses": [], "messages": [
+                               {"level": "error", "text": str(e), "line": None}]})
             continue
+        pc["path"] = str(p)
         for w in pc["warnings"]:
             log("note %s: %s" % (pathlib.Path(p).name, w))
         pieces.append(pc)
-    songs = group(pieces, out_id=out_id, warn=lambda w: log("note " + w))
+    dups = []
+    songs = group(pieces, out_id=out_id,
+                  warn=lambda w: (dups.append(w), log("note " + w)))
     written = []
+    outputs, song_errors = {}, {}
     for s in songs:
         if cancel is not None and cancel():
             log("cancelled before %s" % s["id"])
@@ -281,11 +342,16 @@ def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print,
         n0, e0 = len(written), len(errors)
         write(s, out_dir, formats, players=players, log=log,
               written=written, errors=errors, protect=paths)
+        outputs[s["id"]] = written[n0:]
         if len(written) == n0 and len(errors) == e0:
             errors.append("%s: nothing to write as %s (%s)" % (
                 s["id"], "/".join(sorted(formats)),
                 "no charts" if not s["charts"] else "no nus3bank audio"))
             log("FAILED %s" % errors[-1])
+        song_errors[s["id"]] = errors[e0:]
+    if report is not None:
+        report.extend(_report_rows(pieces, out_id, outputs, song_errors,
+                                   dups, failed))
     return songs, written, errors
 
 
@@ -296,7 +362,8 @@ try:
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QPlainTextEdit, QFileDialog, QMessageBox, QListWidget, QCheckBox,
-        QGroupBox, QAbstractItemView)
+        QGroupBox, QAbstractItemView, QTableWidget, QTableWidgetItem,
+        QComboBox, QToolButton, QApplication, QStyle, QHeaderView)
     from PySide6.QtCore import Qt, QUrl
     from PySide6.QtGui import QDesktopServices
 except ImportError:                                            # headless / CLI
@@ -429,9 +496,63 @@ if QDialog is not None:
             row.addWidget(self.b_open)
             v.addLayout(row)
 
+            # results table (filled after a run) + the raw log under Details
+            self.lb_summary = QLabel()
+            v.addWidget(self.lb_summary)
+            row = QHBoxLayout()
+            self.lb_filter = QLabel(tr("Show:"))
+            row.addWidget(self.lb_filter)
+            self.cb_filter = QComboBox()
+            for key, label in (("all", tr("All")), ("ok", tr("OK")),
+                               ("warning", tr("Warnings")),
+                               ("error", tr("Errors"))):
+                self.cb_filter.addItem(label, key)
+            self.cb_filter.currentIndexChanged.connect(self._apply_filter)
+            row.addWidget(self.cb_filter)
+            self.b_copy = QPushButton(tr("Copy report"))
+            self.b_copy.setAutoDefault(False)
+            self.b_copy.setToolTip(tr(
+                "Copy the shown rows as text (for a bug report or notes)."))
+            self.b_copy.clicked.connect(self._copy_report)
+            row.addWidget(self.b_copy)
+            self.b_open2 = QPushButton(tr("Open output folder"))
+            self.b_open2.setAutoDefault(False)
+            self.b_open2.clicked.connect(self._open_out)
+            row.addWidget(self.b_open2)
+            row.addStretch(1)
+            v.addLayout(row)
+            self.tbl = QTableWidget(0, 5)
+            self.tbl.setHorizontalHeaderLabels([
+                tr("Status"), tr("Input"), tr("Output"), tr("Courses"),
+                tr("Message")])
+            self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.tbl.verticalHeader().setVisible(False)
+            hh = self.tbl.horizontalHeader()
+            hh.setStretchLastSection(True)
+            hh.setSectionResizeMode(1, QHeaderView.Interactive)
+            self.tbl.setColumnWidth(1, 180)
+            self.tbl.setColumnWidth(2, 200)
+            self.tbl.setToolTip(tr(
+                "Double-click a row to open the input file; click an output "
+                "to show it in the file manager."))
+            self.tbl.cellDoubleClicked.connect(self._row_open)
+            self.tbl.cellClicked.connect(self._cell_click)
+            v.addWidget(self.tbl, 1)
+            self.b_details = QToolButton()
+            self.b_details.setText(tr("Details"))
+            self.b_details.setCheckable(True)
+            self.b_details.setArrowType(Qt.RightArrow)
+            self.b_details.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            self.b_details.toggled.connect(self._toggle_details)
+            v.addWidget(self.b_details)
             self.log = QPlainTextEdit()
             self.log.setReadOnly(True)
+            self.log.setVisible(False)
             v.addWidget(self.log, 1)
+            self._rows = []
+            self._report = []
+            self._show_results_widgets(False)
 
             row = QHBoxLayout()
             row.addStretch(1)
@@ -502,6 +623,7 @@ if QDialog is not None:
             self.b_clear.setEnabled(n > 0)
             self.b_rm.setEnabled(n > 0)
             self.b_open.setEnabled(bool(self.ed_out.text().strip()))
+            self.b_open2.setEnabled(self.b_open.isEnabled())
 
         def keyPressEvent(self, e):
             if e.key() == Qt.Key_Delete and self.lst.hasFocus():
@@ -594,9 +716,14 @@ if QDialog is not None:
                             if c.isChecked()) or ("1p",)
             self._save_settings(out, formats, players)
             self.log.clear()
+            self.set_results([])
+            self.lb_summary.setText(tr("Converting…"))
+            self.lb_summary.setVisible(True)
+            self._report = []
             self._worker = _ConvertWorker(dict(
                 paths=paths, out_dir=out, formats=formats, players=players,
-                out_id=self.ed_id.text().strip() or None), self)
+                out_id=self.ed_id.text().strip() or None,
+                report=self._report), self)
             self._worker.line.connect(self._say)
             self._worker.done.connect(self._finished)
             self._worker.start()
@@ -615,9 +742,11 @@ if QDialog is not None:
             self._sync()
             if isinstance(res, Exception):
                 self._say("FAILED %r" % res)
+                self.lb_summary.setText(tr("Conversion failed."))
                 QMessageBox.critical(self, self.windowTitle(), str(res))
                 return
             songs, written, errors = res
+            self.set_results(self._report)
             if self._worker._stop:
                 self._say(tr("Cancelled. Files already written were kept."))
             self._say(tr("done: {s} songs, {f} files written, {e} problems")
@@ -635,6 +764,122 @@ if QDialog is not None:
 
         def _say(self, s):
             self.log.appendPlainText(str(s))
+
+        # -- results table --------------------------------------------------
+        _STATUS = {"ok": QStyle.SP_DialogApplyButton,
+                   "warning": QStyle.SP_MessageBoxWarning,
+                   "error": QStyle.SP_MessageBoxCritical}
+
+        def _status_text(self, st):
+            return {"ok": tr("OK"), "warning": tr("Warning"),
+                    "error": tr("Error")}[st]
+
+        def _show_results_widgets(self, on):
+            for w in (self.lb_filter, self.cb_filter, self.b_copy,
+                      self.b_open2, self.tbl):
+                w.setVisible(on)
+            self.lb_summary.setVisible(on)
+
+        def _toggle_details(self, on):
+            self.log.setVisible(on)
+            self.b_details.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+
+        @staticmethod
+        def _message_text(m):
+            if m.get("line"):
+                return tr("line {n}: {msg}").format(n=m["line"], msg=m["text"])
+            return m["text"]
+
+        def set_results(self, rows):
+            """Fill the table from convert(report=...) rows."""
+            self._rows = list(rows)
+            self.tbl.setRowCount(0)
+            self.cb_filter.blockSignals(True)
+            self.cb_filter.setCurrentIndex(0)
+            self.cb_filter.blockSignals(False)
+            style = self.style()
+            for r in self._rows:
+                i = self.tbl.rowCount()
+                self.tbl.insertRow(i)
+                it = QTableWidgetItem(style.standardIcon(self._STATUS[r["status"]]),
+                                      self._status_text(r["status"]))
+                it.setData(Qt.UserRole, r["status"])
+                self.tbl.setItem(i, 0, it)
+                name = pathlib.Path(r["input"])
+                it = QTableWidgetItem(name.name)
+                lines = [m["line"] for m in r["messages"] if m.get("line")]
+                tip = r["input"]
+                if lines:
+                    tip += "\n" + tr("TJA line {n}").format(n=lines[0])
+                it.setToolTip(tip)
+                it.setData(Qt.UserRole, r["input"])
+                self.tbl.setItem(i, 1, it)
+                outs = r["outputs"]
+                it = QTableWidgetItem(
+                    ", ".join(pathlib.Path(o).name for o in outs))
+                it.setToolTip("\n".join(outs))
+                it.setData(Qt.UserRole, outs)
+                self.tbl.setItem(i, 2, it)
+                self.tbl.setItem(i, 3, QTableWidgetItem(
+                    ", ".join(r["courses"])))
+                msgs = [self._message_text(m) for m in r["messages"]]
+                it = QTableWidgetItem("; ".join(msgs))
+                it.setToolTip("\n".join(msgs))
+                self.tbl.setItem(i, 4, it)
+            counts = {k: sum(1 for r in self._rows if r["status"] == k)
+                      for k in self._STATUS}
+            self.lb_summary.setText(tr(
+                "{ok} ok, {w} with warnings, {e} failed").format(
+                    ok=counts["ok"], w=counts["warning"], e=counts["error"]))
+            self._show_results_widgets(bool(self._rows))
+            self._apply_filter()
+
+        def _apply_filter(self, *_):
+            want = self.cb_filter.currentData()
+            for i in range(self.tbl.rowCount()):
+                st = self.tbl.item(i, 0).data(Qt.UserRole)
+                self.tbl.setRowHidden(i, want != "all" and st != want)
+
+        def report_text(self):
+            """The shown rows as plain text."""
+            out = []
+            for i, r in enumerate(self._rows):
+                if self.tbl.isRowHidden(i):
+                    continue
+                head = "[%s] %s" % (self._status_text(r["status"]), r["input"])
+                if r["outputs"]:
+                    head += " -> " + ", ".join(r["outputs"])
+                if r["courses"]:
+                    head += " (%s)" % ", ".join(r["courses"])
+                out.append(head)
+                out += ["    - " + self._message_text(m) for m in r["messages"]]
+            return "\n".join(out)
+
+        def _copy_report(self):
+            QApplication.clipboard().setText(self.report_text())
+
+        def _row_open(self, row, _col):
+            path = self.tbl.item(row, 1).data(Qt.UserRole)
+            if path and pathlib.Path(path).exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+        def _cell_click(self, row, col):
+            if col != 2:
+                return
+            outs = self.tbl.item(row, 2).data(Qt.UserRole) or []
+            if outs:
+                self._reveal(outs[0])
+
+        def _reveal(self, path):
+            """Show `path` selected in the file manager (parent folder
+            where selecting is not supported)."""
+            import subprocess
+            import sys
+            p = pathlib.Path(path)
+            if sys.platform == "win32" and p.exists():
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            elif p.parent.is_dir():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
 
 
 def main(argv=None):
