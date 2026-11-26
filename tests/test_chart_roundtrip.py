@@ -1,6 +1,7 @@
 """Seeded round trips on synthetic charts: sht -> Gen3 -> sht, sht -> TJA ->
 sht and TJA -> sht -> Gen3 -> sht, with numeric thresholds. What is lossy by
 design is listed in the sht_export module docstring."""
+import pathlib
 import random
 from collections import Counter
 
@@ -210,11 +211,16 @@ def test_branch_thresholds_survive_tja_with_reachable_points():
 
 def test_gen3_song_lookups_are_indexed(tmp_path):
     root = tmp_path
-    gen3_song._cache[(str(root), "musicinfo.bin")] = {"items": [
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import gen3_fixture
+    (root / "datatable").mkdir()
+    gen3_fixture.write_table(root / "datatable" / "musicinfo.bin", {"items": [
         {"id": "a", "uniqueId": 1}, {"id": "b", "uniqueId": 2},
-        {"id": "a", "uniqueId": 3}]}
-    gen3_song._cache[(str(root), "wordlist.bin")] = {"items": [
-        {"key": "song_a", "japaneseText": "A"}, {"key": "song_b"}]}
+        {"id": "a", "uniqueId": 3}]})
+    gen3_fixture.write_table(root / "datatable" / "wordlist.bin", {"items": [
+        {"key": "song_a", "japaneseText": "A"}, {"key": "song_b"}]})
+    gen3_song.clear_cache()
     assert gen3_song.music_info(root, "a")["uniqueId"] == 1   # first wins
     assert gen3_song.music_info(root, "zz") is None
     assert gen3_song.words(root, "song_a") == "A"

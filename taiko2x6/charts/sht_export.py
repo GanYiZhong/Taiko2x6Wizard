@@ -248,14 +248,7 @@ def encrypt_fumen(data, key=gen3_convert.FUMEN_KEY, iv=None):
     pad = 16 - len(raw) % 16
     raw += bytes([pad]) * pad
     iv = iv if iv is not None else os.urandom(16)
-    try:
-        from Crypto.Cipher import AES
-        enc = AES.new(key, AES.MODE_CBC, iv).encrypt(raw)
-    except ImportError:
-        from cryptography.hazmat.primitives.ciphers import (
-            Cipher, algorithms, modes)
-        e = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-        enc = e.update(raw) + e.finalize()
+    enc = gen3_convert._aes_impl()[1](key, iv, raw)
     return iv + enc
 
 

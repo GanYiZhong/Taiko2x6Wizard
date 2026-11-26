@@ -39,29 +39,72 @@ _BRANCH_KEY = {"e": "branchEasy", "n": "branchNormal", "h": "branchHard",
 _cache = {}
 
 
+def clear_cache():
+    """Forget every decrypted datatable (tests, or after the files changed)."""
+    _cache.clear()
+
+
 def _data_root(fumen_dir):
     """.../Data/x64 given .../Data/x64/fumen/<sid>."""
     return pathlib.Path(fumen_dir).resolve().parent.parent
 
 
+def _stamp(p):
+    try:
+        st = os.stat(p)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _load_table(root, name):
+    """Decrypted + parsed datatable, once per folder (re-read only if the file
+    changed on disk). A bad table is remembered too, so a 200-song batch does
+    not decrypt the same broken file 200 times. Raises ValueError, never a
+    bare decrypt/JSON/OS error, so callers can report it and carry on."""
+    p = pathlib.Path(root) / "datatable" / name
     key = (str(root), name)
-    if key not in _cache:
-        p = pathlib.Path(root) / "datatable" / name
-        raw = gen3_convert.decrypt_fumen(p, key=gen3_convert.DATATABLE_KEY)
-        _cache[key] = json.loads(raw.decode("utf-8"))
-    return _cache[key]
+    stamp = _stamp(p)
+    hit = _cache.get(key)
+    if hit is None or hit[0] != stamp:
+        try:
+            if stamp is None:
+                raise ValueError("%s: datatable not found" % p)
+            raw = gen3_convert.decrypt_fumen(
+                p, key=gen3_convert.DATATABLE_KEY)
+            try:
+                tab = json.loads(raw.decode("utf-8"))
+            except ValueError as e:      # includes UnicodeDecodeError
+                raise ValueError("%s: not valid datatable JSON: %s"
+                                 % (p, e)) from None
+            if not isinstance(tab, dict) or not isinstance(
+                    tab.get("items"), list):
+                raise ValueError("%s: datatable has no 'items' list" % p)
+            hit = (stamp, tab, None)
+        except ValueError as e:
+            hit = (stamp, None, e)
+        except OSError as e:
+            hit = (stamp, None, ValueError("%s: %s" % (p, e)))
+        _cache[key] = hit
+        # Indexes built from the old file are stale.
+        for k in [k for k in _cache if len(k) == 3 and k[:2] == key]:
+            del _cache[k]
+    if hit[2] is not None:
+        raise hit[2]
+    return hit[1]
 
 
 def _index(root, name, field):
     """{item[field]: item} for a datatable, built once (first entry wins, as
     the linear scans it replaces did). Looking songs up one by one used to
     scan thousands of items per song, which made loading a library quadratic."""
+    table = _load_table(root, name)         # also invalidates stale indexes
     key = (str(root), name, field)
     if key not in _cache:
         idx = {}
-        for it in _load_table(root, name)["items"]:
-            idx.setdefault(it.get(field), it)
+        for it in table["items"]:
+            if isinstance(it, dict):
+                idx.setdefault(it.get(field), it)
         _cache[key] = idx
     return _cache[key]
 
@@ -113,23 +156,34 @@ def load_song(fumen_dir, lang="japaneseText", branch=None, log=lambda s: None):
     # lists -- their wordlist titles are empty too. The charts are perfectly
     # convertible, so a missing entry is NOT fatal: it only means the title and
     # star ratings have to come from the caller, exactly as in TJA mode.
-    info = music_info(root, sid) or {}
+    table_warnings = []
+    try:
+        info = music_info(root, sid) or {}
+    except ValueError as e:
+        # Missing/corrupt musicinfo: the charts can still be converted.
+        info = {}
+        table_warnings.append("musicinfo unreadable: %s" % e)
     known = bool(info)
 
     out = {
         "sid": sid,
         "uniqueId": info.get("uniqueId"),
         "genreNo": info.get("genreNo"),
-        "title": words(root, "song_%s" % sid, lang),
-        "subtitle": words(root, "song_sub_%s" % sid, lang),
-        "detail": words(root, "song_detail_%s" % sid, lang),
+        "title": "", "subtitle": "", "detail": "",
         "stars": {}, "sht": {}, "onpu": {}, "branch": {},
         "audio_path": None, "warnings": [],
         # False when musicinfo has no entry: title/stars are then unreliable and
         # the caller must supply them.
         "known": known,
     }
-    if not known:
+    try:
+        out["title"] = words(root, "song_%s" % sid, lang)
+        out["subtitle"] = words(root, "song_sub_%s" % sid, lang)
+        out["detail"] = words(root, "song_detail_%s" % sid, lang)
+    except ValueError as e:
+        table_warnings.append("wordlist unreadable: %s" % e)
+    out["warnings"].extend(table_warnings)
+    if not known and not table_warnings:
         out["warnings"].append(
             "musicinfo has no entry for %r -- this song is not in the game's "
             "song list (leftover data). Its charts and audio still convert, but "
@@ -174,8 +228,31 @@ def load_song(fumen_dir, lang="japaneseText", branch=None, log=lambda s: None):
         log("  %-7s star %-2d  %d notes (official)" % (diff, star, onpu))
 
     if not out["sht"]:
-        raise ValueError("no convertible charts in %s" % fumen_dir)
+        detail = "; ".join(w for w in out["warnings"] if "chart failed" in w)
+        raise ValueError("no convertible charts in %s%s"
+                         % (fumen_dir, (" (" + detail + ")") if detail else ""))
     return out
+
+
+def load_folder(fumen_root, lang="japaneseText", branch=None,
+                log=lambda s: None):
+    """Load every song folder under `fumen_root` (.../fumen).
+
+    One bad song never aborts the batch. Returns (songs, errors): `songs` is
+    {sid: song dict} and `errors` is {sid: message}, both in sorted-sid order
+    so repeated runs give identical results. The datatables are decrypted once
+    for the whole folder.
+    """
+    root = pathlib.Path(fumen_root)
+    if not root.is_dir():
+        raise ValueError("not a folder: %s" % fumen_root)
+    songs, errors = {}, {}
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        try:
+            songs[d.name] = load_song(d, lang=lang, branch=branch, log=log)
+        except Exception as e:
+            errors[d.name] = str(e)
+    return songs, errors
 
 
 # --- handing a loaded song to the Gen2 builder -----------------------------
