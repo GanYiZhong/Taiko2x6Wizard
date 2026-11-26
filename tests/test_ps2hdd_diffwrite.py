@@ -8,6 +8,18 @@ from taiko2x6.ps2 import ps2hdd
 from taiko2x6.ps2.ps2hdd import SECTOR
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _frozen_pfs_clock(monkeypatch):
+    """Inode timestamps have 1 s resolution; two writes straddling a second
+    boundary differ in the timestamp sectors and made the 'identical image'
+    comparisons flaky. Freeze the clock so both runs stamp the same value."""
+    frozen = ps2hdd.pfs_datetime_now()
+    monkeypatch.setattr(ps2hdd, "pfs_datetime_now", lambda: frozen)
+
+
 def _sha(p):
     return hashlib.sha1(p.read_bytes()).hexdigest()
 

@@ -119,6 +119,25 @@ def _close_leftover_windows():
         w.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     app.processEvents()
+    _reset_app_theme(app)
+
+
+def _reset_app_theme(app):
+    """Undo ``theme.apply``: it sets an app-wide stylesheet, palette and colour
+    scheme that otherwise leak into every later test (card min-widths, fonts
+    -> order-dependent layout assertions). Windows are already gone here, so
+    the repolish is cheap and safe."""
+    from PySide6.QtCore import Qt
+    if app.styleSheet():
+        app.setStyleSheet("")
+    std = app.style().standardPalette()
+    if app.palette() != std:
+        app.setPalette(std)
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
+    except AttributeError:
+        pass
+    app.processEvents()
 
 
 @pytest.fixture(autouse=True)
@@ -150,3 +169,25 @@ def _isolated_qsettings(tmp_path, monkeypatch):
         if name.startswith("taiko2x6") and getattr(mod, "QSettings", None) is _Real:
             monkeypatch.setattr(mod, "QSettings", _fake)
     yield
+
+
+def pytest_collection_modifyitems(config, items):
+    """Opt-in order shuffling to flush out order-dependent tests.
+
+    ``TAIKO_TEST_SHUFFLE=<seed>`` shuffles module order and the tests within
+    each module (same seed -> same order). Off by default."""
+    seed = os.environ.get("TAIKO_TEST_SHUFFLE")
+    if not seed:
+        return
+    import random
+    rng = random.Random(seed)
+    by_mod: dict = {}
+    for it in items:
+        by_mod.setdefault(it.module, []).append(it)
+    mods = list(by_mod.values())
+    rng.shuffle(mods)
+    items[:] = []
+    for grp in mods:
+        rng.shuffle(grp)
+        items.extend(grp)
+    print("\n[TAIKO_TEST_SHUFFLE seed=%s]" % seed)
