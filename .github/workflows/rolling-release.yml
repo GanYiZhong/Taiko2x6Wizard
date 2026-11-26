@@ -59,6 +59,12 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Stamp build info
+        shell: bash
+        run: |
+          printf 'VERSION = "%s"\nCOMMIT = "%s"\nDATE = "%s"\n' \
+            "$LABEL" "$GITHUB_SHA" "$(date -u +%Y-%m-%d)" > taiko2x6/_build_info.py
+
       - name: Build
         run: pyinstaller --noconfirm --clean Taiko2x6Wizard.spec
 

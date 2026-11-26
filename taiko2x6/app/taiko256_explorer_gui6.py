@@ -1189,6 +1189,13 @@ class MainWindow(QMainWindow):
         self._icon_names[self.act_open_log] = "log"
         self.act_open_log.triggered.connect(jobs.open_log_folder)
         help_menu.addAction(self.act_open_log)
+        help_menu.addSeparator()
+        self.act_update = QAction(tr("Check for updates..."), self)
+        self.act_update.triggered.connect(self.open_update_check)
+        help_menu.addAction(self.act_update)
+        self.act_about = QAction(tr("About"), self)
+        self.act_about.triggered.connect(self.open_about)
+        help_menu.addAction(self.act_about)
         self._refresh_icons()
         self._update_actions()
 
@@ -1216,6 +1223,15 @@ class MainWindow(QMainWindow):
         g.show()
         g.raise_()
         g.activateWindow()
+
+    def open_about(self):
+        from taiko2x6.app import about
+        about.AboutDialog(self).exec()
+
+    def open_update_check(self):
+        """Help > Check for updates: one explicit request, nothing installed."""
+        from taiko2x6.app import about
+        about.UpdateDialog(self).exec()
 
     def _set_theme(self, mode: str):
         theme.save_mode(mode)
