@@ -250,236 +250,289 @@ def verify(sources, out_path, log=print):
 # --------------------------------------------------------------------------- #
 #  GUI
 # --------------------------------------------------------------------------- #
+def merge_problem(sources, out) -> str:
+    """Why the merge cannot start yet ('' when it can). Reads only the source
+    partition tables; writes nothing."""
+    from taiko2x6.app.i18n import tr
+    if not sources:
+        return tr("Add at least one game image.")
+    for s in sources:
+        if not os.path.isfile(s):
+            return tr("{path} does not exist any more.").format(path=s)
+    try:
+        _, total = plan(sources)
+    except Exception as exc:
+        # Not just MergeError: a source can vanish or be renamed between being
+        # added and being planned.
+        return tr("Cannot merge: {err}").format(err=str(exc)[:200])
+    if not out:
+        return tr("Choose where to save the merged image.")
+    outp = os.path.abspath(out)
+    if os.path.isdir(outp):
+        return tr("The output path is a folder; give it a file name.")
+    if os.path.exists(outp):
+        return tr("{path} already exists. Choose a new file name.").format(path=out)
+    if any(os.path.normcase(os.path.abspath(s)) == os.path.normcase(outp)
+           for s in sources):
+        return tr("The output must not be one of the source images.")
+    if not os.path.isdir(os.path.dirname(outp)):
+        return tr("The output folder does not exist.")
+    free = _free_space(outp)
+    need = total * SECTOR
+    if free is not None and free < need:
+        from taiko2x6.ps2.hdd_browser import human_size
+        return tr("Not enough free space: the merged image needs {need} but "
+                  "only {free} is free on that drive.").format(
+            need=human_size(need), free=human_size(free))
+    return ""
+
+
 try:
-    from PySide6.QtCore import Qt, QThread, Signal, QObject
+    from PySide6.QtCore import Qt, QThread, Signal
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                                   QLabel, QPlainTextEdit, QFileDialog, QCheckBox,
+                                   QLabel, QCheckBox, QFormLayout, QGroupBox,
                                    QTreeWidget, QTreeWidgetItem, QMessageBox,
-                                   QProgressBar, QLineEdit)
+                                   QProgressBar, QAbstractItemView)
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.app.errors import friendly_error
+    from taiko2x6.ps2 import dialog_kit as kit
+    from taiko2x6.ps2.hdd_browser import human_size
 except ImportError:  # CLI-only environment
     QDialog = None
 
 
-class _MergeWorker(QObject):
-    progress = Signal(int, str)
-    line = Signal(str)
-    done = Signal(bool)
+if QDialog is not None:
+    class _MergeWorker(QThread):
+        progress = Signal(int, str)
+        line = Signal(str)
+        done = Signal(bool)
 
-    def __init__(self, sources, out, do_verify):
-        super().__init__()
-        self.sources = sources
-        self.out = out
-        self.do_verify = do_verify
+        def __init__(self, sources, out, do_verify):
+            super().__init__()
+            self.sources = sources
+            self.out = out
+            self.do_verify = do_verify
 
-    def run(self):
-        try:
-            def prog(done, grand):
-                pct = int(done * 100 / grand) if grand else 100
-                self.progress.emit(pct, "%.2f / %.2f GB"
-                                   % (done * SECTOR / 1e9, grand * SECTOR / 1e9))
-            merge(self.sources, self.out, log=self.line.emit, progress=prog)
-            if self.do_verify:
-                self.line.emit("")
-                self.line.emit("verifying every file re-reads identically ...")
-                if not verify(self.sources, self.out, log=self.line.emit):
-                    self.line.emit("VERIFY FAILED -- do not use this image")
-                    self.done.emit(False)
-                    return
-                self.line.emit("VERIFY OK")
-            self.done.emit(True)
-        except Exception as exc:
-            self.line.emit("FAILED: %s" % exc)
-            self.done.emit(False)
-
-
-class ApaMergeDialog(QDialog):
-    """Combine several game HDD images into one multi-game APA disk."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Merge PS2 HDD images (multi-game disk)")
-        self.resize(860, 620)
-        self._sources = []
-        self._thread = None
-        self._worker = None
-
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(
-            "Each game's memory card looks up its own partition by name, so one "
-            "disk can hold them all and the card alone picks the game."))
-
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Source", "Partition", "Size", "Kind"])
-        self.tree.setRootIsDecorated(False)
-        lay.addWidget(self.tree, 1)
-
-        row = QHBoxLayout()
-        b_add = QPushButton("Add images…")
-        b_add.clicked.connect(self._add)
-        b_del = QPushButton("Remove selected")
-        b_del.clicked.connect(self._remove)
-        row.addWidget(b_add)
-        row.addWidget(b_del)
-        row.addStretch(1)
-        self.lbl_plan = QLabel("")
-        row.addWidget(self.lbl_plan)
-        lay.addLayout(row)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Output:"))
-        self.ed_out = QLineEdit()
-        b_out = QPushButton("Browse…")
-        b_out.clicked.connect(self._browse_out)
-        row2.addWidget(self.ed_out, 1)
-        row2.addWidget(b_out)
-        lay.addLayout(row2)
-
-        self.ck_verify = QCheckBox(
-            "Verify after merging (re-reads every file and compares hashes -- "
-            "slow, but it is what proves the moved partitions survived)")
-        self.ck_verify.setChecked(True)
-        lay.addWidget(self.ck_verify)
-
-        self.bar = QProgressBar()
-        self.bar.setVisible(False)
-        lay.addWidget(self.bar)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        lay.addWidget(self.log, 1)
-
-        row3 = QHBoxLayout()
-        self.btn_merge = QPushButton("Merge")
-        self.btn_merge.clicked.connect(self._merge)
-        self.btn_close = QPushButton("Close")
-        self.btn_close.clicked.connect(self.reject)
-        row3.addWidget(self.btn_merge)
-        row3.addStretch(1)
-        row3.addWidget(self.btn_close)
-        lay.addLayout(row3)
-        self._replan()
-
-    def _say(self, s):
-        self.log.appendPlainText(s)
-
-    def _add(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Add PS2 HDD images", "", "HDD image (*.img);;All files (*)")
-        for p in paths:
-            if p not in self._sources:
-                self._sources.append(p)
-        self._replan()
-
-    def _remove(self):
-        for it in self.tree.selectedItems():
-            src = it.data(0, Qt.UserRole)
-            if src in self._sources:
-                self._sources.remove(src)
-        self._replan()
-
-    def _browse_out(self):
-        p, _ = QFileDialog.getSaveFileName(
-            self, "Merged image", "", "HDD image (*.img)")
-        if p:
-            self.ed_out.setText(p)
-
-    def _replan(self):
-        self.tree.clear()
-        for s in self._sources:
+        def run(self):
             try:
-                lay = read_layout(s)
+                def prog(done, grand):
+                    pct = int(done * 100 / grand) if grand else 100
+                    self.progress.emit(pct, "%s / %s" % (
+                        human_size(done * SECTOR), human_size(grand * SECTOR)))
+                merge(self.sources, self.out, log=self.line.emit, progress=prog)
+                if self.do_verify:
+                    self.line.emit("")
+                    self.line.emit(tr("Verifying that every file re-reads "
+                                      "identically …"))
+                    if not verify(self.sources, self.out, log=self.line.emit):
+                        self.line.emit(tr("VERIFY FAILED -- do not use this image"))
+                        self.done.emit(False)
+                        return
+                    self.line.emit(tr("VERIFY OK"))
+                self.done.emit(True)
             except Exception as exc:
-                it = QTreeWidgetItem(self.tree,
-                                     [os.path.basename(s), "", "", str(exc)[:60]])
-                it.setData(0, Qt.UserRole, s)
-                continue
-            for p, sysp in lay:
-                if sysp:
-                    continue        # the system area is shared; not worth listing
-                it = QTreeWidgetItem(self.tree, [os.path.basename(s), p.id,
-                                                 "%.2f GB" % (p.length * SECTOR / 1e9),
-                                                 "game"])
-                it.setData(0, Qt.UserRole, s)
-        for i in range(4):
-            self.tree.resizeColumnToContents(i)
-        if not self._sources:
+                self.line.emit(tr("FAILED: {err}").format(err=friendly_error(exc)))
+                self.done.emit(False)
+
+    class ApaMergeDialog(QDialog):
+        """Combine several game HDD images into one multi-game APA disk."""
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            from taiko2x6.app import appconfig
+            self.setWindowTitle(tr("Merge PS2 HDD images (multi-game disk)"))
+            self.resize(860, 660)
+            self._sources = []
+            self._worker = None
+
+            lay = QVBoxLayout(self)
+            info = QLabel(tr(
+                "Each game's memory card looks up its own partition by name, "
+                "so one disk can hold them all and the card alone picks the "
+                "game. The source images are only read."))
+            info.setWordWrap(True)
+            lay.addWidget(info)
+
+            box_src = QGroupBox(tr("Game images"))
+            v = QVBoxLayout(box_src)
+            self.tree = QTreeWidget()
+            self.tree.setHeaderLabels([tr("Source"), tr("Partition"),
+                                       tr("Size"), tr("Kind")])
+            self.tree.setRootIsDecorated(False)
+            self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+            v.addWidget(self.tree, 1)
+            row = QHBoxLayout()
+            self.b_add = QPushButton(tr("Add images…"))
+            self.b_add.setAutoDefault(False)
+            self.b_add.clicked.connect(self._add)
+            self.b_del = QPushButton(tr("Remove selected"))
+            self.b_del.setAutoDefault(False)
+            self.b_del.clicked.connect(self._remove)
+            row.addWidget(self.b_add)
+            row.addWidget(self.b_del)
+            row.addStretch(1)
+            self.lbl_plan = QLabel("")
+            row.addWidget(self.lbl_plan)
+            v.addLayout(row)
+            lay.addWidget(box_src, 1)
+
+            box_out = QGroupBox(tr("Output"))
+            f = QFormLayout(box_out)
+            self.row_out = kit.PathRow("apa_out", tr("Merged image"),
+                                       tr("HDD image (*.img)"), mode="save")
+            f.addRow(tr("Output:"), self.row_out)
+            self.ck_verify = QCheckBox(tr(
+                "Verify after merging (re-reads every file and compares "
+                "hashes -- slow, but it is what proves the moved partitions "
+                "survived)"))
+            self.ck_verify.setChecked(appconfig.get("apa_merge", "verify", "1") != "0")
+            f.addRow("", self.ck_verify)
+            lay.addWidget(box_out)
+
+            self.lbl_problem = kit.make_problem_label()
+            lay.addWidget(self.lbl_problem)
+            self.bar = QProgressBar()
+            self.bar.setVisible(False)
+            lay.addWidget(self.bar)
+            self.log = kit.make_log()
+            lay.addWidget(self.log, 1)
+
+            row3 = QHBoxLayout()
+            row3.addStretch(1)
+            self.btn_merge = QPushButton(tr("Merge"))
+            self.btn_merge.setDefault(True)
+            self.btn_merge.clicked.connect(self._merge)
+            self.btn_close = QPushButton(tr("Close"))
+            self.btn_close.setAutoDefault(False)
+            self.btn_close.clicked.connect(self.reject)
+            row3.addWidget(self.btn_merge)
+            row3.addWidget(self.btn_close)
+            lay.addLayout(row3)
+            self.row_out.changed.connect(self._validate)
+            self._replan()
+
+        def _say(self, s):
+            kit.log_line(self.log, s)
+
+        def _busy(self):
+            return self._worker is not None and self._worker.isRunning()
+
+        def _add(self):
+            from taiko2x6.app import appconfig
+            paths = appconfig.pick_open_many(
+                self, "hddimg", tr("Add PS2 HDD images"),
+                tr("HDD image (*.img);;All files (*)"))
+            self.add_sources(paths)
+
+        def add_sources(self, paths):
+            for p in paths:
+                p = os.path.normpath(p)
+                if p not in self._sources:
+                    self._sources.append(p)
+            self._replan()
+
+        def _remove(self):
+            for it in self.tree.selectedItems():
+                src = it.data(0, Qt.UserRole)
+                if src in self._sources:
+                    self._sources.remove(src)
+            self._replan()
+
+        def _replan(self):
+            self.tree.clear()
+            for s in self._sources:
+                try:
+                    lay = read_layout(s)
+                except Exception as exc:
+                    it = QTreeWidgetItem(self.tree, [os.path.basename(s), "", "",
+                                                     friendly_error(exc)[:80]])
+                    it.setData(0, Qt.UserRole, s)
+                    continue
+                for p, sysp in lay:
+                    if sysp:
+                        continue    # the system area is shared; not worth listing
+                    it = QTreeWidgetItem(self.tree, [
+                        os.path.basename(s), p.id,
+                        human_size(p.length * SECTOR), tr("game")])
+                    it.setData(0, Qt.UserRole, s)
+            for i in range(4):
+                self.tree.resizeColumnToContents(i)
+            self._validate()
+
+        def _validate(self, *_):
+            busy = self._busy()
+            prob = merge_problem(self._sources, self.row_out.text())
+            kit.set_problem(self.lbl_problem, prob)
             self.lbl_plan.setText("")
-            self.btn_merge.setEnabled(False)
-            return
-        try:
-            entries, total = plan(self._sources)
-        except Exception as exc:
-            # Not just MergeError: a source can vanish or be renamed between
-            # being added and being planned, and an unreadable one must grey the
-            # button out rather than take the dialog down.
-            self.lbl_plan.setText("cannot merge: %s" % str(exc)[:70])
-            self.btn_merge.setEnabled(False)
-            return
-        ngames = sum(1 for e in entries if not e[5])
-        self.lbl_plan.setText("merged: %d game partitions, %.2f GB"
-                              % (ngames, total * SECTOR / 1e9))
-        self.btn_merge.setEnabled(True)
+            if self._sources:
+                try:
+                    entries, total = plan(self._sources)
+                    ngames = sum(1 for e in entries if not e[5])
+                    self.lbl_plan.setText(tr(
+                        "Merged: {n} game partitions, {size}").format(
+                        n=ngames, size=human_size(total * SECTOR)))
+                except Exception:
+                    pass
+            self.btn_merge.setEnabled(not prob and not busy)
+            self.btn_merge.setToolTip(prob)
+            self.b_add.setEnabled(not busy)
+            self.b_del.setEnabled(not busy and bool(self._sources))
+            self.row_out.setEnabled(not busy)
 
-    def _merge(self):
-        out = self.ed_out.text().strip()
-        if not out:
-            QMessageBox.warning(self, "Merge", "Choose an output path.")
-            return
-        if os.path.exists(out):
-            QMessageBox.warning(self, "Merge",
-                                "%s already exists. Choose a new file." % out)
-            return
-        try:
+        def _merge(self):
+            out = self.row_out.text()
+            if merge_problem(self._sources, out):
+                return
             _, total = plan(self._sources)
-        except MergeError as exc:
-            QMessageBox.critical(self, "Merge", str(exc))
-            return
-        need = total * SECTOR
-        free = _free_space(out)
-        if free is not None and free < need:
-            QMessageBox.warning(
-                self, "Not enough space",
-                "The merged image needs %.2f GB but only %.2f GB is free on that "
-                "drive." % (need / 1e9, free / 1e9))
-            return
-        self.btn_merge.setEnabled(False)
-        self.bar.setVisible(True)
-        self.bar.setValue(0)
-        # Hold refs: a worker whose QThread outlives the local scope gets
-        # destroyed mid-run ("QThread: Destroyed while thread is running").
-        self._thread = QThread(self)
-        self._worker = _MergeWorker(list(self._sources), out,
-                                    self.ck_verify.isChecked())
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.line.connect(self._say)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.done.connect(self._on_done)
-        self._worker.done.connect(self._thread.quit)
-        self._thread.finished.connect(self._worker.deleteLater)
-        self._thread.start()
+            if QMessageBox.question(
+                    self, tr("Merge"),
+                    tr("Write a new {size} image to {path}?\n\n"
+                       "The source images are not changed.").format(
+                        size=human_size(total * SECTOR), path=out)
+                    ) != QMessageBox.Yes:
+                return
+            from taiko2x6.app import appconfig
+            appconfig.set_value("apa_merge", "verify",
+                                "1" if self.ck_verify.isChecked() else "0")
+            self.bar.setVisible(True)
+            self.bar.setValue(0)
+            self._worker = _MergeWorker(list(self._sources), out,
+                                        self.ck_verify.isChecked())
+            self._worker.line.connect(self._say)
+            self._worker.progress.connect(self._on_progress)
+            self._worker.done.connect(self._on_done)
+            self._worker.start()
+            self._validate()
 
-    def _on_progress(self, pct, text):
-        self.bar.setValue(pct)
-        self.bar.setFormat("%s  (%%p%%)" % text)
+        def _on_progress(self, pct, text):
+            self.bar.setValue(pct)
+            self.bar.setFormat("%s  (%%p%%)" % text)
 
-    def _on_done(self, ok):
-        self.bar.setVisible(False)
-        self.btn_merge.setEnabled(True)
-        if ok:
-            self._say("")
-            self._say("Done. Point the game's .acgame `mediasrc` at this image "
-                      "(or write it to the cabinet's HDD) and boot with each "
-                      "game's own memory card.")
-        else:
-            QMessageBox.critical(self, "Merge", "Merge failed -- see the log.")
+        def _on_done(self, ok):
+            self._worker.wait()
+            self.bar.setVisible(False)
+            self._validate()
+            if ok:
+                self._say("")
+                self._say(tr("Done. Point the game's .acgame `mediasrc` at "
+                             "this image (or write it to the cabinet's HDD) "
+                             "and boot with each game's own memory card."))
+            else:
+                QMessageBox.critical(self, tr("Merge"),
+                                     tr("Merge failed -- see the log."))
 
-    def reject(self):
-        if self._thread and self._thread.isRunning():
-            QMessageBox.information(
-                self, "Merge", "A merge is still running; let it finish.")
-            return
-        super().reject()
+        def reject(self):
+            if self._busy():
+                QMessageBox.information(
+                    self, tr("Merge"), tr("A merge is still running; let it finish."))
+                return
+            super().reject()
+
+        def closeEvent(self, ev):
+            if self._busy():
+                ev.ignore()
+                return
+            super().closeEvent(ev)
 
 
 def _free_space(path):

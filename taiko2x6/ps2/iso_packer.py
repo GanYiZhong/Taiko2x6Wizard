@@ -20,6 +20,7 @@ The UDF descriptors are left as-is; the PS2 reads ISO 9660, not UDF.
 from __future__ import annotations
 
 import logging
+import os
 import struct
 import time
 from pathlib import Path
@@ -422,12 +423,51 @@ def repair_udf(iso_path) -> dict:
 # --------------------------------------------------------------------------- #
 #  Qt dialog
 # --------------------------------------------------------------------------- #
+def pack_problem(orig, data, lst, out) -> str:
+    """Why the inputs cannot be packed yet ('' when they can). Pure checks, no
+    writes; shown inline by the dialog."""
+    import shutil
+    from taiko2x6.app.i18n import tr
+    for val, what in ((orig, tr("original ISO")), (data, "DATA.000"),
+                      (lst, "LIST.BIN")):
+        if not val:
+            return tr("Choose the {what}.").format(what=what)
+        if not os.path.isfile(val):
+            return tr("The {what} file does not exist.").format(what=what)
+    if not out:
+        return tr("Choose where to save the output ISO.")
+    outp = os.path.abspath(out)
+    if os.path.isdir(outp):
+        return tr("The output path is a folder; give it a file name.")
+    for val in (orig, data, lst):
+        if os.path.normcase(os.path.abspath(val)) == os.path.normcase(outp):
+            return tr("The output must be a new file, not one of the inputs.")
+    if not os.path.isdir(os.path.dirname(outp)):
+        return tr("The output folder does not exist.")
+    try:
+        need = os.path.getsize(data) + os.path.getsize(lst) + (1 << 20)
+        free = shutil.disk_usage(os.path.dirname(outp)).free
+        if os.path.exists(outp):
+            free += os.path.getsize(outp)
+        if free < need:
+            from taiko2x6.ps2.hdd_browser import human_size
+            return tr("Not enough free space: about {need} needed, {free} free.").format(
+                need=human_size(need), free=human_size(free))
+    except OSError:
+        pass
+    return ""
+
+
 try:
     from PySide6.QtCore import Qt, QThread, Signal
     from PySide6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QPushButton,
-        QFileDialog, QLabel, QProgressBar, QMessageBox, QWidget,
+        QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton,
+        QLabel, QProgressBar, QMessageBox, QGroupBox,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.app.errors import friendly_error
+    from taiko2x6.ps2 import dialog_kit as kit
+    from taiko2x6.ps2.hdd_browser import human_size
 
     class _PackWorker(QThread):
         prog = Signal(int, int, str)
@@ -448,82 +488,143 @@ try:
     class PackIsoDialog(QDialog):
         def __init__(self, data_path, list_path, default_iso="", parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Pack to ISO")
-            self.resize(640, 240)
-            lay = QVBoxLayout(self)
-            form = QFormLayout()
-            self.ed_orig = QLineEdit(default_iso)
-            b_o = QPushButton("…"); b_o.clicked.connect(lambda: self._pick(self.ed_orig, "ISO (*.iso)"))
-            self.ed_data = QLineEdit(str(data_path))
-            self.ed_list = QLineEdit(str(list_path))
-            self.ed_out = QLineEdit(str(Path(default_iso).with_name(
-                Path(default_iso).stem + ".patched.iso")) if default_iso else "")
-            b_out = QPushButton("…"); b_out.clicked.connect(lambda: self._save(self.ed_out))
-            form.addRow("original ISO:", self._row(self.ed_orig, b_o))
-            form.addRow("DATA.000:", self.ed_data)
-            form.addRow("LIST.BIN:", self.ed_list)
-            form.addRow("output ISO:", self._row(self.ed_out, b_out))
-            lay.addLayout(form)
-            self.bar = QProgressBar()
-            lay.addWidget(self.bar)
-            self.lbl = QLabel(""); self.lbl.setStyleSheet("color:palette(mid);")
-            lay.addWidget(self.lbl)
-            btns = QHBoxLayout(); btns.addStretch(1)
-            self.b_go = QPushButton("Build ISO"); self.b_go.clicked.connect(self._go)
-            b_c = QPushButton("Close"); b_c.clicked.connect(self.reject)
-            btns.addWidget(self.b_go); btns.addWidget(b_c)
-            lay.addLayout(btns)
-
-        def _row(self, e, b):
-            w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
-            h.addWidget(e, 1); h.addWidget(b)
-            return w
-
-        def _pick(self, e, filt):
-            from taiko2x6.app import appconfig                       # last-used-path memory
-            p = appconfig.pick_open(self, appconfig.key_for_filter(filt),
-                                    "Choose", filt)
-            if p:
-                e.setText(p)
-
-        def _save(self, e):
             from taiko2x6.app import appconfig
-            p = appconfig.pick_save(self, "iso_out", "Output ISO", "",
-                                    "ISO (*.iso)")
-            if p:
-                e.setText(p)
+            self.setWindowTitle(tr("Pack to ISO"))
+            self.resize(680, 460)
+            self._worker = None
+            lay = QVBoxLayout(self)
+            info = QLabel(tr(
+                "Writes the edited DATA.000 and LIST.BIN back into a copy of "
+                "the game ISO. The original ISO is only read, never changed."))
+            info.setWordWrap(True)
+            lay.addWidget(info)
+
+            box_in = QGroupBox(tr("Inputs"))
+            f_in = QFormLayout(box_in)
+            if not default_iso:
+                default_iso = appconfig.last_existing("iso_orig")
+            self.row_orig = kit.PathRow("iso_orig", tr("Original ISO"),
+                                        tr("ISO (*.iso);;All files (*)"),
+                                        text=default_iso)
+            self.row_data = kit.PathRow("iso_data", "DATA.000",
+                                        text=str(data_path))
+            self.row_list = kit.PathRow("iso_list", "LIST.BIN",
+                                        text=str(list_path))
+            f_in.addRow(tr("Original ISO:"), self.row_orig)
+            f_in.addRow("DATA.000:", self.row_data)
+            f_in.addRow("LIST.BIN:", self.row_list)
+            lay.addWidget(box_in)
+
+            box_out = QGroupBox(tr("Output"))
+            f_out = QFormLayout(box_out)
+            out = ""
+            if default_iso:
+                out = str(Path(default_iso).with_name(
+                    Path(default_iso).stem + ".patched.iso"))
+            self.row_out = kit.PathRow("iso_out", tr("Output ISO"),
+                                       tr("ISO (*.iso)"), mode="save", text=out)
+            f_out.addRow(tr("Output ISO:"), self.row_out)
+            self.lbl_size = QLabel("")
+            f_out.addRow("", self.lbl_size)
+            lay.addWidget(box_out)
+
+            self.lbl_problem = kit.make_problem_label()
+            lay.addWidget(self.lbl_problem)
+            self.bar = QProgressBar()
+            self.bar.setVisible(False)
+            lay.addWidget(self.bar)
+            self.log = kit.make_log()
+            lay.addWidget(self.log, 1)
+            btns = QHBoxLayout()
+            btns.addStretch(1)
+            self.b_go = QPushButton(tr("Build ISO"))
+            self.b_go.setDefault(True)
+            self.b_go.clicked.connect(self._go)
+            self.b_close = QPushButton(tr("Close"))
+            self.b_close.setAutoDefault(False)
+            self.b_close.clicked.connect(self.reject)
+            btns.addWidget(self.b_go)
+            btns.addWidget(self.b_close)
+            lay.addLayout(btns)
+            for r in (self.row_orig, self.row_data, self.row_list, self.row_out):
+                r.changed.connect(self._validate)
+            self._validate()
+
+        def _paths(self):
+            return (self.row_orig.text(), self.row_data.text(),
+                    self.row_list.text(), self.row_out.text())
+
+        def _busy(self):
+            return self._worker is not None and self._worker.isRunning()
+
+        def _validate(self, *_):
+            p = pack_problem(*self._paths())
+            kit.set_problem(self.lbl_problem, p)
+            self.b_go.setEnabled(not p and not self._busy())
+            self.b_go.setToolTip(p)
+            try:
+                n = (os.path.getsize(self.row_data.text())
+                     + os.path.getsize(self.row_list.text()))
+                self.lbl_size.setText(tr("Output will be about {size}.").format(
+                    size=human_size(n)))
+            except OSError:
+                self.lbl_size.setText("")
 
         def _go(self):
-            for e, what in ((self.ed_orig, "original ISO"), (self.ed_data, "DATA.000"),
-                            (self.ed_list, "LIST.BIN")):
-                if not e.text() or not Path(e.text()).exists():
-                    QMessageBox.warning(self, "Pack to ISO", f"Missing {what}.")
-                    return
-            if not self.ed_out.text():
-                QMessageBox.warning(self, "Pack to ISO", "Choose an output ISO path.")
+            paths = self._paths()
+            if pack_problem(*paths):
                 return
+            if QMessageBox.question(
+                    self, tr("Pack to ISO"),
+                    (tr("{path} already exists. Overwrite it?")
+                     if os.path.exists(paths[3])
+                     else tr("Write the new ISO to {path}?")).format(path=paths[3])
+                    ) != QMessageBox.Yes:
+                return
+            kit.log_line(self.log, tr("Building {path} …").format(path=paths[3]))
             self.b_go.setEnabled(False)
-            self._worker = _PackWorker(self.ed_orig.text(), self.ed_data.text(),
-                                       self.ed_list.text(), self.ed_out.text())
+            self.bar.setVisible(True)
+            self.bar.setValue(0)
+            self._worker = _PackWorker(*paths)
             self._worker.prog.connect(self._on_prog)
             self._worker.done.connect(self._on_done)
             self._worker.start()
 
         def _on_prog(self, done, total, msg):
-            self.bar.setMaximum(total); self.bar.setValue(done)
-            self.lbl.setText(f"writing {msg}… {done/1e6:.0f}/{total/1e6:.0f} MB")
+            self.bar.setMaximum(max(total, 1))
+            self.bar.setValue(done)
+            self.bar.setFormat(tr("writing {msg}… {done} / {total}").format(
+                msg=msg, done=human_size(done), total=human_size(total)))
 
         def _on_done(self, r):
-            self.b_go.setEnabled(True)
+            self._worker.wait()
+            self.bar.setVisible(False)
+            self._validate()
             if isinstance(r, tuple) and r and r[0] == "ERROR":
-                QMessageBox.critical(self, "Pack failed", str(r[1]))
+                kit.log_line(self.log, tr("Failed: {err}").format(err=r[1]))
+                QMessageBox.critical(self, tr("Pack failed"), friendly_error(r[1]))
                 return
-            self.lbl.setText(f"done: {r['size']/1e6:.0f} MB, {r['total_sectors']} sectors")
-            QMessageBox.information(
-                self, "ISO built",
-                f"Wrote {r['out']}\n{r['size']/1e6:.1f} MB ({r['total_sectors']} sectors)\n"
-                f"DATA.000 @ LBA {r['data_lba']} ({r['data_size']:,} B)\n"
-                f"LIST.BIN @ LBA {r['list_lba']} ({r['list_size']:,} B)")
+            msg = tr("Wrote {out}\n{size} ({sectors} sectors)\n"
+                     "DATA.000 @ LBA {dlba} ({dsize})\n"
+                     "LIST.BIN @ LBA {llba} ({lsize})").format(
+                out=r["out"], size=human_size(r["size"]), sectors=r["total_sectors"],
+                dlba=r["data_lba"], dsize=human_size(r["data_size"]),
+                llba=r["list_lba"], lsize=human_size(r["list_size"]))
+            kit.log_line(self.log, msg)
+            QMessageBox.information(self, tr("ISO built"), msg)
+
+        def reject(self):
+            if self._busy():
+                QMessageBox.information(self, tr("Pack to ISO"), tr(
+                    "The ISO is still being written; let it finish."))
+                return
+            super().reject()
+
+        def closeEvent(self, ev):
+            if self._busy():
+                ev.ignore()
+                return
+            super().closeEvent(ev)
 
 except ImportError:
     PackIsoDialog = None  # type: ignore

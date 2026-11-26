@@ -392,244 +392,372 @@ def partition_usage(path):
     return rows
 
 
+def slim_problem(path) -> str:
+    """Why `path` cannot be analysed ('' when it can)."""
+    from taiko2x6.app.i18n import tr
+    if not path:
+        return tr("Choose a PS2 HDD image (.img) first.")
+    if not os.path.exists(path):
+        return tr("The image file does not exist.")
+    if not os.path.isfile(path):
+        return tr("The image path is a folder, not a file.")
+    if os.name != "nt":
+        return tr("Slimming uses NTFS sparse files and needs Windows.")
+    return ""
+
+
 try:
-    from PySide6.QtCore import Qt, QThread, Signal, QObject
+    from PySide6.QtCore import Qt, QThread, Signal, QTimer
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                                   QLabel, QPlainTextEdit, QFileDialog,
-                                   QTreeWidget, QTreeWidgetItem, QMessageBox,
-                                   QProgressBar)
+                                   QLabel, QTreeWidget, QTreeWidgetItem,
+                                   QMessageBox, QProgressBar, QGroupBox,
+                                   QFormLayout)
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.app.errors import friendly_error
+    from taiko2x6.ps2 import dialog_kit as kit
+    from taiko2x6.ps2.hdd_browser import human_size
 except ImportError:  # CLI-only environment
     QDialog = None
-
-
-class _ScanWorker(QObject):
-    progress = Signal(int, str)
-    done = Signal(object, object, object, object)
-    failed = Signal(str)
-
-    def __init__(self, path):
-        super().__init__()
-        self.path = path
-        self._stop = False
-
-    def cancel(self):
-        self._stop = True
-
-    def run(self):
-        try:
-            before = stamp(self.path)     # BEFORE the scan; see stamp()
-            state = {"pct": -1}
-
-            def prog(pos, total):
-                if self._stop:
-                    raise _Cancelled()
-                pct = int(pos * 100 / total) if total else 100
-                if pct != state["pct"]:
-                    state["pct"] = pct
-                    self.progress.emit(pct, "%.2f / %.2f GB"
-                                       % (pos / 1e9, total / 1e9))
-
-            runs = zero_runs(self.path, progress=prog)
-            total = sum(b - a for a, b in runs)
-            self.done.emit(runs, total, apa_end(self.path), before)
-        except _Cancelled:
-            self.failed.emit("cancelled")
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class _Cancelled(Exception):
     pass
 
 
-class ImgSlimDialog(QDialog):
-    """Reclaim space from a PS2 HDD image.
+if QDialog is not None:
+    class _ScanWorker(QThread):
+        progress = Signal(int, str)
+        done = Signal(object, object, object, object)
+        failed = Signal(str)
 
-    Offers one operation: cutting the tail past the last APA partition, which is
-    read in full and proved to be zero before anything is removed (and is
-    undoable via --extend, since what it removes is zeros).
+        def __init__(self, path):
+            super().__init__()
+            self.path = path
+            self._stop = False
 
-    Resizing partitions is NOT offered: the whole APA region is 6.44 GB of an
-    80 GB image, so the tail is where all the space is.
-    """
+        def cancel(self):
+            self._stop = True
 
-    def __init__(self, parent=None, default_img=""):
-        super().__init__(parent)
-        self.setWindowTitle("Slim PS2 HDD image")
-        self.resize(760, 560)
-        self._runs = None
-        self._end = None
-        self._scanned = None
-        self._thread = None
-        self._worker = None
+        def run(self):
+            try:
+                before = stamp(self.path)     # BEFORE the scan; see stamp()
+                state = {"pct": -1}
 
-        lay = QVBoxLayout(self)
+                def prog(pos, total):
+                    if self._stop:
+                        raise _Cancelled()
+                    pct = int(pos * 100 / total) if total else 100
+                    if pct != state["pct"]:
+                        state["pct"] = pct
+                        self.progress.emit(pct, "%s / %s" % (
+                            human_size(pos), human_size(total)))
 
-        row = QHBoxLayout()
-        self.lbl_img = QLabel(default_img or "(no image selected)")
-        self.lbl_img.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        btn_browse = QPushButton("Choose .img…")
-        btn_browse.clicked.connect(self._browse)
-        row.addWidget(QLabel("Image:"))
-        row.addWidget(self.lbl_img, 1)
-        row.addWidget(btn_browse)
-        lay.addLayout(row)
+                runs = zero_runs(self.path, progress=prog)
+                total = sum(b - a for a, b in runs)
+                self.done.emit(runs, total, apa_end(self.path), before)
+            except _Cancelled:
+                self.failed.emit("")
+            except Exception as exc:
+                self.failed.emit(friendly_error(exc))
 
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Partition", "Size", "Used", "Free", "Note"])
-        self.tree.setRootIsDecorated(False)
-        lay.addWidget(self.tree, 1)
+    class _TruncWorker(QThread):
+        line = Signal(str)
+        done = Signal(object)        # bytes removed
+        failed = Signal(str)
 
-        self.bar = QProgressBar()
-        self.bar.setVisible(False)
-        lay.addWidget(self.bar)
+        def __init__(self, path, end, scanned):
+            super().__init__()
+            self.args = (path, end, scanned)
 
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        lay.addWidget(self.log, 1)
+        def run(self):
+            path, end, scanned = self.args
+            try:
+                self.done.emit(truncate_tail(path, end, scanned=scanned,
+                                             log=self.line.emit))
+            except Exception as exc:
+                self.failed.emit(friendly_error(exc))
 
-        row2 = QHBoxLayout()
-        self.btn_scan = QPushButton("Analyze")
-        self.btn_scan.clicked.connect(self._scan)
-        self.btn_trunc = QPushButton("Truncate tail")
-        self.btn_trunc.setToolTip(
-            "Cut the verified-zero tail past the last partition. Makes a small "
-            "portable file, but changes the disk size the emulator sees.")
-        self.btn_trunc.clicked.connect(self._do_truncate)
-        self.btn_close = QPushButton("Close")
-        self.btn_close.clicked.connect(self.reject)
-        for b in (self.btn_scan, self.btn_trunc):
-            row2.addWidget(b)
-        row2.addStretch(1)
-        row2.addWidget(self.btn_close)
-        lay.addLayout(row2)
+    class ImgSlimDialog(QDialog):
+        """Reclaim space from a PS2 HDD image.
 
-        self.btn_trunc.setEnabled(False)
-        if default_img and os.path.exists(default_img):
-            self._refresh_parts()
+        Offers one operation: cutting the tail past the last APA partition, which is
+        read in full and proved to be zero before anything is removed (and is
+        undoable via --extend, since what it removes is zeros).
 
-    # -- helpers -----------------------------------------------------------
-    def _img(self):
-        p = self.lbl_img.text()
-        return p if p and os.path.exists(p) else None
+        Resizing partitions is NOT offered: the whole APA region is 6.44 GB of an
+        80 GB image, so the tail is where all the space is.
+        """
 
-    def _say(self, s):
-        self.log.appendPlainText(s)
-
-    def _browse(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Choose PS2 HDD image", "",
-                                           "HDD image (*.img);;All files (*)")
-        if p:
-            self.lbl_img.setText(p)
+        def __init__(self, parent=None, default_img=""):
+            super().__init__(parent)
+            from taiko2x6.app import appconfig
+            self.setWindowTitle(tr("Slim PS2 HDD image"))
+            self.resize(780, 620)
             self._runs = None
-            self.btn_trunc.setEnabled(False)
-            self._refresh_parts()
+            self._end = None
+            self._scanned = None
+            self._worker = None
+            self._shown = ""         # image whose partitions the tree shows
 
-    def _refresh_parts(self):
-        self.tree.clear()
-        p = self._img()
-        if not p:
-            return
-        size = os.path.getsize(p)
-        alloc = allocated_size(p)
-        self._say("image   : %s" % p)
-        self._say("logical : %s      on disk: %s%s"
-                  % (_gb(size), _gb(alloc),
-                     "   (already sparse)" if is_sparse(p) else ""))
-        for name, psize, used, free, note in partition_usage(p):
-            QTreeWidgetItem(self.tree, [
-                name, _gb(psize),
-                _gb(used) if used is not None else "-",
-                _gb(free) if free is not None else "-",
-                note])
-        for i in range(5):
-            self.tree.resizeColumnToContents(i)
-        self._say("")
-        self._say("Press Analyze to scan for reclaimable zero regions "
-                  "(reads the whole file; takes a few minutes).")
+            lay = QVBoxLayout(self)
+            info = QLabel(tr(
+                "Cuts the empty tail past the last partition off a PS2 HDD "
+                "image. Analyze first: the whole file is read and the tail is "
+                "proved to be zero before anything is removed."))
+            info.setWordWrap(True)
+            lay.addWidget(info)
 
-    # -- scan --------------------------------------------------------------
-    def _scan(self):
-        p = self._img()
-        if not p:
-            QMessageBox.warning(self, "Slim", "Choose an image first.")
-            return
-        self.btn_scan.setEnabled(False)
-        self.bar.setVisible(True)
-        self.bar.setValue(0)
-        self._say("scanning …")
-        # Keep explicit refs: a worker whose QThread outlives the local scope
-        # gets destroyed mid-run ("QThread: Destroyed while thread is running").
-        self._thread = QThread(self)
-        self._worker = _ScanWorker(p)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.done.connect(self._on_done)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._thread.finished.connect(self._worker.deleteLater)
-        self._thread.start()
+            box = QGroupBox(tr("Image"))
+            form = QFormLayout(box)
+            if not default_img:
+                default_img = appconfig.last_existing("hddimg")
+            self.row_img = kit.PathRow("hddimg", tr("Choose PS2 HDD image"),
+                                       tr("HDD image (*.img);;All files (*)"),
+                                       text=default_img)
+            form.addRow(tr("Image:"), self.row_img)
+            self.lbl_sizes = QLabel("")
+            form.addRow("", self.lbl_sizes)
+            lay.addWidget(box)
 
-    def _on_progress(self, pct, text):
-        self.bar.setValue(pct)
-        self.bar.setFormat("%s  (%%p%%)" % text)
+            self.tree = QTreeWidget()
+            self.tree.setHeaderLabels([tr("Partition"), tr("Size"), tr("Used"),
+                                       tr("Free"), tr("Note")])
+            self.tree.setRootIsDecorated(False)
+            lay.addWidget(self.tree, 1)
 
-    def _on_done(self, runs, total, end, scanned):
-        self._runs, self._end, self._scanned = runs, end, scanned
-        self.bar.setVisible(False)
-        self.btn_scan.setEnabled(True)
-        size = os.path.getsize(self._img())
-        self._say("zero runs  : %d, totalling %s (%.1f%% of the file)"
-                  % (len(runs), _gb(total), 100.0 * total / size if size else 0))
-        if end:
-            self._say("reclaimable: %s by Truncate tail (APA ends at %s)"
-                      % (_gb(size - end), _gb(end)))
-        self.btn_trunc.setEnabled(bool(end) and end < size)
+            self.lbl_problem = kit.make_problem_label()
+            lay.addWidget(self.lbl_problem)
+            self.bar = QProgressBar()
+            self.bar.setVisible(False)
+            lay.addWidget(self.bar)
 
-    def _on_failed(self, msg):
-        self.bar.setVisible(False)
-        self.btn_scan.setEnabled(True)
-        self._say("scan failed: %s" % msg)
+            self.log = kit.make_log()
+            lay.addWidget(self.log, 1)
 
-    # -- actions -----------------------------------------------------------
-    # Sparse-punching is deliberately not offered here -- truncation covers the
-    # need and a sparse file silently re-expands to full size when copied by
-    # anything that does not preserve sparseness (Explorer, most backup tools).
-    # `img_slim.py <image> --sparse` still does it from the CLI.
+            row2 = QHBoxLayout()
+            self.btn_scan = QPushButton(tr("Analyze"))
+            self.btn_scan.clicked.connect(self._scan)
+            self.btn_cancel = QPushButton(tr("Cancel"))
+            self.btn_cancel.setAutoDefault(False)
+            self.btn_cancel.clicked.connect(self._cancel)
+            self.btn_trunc = QPushButton(tr("Truncate tail"))
+            self.btn_trunc.setAutoDefault(False)
+            self.btn_trunc.setToolTip(tr(
+                "Cut the verified-zero tail past the last partition. Makes a "
+                "small portable file, but changes the disk size the emulator "
+                "sees."))
+            self.btn_trunc.clicked.connect(self._do_truncate)
+            self.btn_close = QPushButton(tr("Close"))
+            self.btn_close.setAutoDefault(False)
+            self.btn_close.clicked.connect(self.reject)
+            for b in (self.btn_scan, self.btn_cancel, self.btn_trunc):
+                row2.addWidget(b)
+            row2.addStretch(1)
+            row2.addWidget(self.btn_close)
+            lay.addLayout(row2)
 
-    def _do_truncate(self):
-        p = self._img()
-        if not p or not self._end:
-            return
-        size = os.path.getsize(p)
-        if QMessageBox.question(
-                self, "Truncate tail",
-                "Cut %s of zeros past the last partition?\n\n"
-                "The tail is verified zero before anything is removed, and this "
-                "is undoable (Extend back to %d bytes). But the emulator will "
-                "see a %s disk instead of %s.\n\nClose PCSX2 first."
-                % (_gb(size - self._end), size, _gb(self._end), _gb(size))
-                ) != QMessageBox.Yes:
-            return
-        try:
-            cut = truncate_tail(p, self._end, scanned=self._scanned, log=self._say)
-        except Exception as exc:
-            QMessageBox.critical(self, "Truncate", str(exc))
-            self._say("FAILED: %s" % exc)
-            return
-        self._say("removed %s -- file is now %s" % (_gb(cut), _gb(os.path.getsize(p))))
-        self._say("undo:  python -m taiko2x6.ps2.img_slim \"%s\" --extend %d" % (p, size))
-        self.btn_trunc.setEnabled(False)
+            self._timer = QTimer(self)
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(300)
+            self._timer.timeout.connect(self._path_settled)
+            self.row_img.changed.connect(self._on_path_changed)
+            self._path_settled()
 
-    def reject(self):
-        if self._worker:
-            self._worker.cancel()
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(3000)
-        super().reject()
+        # -- helpers -----------------------------------------------------------
+        def _img(self):
+            p = self.row_img.text()
+            return p if p and not slim_problem(p) else None
+
+        def _busy(self):
+            return self._worker is not None and self._worker.isRunning()
+
+        def _say(self, s):
+            kit.log_line(self.log, s)
+
+        def _sync(self):
+            p = slim_problem(self.row_img.text())
+            kit.set_problem(self.lbl_problem, p)
+            busy = self._busy()
+            self.btn_scan.setEnabled(not p and not busy)
+            self.btn_scan.setToolTip(p)
+            self.btn_cancel.setEnabled(busy and isinstance(self._worker, _ScanWorker))
+            self.btn_trunc.setEnabled(
+                not p and not busy and bool(self._end) and self._runs is not None
+                and self._end < os.path.getsize(self.row_img.text()))
+            self.row_img.setEnabled(not busy)
+
+        def _on_path_changed(self):
+            self._runs = None
+            self._end = None
+            self._sync()
+            self._timer.start()
+
+        def _path_settled(self):
+            self._timer.stop()
+            self._sync()
+            p = self._img()
+            if p and p != self._shown:
+                self._refresh_parts()
+            elif not p:
+                self.tree.clear()
+                self.lbl_sizes.setText("")
+                self._shown = ""
+
+        def _refresh_parts(self):
+            self.tree.clear()
+            p = self._img()
+            self._shown = p or ""
+            if not p:
+                return
+            try:
+                size = os.path.getsize(p)
+                alloc = allocated_size(p)
+                self.lbl_sizes.setText(tr(
+                    "Logical size {size}, on disk {alloc}{sparse}").format(
+                    size=human_size(size), alloc=human_size(alloc),
+                    sparse=tr(" (already sparse)") if is_sparse(p) else ""))
+                parts = partition_usage(p)
+            except Exception as exc:
+                self.lbl_sizes.setText("")
+                self._say(tr("Could not read the image: {err}").format(
+                    err=friendly_error(exc)))
+                return
+            for name, psize, used, free, note in parts:
+                QTreeWidgetItem(self.tree, [
+                    name, human_size(psize),
+                    human_size(used) if used is not None else "-",
+                    human_size(free) if free is not None else "-",
+                    note])
+            for i in range(5):
+                self.tree.resizeColumnToContents(i)
+            self._say(tr("Press Analyze to scan for reclaimable zero regions "
+                         "(reads the whole file; takes a few minutes)."))
+
+        # -- scan --------------------------------------------------------------
+        def _scan(self):
+            p = self._img()
+            if not p:
+                return
+            self._runs = None
+            self._end = None
+            self.bar.setVisible(True)
+            self.bar.setValue(0)
+            self._say(tr("Scanning {path} …").format(path=p))
+            self._worker = _ScanWorker(p)
+            self._worker.progress.connect(self._on_progress)
+            self._worker.done.connect(self._on_done)
+            self._worker.failed.connect(self._on_failed)
+            self._worker.start()
+            self._sync()
+
+        def _cancel(self):
+            if isinstance(self._worker, _ScanWorker):
+                self._worker.cancel()
+
+        def _on_progress(self, pct, text):
+            self.bar.setValue(pct)
+            self.bar.setFormat("%s  (%%p%%)" % text)
+
+        def _on_done(self, runs, total, end, scanned):
+            self._worker.wait()
+            self._runs, self._end, self._scanned = runs, end, scanned
+            self.bar.setVisible(False)
+            size = os.path.getsize(self._img())
+            self._say(tr("Zero runs: {n}, totalling {total} ({pct:.1f}% of the file)")
+                      .format(n=len(runs), total=human_size(total),
+                              pct=100.0 * total / size if size else 0))
+            if end:
+                self._say(tr("Reclaimable: {size} by Truncate tail (partitions end at {end})")
+                          .format(size=human_size(max(size - end, 0)),
+                                  end=human_size(end)))
+            else:
+                self._say(tr("The partition table could not be read; "
+                             "Truncate tail is unavailable."))
+            self._sync()
+
+        def _on_failed(self, msg):
+            self._worker.wait()
+            self.bar.setVisible(False)
+            self._say(tr("Scan cancelled.") if not msg
+                      else tr("Scan failed: {err}").format(err=msg))
+            self._sync()
+
+        # -- actions -----------------------------------------------------------
+        # Sparse-punching is deliberately not offered here -- truncation covers the
+        # need and a sparse file silently re-expands to full size when copied by
+        # anything that does not preserve sparseness (Explorer, most backup tools).
+        # `img_slim.py <image> --sparse` still does it from the CLI.
+
+        def _do_truncate(self):
+            p = self._img()
+            if not p or not self._end:
+                return
+            size = os.path.getsize(p)
+            if QMessageBox.question(
+                    self, tr("Truncate tail"),
+                    tr("Cut {cut} of zeros past the last partition?\n\n"
+                       "The tail is verified zero before anything is removed, "
+                       "and this is undoable (Extend back to {size} bytes). "
+                       "But the emulator will see a {new} disk instead of "
+                       "{old}.\n\nClose PCSX2 first.").format(
+                        cut=human_size(size - self._end), size=size,
+                        new=human_size(self._end), old=human_size(size))
+                    ) != QMessageBox.Yes:
+                return
+            self._orig_size = size
+            self.bar.setRange(0, 0)
+            self.bar.setFormat(tr("Verifying and truncating…"))
+            self.bar.setVisible(True)
+            self._worker = _TruncWorker(p, self._end, self._scanned)
+            self._worker.line.connect(self._say)
+            self._worker.done.connect(self._trunc_done)
+            self._worker.failed.connect(self._trunc_failed)
+            self._worker.start()
+            self._sync()
+
+        def _trunc_reset_bar(self):
+            self._worker.wait()
+            self.bar.setRange(0, 100)
+            self.bar.setFormat("%p%")
+            self.bar.setVisible(False)
+
+        def _trunc_done(self, cut):
+            self._trunc_reset_bar()
+            p = self._img() or self.row_img.text()
+            self._say(tr("Removed {cut} -- the file is now {size}").format(
+                cut=human_size(cut), size=human_size(os.path.getsize(p))))
+            self._say("undo:  python -m taiko2x6.ps2.img_slim \"%s\" --extend %d"
+                      % (p, self._orig_size))
+            self._runs = None
+            self._end = None
+            self._shown = ""
+            self._path_settled()
+
+        def _trunc_failed(self, msg):
+            self._trunc_reset_bar()
+            self._say(tr("FAILED: {err}").format(err=msg))
+            QMessageBox.critical(self, tr("Truncate tail"), msg)
+            self._sync()
+
+        def reject(self):
+            if self._busy():
+                if isinstance(self._worker, _ScanWorker):
+                    self._worker.cancel()
+                    self._worker.wait(5000)
+                else:
+                    QMessageBox.information(self, tr("Truncate tail"), tr(
+                        "The image is being changed; let it finish."))
+                    return
+            super().reject()
+
+        def closeEvent(self, ev):
+            if self._busy() and not isinstance(self._worker, _ScanWorker):
+                ev.ignore()
+                return
+            if self._busy():
+                self._worker.cancel()
+                self._worker.wait(5000)
+            super().closeEvent(ev)
 
 
 def main(argv=None):
