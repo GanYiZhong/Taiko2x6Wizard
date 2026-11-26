@@ -37,11 +37,12 @@ from taiko2x6.app import appconfig  # noqa: E402  last-used-path memory (config.
 from taiko2x6.app import i18n  # noqa: E402  zh-TW / English UI strings
 from taiko2x6.app import theme  # noqa: E402  light/dark look
 from taiko2x6.app import jobs  # noqa: E402  log file, crash dialog, elapsed time
+from taiko2x6.app import icons  # noqa: E402  monochrome SVG icon set
 from taiko2x6.app.i18n import tr  # noqa: E402
 
 from PySide6.QtCore import (  # noqa: E402
     Qt, QThread, Signal, QObject, QSortFilterProxyModel, QModelIndex, QSize,
-    QSettings,
+    QSettings, QEvent,
 )
 from PySide6.QtGui import (  # noqa: E402
     QStandardItem, QStandardItemModel, QAction, QActionGroup, QIcon, QImage,
@@ -746,54 +747,53 @@ class MainWindow(QMainWindow):
 
     def _build_start_page(self) -> QWidget:
         from taiko2x6.app.start_page import StartPage
-        S = QStyle
         groups = [
             (tr("Archive"), [
                 (tr("Open archive folder…"),
                  tr("A folder with DATA.000 + list.bin: browse, preview, replace files."),
-                 S.SP_DirOpenIcon, lambda: self.open_archive_dialog()),
+                 'archive', lambda: self.open_archive_dialog()),
                 (tr("Pack to ISO…"),
                  tr("Inject the current DATA.000 + LIST.BIN into a new game ISO"),
-                 S.SP_DriveCDIcon, lambda: self.open_pack_iso()),
+                 'iso', lambda: self.open_pack_iso()),
             ]),
             (tr("Songs & charts"), [
                 (tr("Song Manager…"),
                  tr("Edit, add or remove songs across musicinfo, tuning and streaminfo."),
-                 S.SP_FileDialogContentsView, lambda: self.open_song_manager()),
+                 'song_list', lambda: self.open_song_manager()),
                 (tr("Custom Song Builder…"),
                  tr("Build a song from a TJA and audio: textures, charts, VAG, stars."),
-                 S.SP_FileDialogNewFolder, lambda: self.open_song_builder()),
+                 'song_add', lambda: self.open_song_builder()),
                 (tr("Song Replacer…"),
                  tr("Overwrite an existing song slot with a custom song."),
-                 S.SP_BrowserReload, lambda: self.open_song_replacer()),
+                 'song_replace', lambda: self.open_song_replacer()),
                 (tr("Omnimix Maker…"),
                  tr("Merge the songs of several Taiko images into one."),
-                 S.SP_FileDialogDetailedView, lambda: self.open_omnimix()),
+                 'omnimix', lambda: self.open_omnimix()),
             ]),
             (tr("Game patches"), [
                 (tr("Boot & select patches…"),
                  tr("Skip the Notice / credits screens, freeze the select timers."),
-                 S.SP_DriveHDIcon, lambda: self.open_taiko_boot()),
+                 'patch', lambda: self.open_taiko_boot()),
                 (tr("Patch taiko song limit (T14+)…"),
                  tr("Raise the 210-song ceiling in the taiko executable."),
-                 S.SP_DriveHDIcon, lambda: self.open_taiko_exe()),
+                 'patch', lambda: self.open_taiko_exe()),
                 (tr("Song-select timer (T14+)…"),
                  tr("Change the song-select countdown to any value from 1 to 999 s."),
-                 S.SP_DriveHDIcon, lambda: self.open_taiko_timer()),
+                 'timer', lambda: self.open_taiko_timer()),
                 (tr("USB keyboard patch (T14)…"),
                  tr("Play Taiko 14 with a USB keyboard and no JVS I/O board."),
-                 S.SP_DriveHDIcon, lambda: self.open_usb_keyboard()),
+                 'keyboard', lambda: self.open_usb_keyboard()),
             ]),
             (tr("HDD & disc"), [
                 (tr("Open PS2 HDD image…"),
                  tr("Browse a Taiko HDD .img and extract or replace DATA.000 / list.bin."),
-                 S.SP_DriveHDIcon, lambda: self.open_pfsshell()),
+                 'hdd', lambda: self.open_pfsshell()),
                 (tr("Open PS2 Memory Card (Arcade/COH)…"),
                  tr("Browse a PS2 or MagicGate Arcade memory-card image."),
-                 S.SP_DriveFDIcon, lambda: self.open_ps2mc()),
+                 'memcard', lambda: self.open_ps2mc()),
                 (tr("Slim PS2 HDD image…"),
                  tr("Make a PS2 HDD image smaller."),
-                 S.SP_DriveHDIcon, lambda: self.open_img_slim()),
+                 'slim', lambda: self.open_img_slim()),
             ]),
         ]
         page = StartPage(groups, self._open_recent_entry, self._recent_entries,
@@ -843,59 +843,61 @@ class MainWindow(QMainWindow):
         self._refresh_setup_box()
 
     def _build_actions(self):
-        style = self.style()
         tb = QToolBar(tr("Main"))
         tb.setObjectName("main_toolbar")
         tb.setIconSize(QSize(18, 18))
-        # The icons are generic Qt ones, so show what each button does.
+        # show what each button does next to its icon
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.addToolBar(tb)
+        self.setWindowIcon(icons.icon("app", color=QColor("#d94f3d")))
+        self._icon_names: dict = {}
 
         def act(attr, text, slot, icon=None, tip=None):
             text = text.replace("&", "&&")         # a literal "&", not a mnemonic
-            a = QAction(style.standardIcon(icon), text, self) if icon is not None \
-                else QAction(text, self)
+            a = QAction(text, self)
+            if icon:
+                self._icon_names[a] = icon
             if tip:
                 a.setToolTip(tip)
             a.triggered.connect(slot)
             setattr(self, attr, a)
             return a
 
-        act("act_open", tr("Open…"), self.open_archive_dialog, QStyle.SP_DirOpenIcon)
+        act("act_open", tr("Open…"), self.open_archive_dialog, 'open')
         self.act_open.setShortcut(QKeySequence.Open)
         act("act_extract_all", tr("Extract All…"),
-            lambda: self.extract(selected_only=False), QStyle.SP_ArrowDown)
+            lambda: self.extract(selected_only=False), 'extract')
         act("act_extract_sel", tr("Extract Selected…"),
-            lambda: self.extract(selected_only=True), QStyle.SP_FileDialogDetailedView)
+            lambda: self.extract(selected_only=True), 'extract')
         act("act_replace", tr("Replace File…"), self.replace_selected,
-            QStyle.SP_FileDialogStart)
-        act("act_save", tr("Save"), self.save_archive, QStyle.SP_DialogSaveButton)
+            'replace')
+        act("act_save", tr("Save"), self.save_archive, 'save')
         self.act_save.setShortcut(QKeySequence.Save)
         act("act_discard", tr("Discard Edits"), self.discard_edits,
-            QStyle.SP_DialogResetButton)
+            'discard')
         self.act_extract_all.setShortcut(QKeySequence("Ctrl+E"))
         self.act_extract_sel.setShortcut(QKeySequence("Ctrl+Shift+E"))
         self.act_discard.setShortcut(QKeySequence("Ctrl+Shift+Z"))
-        act("act_find", tr("Find…"), self._focus_filter)
+        act("act_find", tr("Find…"), self._focus_filter, "find")
         self.act_find.setShortcut(QKeySequence.Find)
         self.addAction(self.act_find)
-        act("act_quit", tr("Quit"), self.close)
+        act("act_quit", tr("Quit"), self.close, "quit")
         self.act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         # Esc inside the filter box clears it
         QShortcut(QKeySequence(Qt.Key_Escape), self.filter_box,
                   activated=self.filter_box.clear, context=Qt.WidgetShortcut)
 
         act("act_songmgr", tr("Song Manager…"), self.open_song_manager,
-            QStyle.SP_FileDialogContentsView,
+            'song_list',
             tr("Edit/add/remove songs across musicinfo + tuning + streaminfo"))
         act("act_songbuild", tr("Custom Song Builder…"), self.open_song_builder,
-            QStyle.SP_FileDialogNewFolder,
+            'song_add',
             tr("Replace a song slot from a TJA + audio: textures, charts, VAG, stars"))
         act("act_songreplace", tr("Song Replacer…"), self.open_song_replacer,
-            QStyle.SP_BrowserReload,
+            'song_replace',
             tr("Overwrite an existing song slot with a custom song (boot-safe: "
                "counts stay identical). Stages + writes DATA.000 in one step."))
-        act("act_packiso", tr("Pack to ISO…"), self.open_pack_iso, QStyle.SP_DriveCDIcon,
+        act("act_packiso", tr("Pack to ISO…"), self.open_pack_iso, 'iso',
             tr("Inject the current DATA.000 + LIST.BIN into a new game ISO"))
 
         # "Open PS2 HDD (.img)…" (act_hdd -> hdd_browser) and "HDD Song Wizard…"
@@ -904,65 +906,69 @@ class MainWindow(QMainWindow):
         # if they need re-exposing. Use the pfsshell browser for HDD file work.
         close_first = " " + tr("Close any emulator holding the image first.")
         act("act_ps2mc", tr("Open PS2 Memory Card (Arcade/COH)…"), self.open_ps2mc,
-            QStyle.SP_DriveFDIcon,
+            'memcard',
             tr("Browse a PS2 / MagicGate-Arcade memory-card image (what mymc "
                "does): extract / replace T14GAME, boot.bin, IRXARC.BIN… ECC is "
                "regenerated on write."))
         act("act_pfsshell", tr("Open PS2 HDD via pfsshell…"), self.open_pfsshell,
-            QStyle.SP_DriveHDIcon,
+            'hdd',
             tr("Browse a PS2 HDD image with the native pfsshell.exe backend "
                "(extract / replace DATA.000, list.bin).") + close_first)
         act("act_taikoexe", tr("Patch taiko song limit (T14+)…"), self.open_taiko_exe,
-            QStyle.SP_DriveHDIcon,
+            'patch',
             tr("Raise the 210-song ceiling in `taiko` (the exe T14+ actually "
                "runs, on the HDD — not the dongle's T14GAME).") + close_first)
         act("act_taikotimer", tr("Song-select timer (T14+)…"), self.open_taiko_timer,
-            QStyle.SP_DriveHDIcon,
+            'timer',
             tr("Change the song-select countdown in `taiko` (stock 120 s) to any "
                "value from 1 to 999 s.") + close_first)
         act("act_taikoboot", tr("Boot & select patches (T14+)…"), self.open_taiko_boot,
-            QStyle.SP_DriveHDIcon,
+            'patch',
             tr("Checkboxes for `taiko`: skip the boot Notice screen, skip the "
                "attract credits (協力) screen, freeze the song-select countdown, "
                "disable the difficulty-select timeout. Unticking restores the "
                "stock code.") + close_first)
         act("act_usbkbd", tr("USB keyboard patch (T14)…"), self.open_usb_keyboard,
-            QStyle.SP_DriveHDIcon,
+            'keyboard',
             tr("Play Taiko 14 with a USB keyboard and no JVS I/O board "
                "(KBD2EE.irx). Installs into the HDD game partition (card "
                "untouched) or onto the dongle card image.") + close_first)
         act("act_imgslim", tr("Slim PS2 HDD image…"), self.open_img_slim,
-            QStyle.SP_DriveHDIcon,
+            'slim',
             tr("Reclaim disk space from a .img. Punches holes over regions that "
                "already read as zero, so the emulator still reads identical "
                "bytes.") + close_first)
         act("act_apamerge", tr("Merge HDD images (multi-game disk)…"),
-            self.open_apa_merge, QStyle.SP_DriveHDIcon,
+            self.open_apa_merge, 'hdd',
             tr("Combine several game HDD images into one APA disk. Each game's "
                "memory card looks up its own partition by name, so the card "
                "alone selects which game boots. Sources are never modified."))
         act("act_omnimix", tr("Omnimix Maker (fuse many games)…"), self.open_omnimix,
-            QStyle.SP_DriveHDIcon,
+            'omnimix',
             tr("Harvest every song from several Taiko images (7…14) and merge "
                "the ones the target lacks into one image — charts, textures, "
                "audio and stars — then lift the exe's song ceiling.") + close_first)
         act("act_chartconv", tr("Chart converter (TJA / sht / Gen3 .bin)…"),
-            self.open_chart_converter,
+            self.open_chart_converter, "chart",
             tip=tr("Convert charts between TJA, PS2-arcade .sht and Nijiiro "
                    "(Gen3) fumen .bin in any direction, branches kept; a Gen3 "
                    "song_<id>.nus3bank becomes a game VAG."))
-        act("act_vaggen", tr("VAG Generator (audio→vag)…"), self.open_vag_generator,
+        act("act_vaggen", tr("VAG Generator (audio→vag)…"), self.open_vag_generator, "song_list",
             tip=tr("Convert wav/ogg to the game's VAG stream, exported to a folder"))
-        act("act_shtval", tr("SHT Validator (check format)…"), self.open_sht_validator,
+        act("act_shtval", tr("SHT Validator (check format)…"), self.open_sht_validator, "chart",
             tip=tr("Validate a .sht chart against the official on-disc format"))
 
-        for a in (self.act_open, self.act_extract_all, self.act_extract_sel,
-                  self.act_replace, self.act_save, self.act_discard):
-            tb.addAction(a)
-        tb.addSeparator()
-        tb.addAction(self.act_songmgr)
-        tb.addAction(self.act_songbuild)
-        tb.addAction(self.act_packiso)
+        # Archive | Edit | Songs | Tools
+        groups = ((self.act_open, self.act_extract_all, self.act_extract_sel),
+                  (self.act_replace, self.act_save, self.act_discard),
+                  (self.act_songmgr, self.act_songbuild, self.act_songreplace,
+                   self.act_omnimix),
+                  (self.act_packiso, self.act_chartconv, self.act_pfsshell))
+        for i, grp in enumerate(groups):
+            if i:
+                tb.addSeparator()
+            for a in grp:
+                tb.addAction(a)
 
         menu = self.menuBar().addMenu(tr("&File"))
         menu.addAction(self.act_open)
@@ -1001,6 +1007,7 @@ class MainWindow(QMainWindow):
 
         settings = self.menuBar().addMenu(tr("&Settings"))
         self.act_settings = QAction(tr("External files…"), self)
+        self._icon_names[self.act_settings] = "settings"
         self.act_settings.triggered.connect(self.open_settings)
         settings.addAction(self.act_settings)
         lang_menu = settings.addMenu(tr("Language"))
@@ -1028,13 +1035,31 @@ class MainWindow(QMainWindow):
             self.theme_actions[mode] = a
         help_menu = self.menuBar().addMenu(tr("&Help"))
         self.act_guide = QAction(tr("Quick guide"), self)
+        self._icon_names[self.act_guide] = "help"
         self.act_guide.setShortcut(QKeySequence.HelpContents)
         self.act_guide.triggered.connect(self.open_guide)
         help_menu.addAction(self.act_guide)
         self.act_open_log = QAction(tr("Open log folder"), self)
+        self._icon_names[self.act_open_log] = "log"
         self.act_open_log.triggered.connect(jobs.open_log_folder)
         help_menu.addAction(self.act_open_log)
+        self._refresh_icons()
         self._update_actions()
+
+    def _refresh_icons(self):
+        """Tint every action icon with the current palette; add shortcuts to tips."""
+        for a, name in self._icon_names.items():
+            a.setIcon(icons.icon(name))
+            tip = a.toolTip()
+            sc = a.shortcut().toString(QKeySequence.NativeText)
+            if sc and not tip.endswith(f"({sc})"):
+                a.setToolTip(f"{tip} ({sc})")
+
+    def changeEvent(self, ev):
+        if ev.type() == QEvent.ApplicationPaletteChange and hasattr(self, "_icon_names"):
+            for a, name in self._icon_names.items():
+                a.setIcon(icons.icon(name))
+        super().changeEvent(ev)
 
     def open_guide(self):
         """Help > Quick guide: a non-modal window, one page per workflow."""

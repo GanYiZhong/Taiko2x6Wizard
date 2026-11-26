@@ -9,12 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
+from taiko2x6.app import icons
 from taiko2x6.app.i18n import tr
 
 CARD_MIN_W = 260
@@ -55,10 +56,10 @@ class TaskCard(QPushButton):
             " background:palette(alternate-base);}")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 8, 12, 8)
-        ic = QLabel()
+        self.icon_name = icon
+        ic = self.icon_label = QLabel()
         ic.setAttribute(Qt.WA_TransparentForMouseEvents)
-        if icon is not None:
-            ic.setPixmap(self.style().standardIcon(icon).pixmap(28, 28))
+        self.refresh_icon()
         ic.setFixedWidth(32)
         ic.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         lay.addWidget(ic)
@@ -78,6 +79,16 @@ class TaskCard(QPushButton):
         col.addStretch(1)
         lay.addLayout(col, 1)
         self.clicked.connect(lambda _=False: slot())
+
+    def refresh_icon(self):
+        """(Re)draw the icon in the current palette's text colour."""
+        if self.icon_name:
+            self.icon_label.setPixmap(icons.icon(self.icon_name).pixmap(28, 28))
+
+    def changeEvent(self, ev):
+        if ev.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self.refresh_icon()
+        super().changeEvent(ev)
 
     def keyPressEvent(self, ev):
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
