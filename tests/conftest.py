@@ -119,3 +119,25 @@ def _close_leftover_windows():
         w.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     app.processEvents()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_qsettings(tmp_path, monkeypatch):
+    """Point every taiko2x6 module's QSettings at a throwaway INI file.
+
+    QSettings("TaikoTools", ...) writes the Windows registry; dialogs under
+    test (HDD browser / wizard) stored their synthetic test image there as
+    the user's real "recent HDD image"."""
+    if "PySide6.QtCore" not in sys.modules:
+        yield
+        return
+    from PySide6.QtCore import QSettings as _Real
+    ini = str(tmp_path / "qsettings.ini")
+
+    def _fake(*_args, **_kw):
+        return _Real(ini, _Real.IniFormat)
+
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("taiko2x6") and getattr(mod, "QSettings", None) is _Real:
+            monkeypatch.setattr(mod, "QSettings", _fake)
+    yield
