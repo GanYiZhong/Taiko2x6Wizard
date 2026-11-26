@@ -1542,6 +1542,8 @@ _BATCH_ADD_ZH = {
     "This archive's song-DB bins disagree on the song count; adding songs would produce a non-bootable file. Reload a clean DATA.000 / LIST.BIN first.":
         '此封存檔的歌曲資料庫 bin 檔歌曲數不一致，新增歌曲會產生無法開機的檔案。請先重新載入乾淨的 DATA.000 / LIST.BIN。',
     'Building {i}/{n}: {sid} — rebuilding DATA.000, please wait…': '正在建立 {i}/{n}：{sid} — 重建 DATA.000 中，請稍候…',
+    'Building {i}/{n}: {sid}…': '正在建立 {i}/{n}：{sid}…',
+    'Rebuilding DATA.000 once for all songs, please wait…': '正在為所有歌曲一次重建 DATA.000，請稍候…',
     '[{i}/{n}] {sid} — {title}': '[{i}/{n}] {sid} — {title}',
     'OK': '完成',
     'FAILED: {err}': '失敗：{err}',

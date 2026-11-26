@@ -593,12 +593,20 @@ def prepare_new_song_db(archive, new_id: str, template_sid: str, tja_text,
     return compute_db_add(archive, new_id, k_src, stars), stars
 
 
-def add_new_song(archive, new_id: str, title: str, template_sid: str,
-                 lyricist="", composer="", copyright_="", tja_text=None,
-                 audio_path=None, lead_silence_ms: float = 0.0,
-                 precomputed_db=None, stars=None, charts=None, audio_vag=None,
-                 log=lambda s: None) -> tuple:
-    """Create a brand-new song slot `new_id` cloned from `template_sid`.
+def stage_new_song(archive, new_id: str, title: str, template_sid: str,
+                   lyricist="", composer="", copyright_="", tja_text=None,
+                   audio_path=None, lead_silence_ms: float = 0.0,
+                   precomputed_db=None, stars=None, charts=None, audio_vag=None,
+                   log=lambda s: None) -> tuple:
+    """Everything add_new_song does EXCEPT the final DATA.000 rebuild.
+
+    Stages the three DB bins on `archive` (stage_replace) and returns
+    (new_groups, extra_files, summary) -- the specs archive_builder.build_archive
+    takes. A batch calls this per song (each song's DB step then sees the
+    previous songs' staged bins) and rebuilds ONCE with the concatenated specs.
+    add_new_song = this + one build_archive.
+
+    Create a brand-new song slot `new_id` cloned from `template_sid`.
 
     Charts and audio can come from either of two sources:
 
@@ -622,7 +630,6 @@ def add_new_song(archive, new_id: str, title: str, template_sid: str,
     GUI thread. When called from a worker thread, pass `precomputed_db` (built
     on the GUI thread via prepare_new_song_db) so no QWidget is created here.
     """
-    from taiko2x6.archive import archive_builder
     log = _tee(log)
     logger.info("add_new_song %s (template %s): title=%r audio=%s",
                 new_id, template_sid, title, bool(audio_path))
@@ -734,6 +741,23 @@ def add_new_song(archive, new_id: str, title: str, template_sid: str,
         except Exception as exc:
             summary["errors"].append(f"audio: {exc}")
 
+    return new_groups, extra_files, summary
+
+
+def add_new_song(archive, new_id: str, title: str, template_sid: str,
+                 lyricist="", composer="", copyright_="", tja_text=None,
+                 audio_path=None, lead_silence_ms: float = 0.0,
+                 precomputed_db=None, stars=None, charts=None, audio_vag=None,
+                 log=lambda s: None) -> tuple:
+    """Stage a new song (see stage_new_song, which documents the arguments) and
+    rebuild DATA.000 once. Returns (list_bytes, data_bytes, summary)."""
+    from taiko2x6.archive import archive_builder
+    log = _tee(log)
+    new_groups, extra_files, summary = stage_new_song(
+        archive, new_id, title, template_sid, lyricist=lyricist, composer=composer,
+        copyright_=copyright_, tja_text=tja_text, audio_path=audio_path,
+        lead_silence_ms=lead_silence_ms, precomputed_db=precomputed_db, stars=stars,
+        charts=charts, audio_vag=audio_vag, log=log)
     # ---- 4) rebuild full archive (applies staged DB edits + new groups + extra) ----
     log(f"rebuilding DATA.000 (+{len(new_groups)} groups)…")
     import time
