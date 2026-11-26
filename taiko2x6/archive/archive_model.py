@@ -19,6 +19,88 @@ SECTOR_SIZE = core.SECTOR_SIZE
 
 __all__ = ["Archive"]
 
+_CHUNK = 1024 * 1024
+
+
+class _FileView:
+    """Read-only sliceable view of a file (seek+read, no mmap, no full load),
+    accepted by core.decode_group_payload like bytes/mmap."""
+
+    def __init__(self, path: Path):
+        self._f = open(path, "rb")
+        self._f.seek(0, 2)
+        self.size = self._f.tell()
+
+    def __len__(self):
+        return self.size
+
+    def read(self, start: int, stop: int) -> bytes:
+        stop = min(stop, self.size)
+        if stop <= start:
+            return b""
+        self._f.seek(start)
+        return self._f.read(stop - start)
+
+    def __getitem__(self, sl):
+        return self.read(sl.start or 0, self.size if sl.stop is None else sl.stop)
+
+    def close(self):
+        self._f.close()
+
+
+class _Overlay:
+    """A _FileView plus in-memory patches applied in order; reads see the
+    patched bytes exactly as the old full bytearray copy did."""
+
+    def __init__(self, base: _FileView):
+        self.base = base
+        self.size = base.size
+        self.patches: list[tuple[int, bytes]] = []
+
+    def __len__(self):
+        return self.size
+
+    def write(self, off: int, data: bytes):
+        self.patches.append((off, bytes(data)))
+        self.size = max(self.size, off + len(data))
+
+    def __getitem__(self, sl):
+        start = sl.start or 0
+        stop = self.size if sl.stop is None else min(sl.stop, self.size)
+        if stop <= start:
+            return b""
+        buf = bytearray(self.base.read(start, stop))
+        buf.extend(b"\0" * (stop - start - len(buf)))
+        for off, d in self.patches:
+            lo, hi = max(off, start), min(off + len(d), stop)
+            if lo < hi:
+                buf[lo - start:hi - start] = d[lo - off:hi - off]
+        return bytes(buf)
+
+    def merged_ranges(self):
+        """Sorted, non-overlapping [start, end) byte ranges touched by patches."""
+        out: list[list[int]] = []
+        for a, b in sorted((o, o + len(d)) for o, d in self.patches if d):
+            if out and a <= out[-1][1]:
+                out[-1][1] = max(out[-1][1], b)
+            else:
+                out.append([a, b])
+        return out
+
+
+def _copy_range(src, dst, start: int, stop: int):
+    """Copy src[start:stop) to dst in chunks (src is a binary file object)."""
+    src.seek(start)
+    left = stop - start
+    buf = bytearray(min(_CHUNK, max(left, 1)))
+    mv = memoryview(buf)
+    while left > 0:
+        n = src.readinto(mv[:min(len(buf), left)])
+        if not n:
+            raise EOFError("DATA ended while copying")
+        dst.write(mv[:n])
+        left -= n
+
 
 class Archive:
     """In-memory view over a LIST.BIN + DATA.000 pair, backed by mmap for reads."""
@@ -120,13 +202,21 @@ class Archive:
         DATA and LIST are committed together (safeio.write_pair); backup=True
         keeps a rolling .bak of each existing output first.
 
-        Memory note: a full writable copy of DATA is loaded here. When the GUI
-        overwrites in place it closes self._mm first (so peak ≈ DATA size); the
-        non-overwrite (.new) path keeps the mmap open, so peak is ≈ 2× DATA.
+        Memory note: DATA is never loaded whole. Edited groups are read through
+        a patch overlay on the source file; the new DATA is streamed to a temp
+        file in chunks (unchanged regions copied verbatim) and committed by
+        write_pair. Peak is a few edited groups plus one copy chunk.
         """
+        view = _FileView(self.data_path)
+        try:
+            return self._save(view, out_list, out_data, allow_relayout,
+                              progress, backup)
+        finally:
+            view.close()
+
+    def _save(self, view, out_list, out_data, allow_relayout, progress, backup):
         layout = self.layout
-        # Need a writable full copy of DATA for patching.
-        full = bytearray(self.data_path.read_bytes())
+        full = _Overlay(view)
         new_list = bytearray(layout.decoded_list)
 
         affected = sorted(self.affected_groups())
@@ -161,13 +251,13 @@ class Archive:
                 old = sector * SECTOR_SIZE
                 shared = any(s == old for k, (s, _e) in spans.items() if k != gi)
                 if not shared:      # another group may alias the same sectors
-                    full[old:old + group["packed_size"]] = b"\0" * group["packed_size"]
+                    full.write(old, b"\0" * group["packed_size"])
                 sector = hole // SECTOR_SIZE
             start = sector * SECTOR_SIZE
             clear_len = max(group["packed_size"], len(encoded)) \
                 if sector == group["sector"] else len(encoded)
-            full[start:start + clear_len] = b"\0" * clear_len
-            full[start:start + len(encoded)] = encoded
+            full.write(start, b"\0" * clear_len)
+            full.write(start, encoded)
             spans[gi] = (start, start + len(encoded))
 
             gw = dict(group)
@@ -182,7 +272,24 @@ class Archive:
                 layout.write_file(new_list, e)
             changed += 1
 
-        write_pair([(out_data, bytes(full)),
+        data_path, src_size = self.data_path, view.size
+        # patched ranges (edited groups only) resolved now, while `view` is open
+        blocks = [(a, full[a:b]) for a, b in full.merged_ranges()]
+
+        def write_data(f):
+            with open(data_path, "rb") as src:
+                pos = 0
+                for a, block in blocks:
+                    _copy_range(src, f, pos, min(a, src_size))
+                    f.write(block)
+                    pos = a + len(block)
+                if pos < src_size:
+                    _copy_range(src, f, pos, src_size)
+
+        # read phase is over: release our handle so an in-place commit is not
+        # blocked by it (the writer opens its own)
+        view.close()
+        write_pair([(out_data, write_data),
                     (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
         if progress:
             progress(len(affected), len(affected), "done")
@@ -266,16 +373,23 @@ class Archive:
         groups are recompressed and appended past the end of the original data,
         and their old sectors become harmless dead space.
 
-        Memory note: reads the whole source DATA into memory and copies it into
-        the output bytearray. In the overwrite path the GUI closes self._mm first
-        (peak ≈ 2× DATA); the .new path keeps the mmap open (≈ 3×).
+        Memory note: DATA is never loaded whole: the original region is
+        stream-copied to a temp file in chunks and only the recompressed groups
+        (appended) are held in memory.
         """
+        src = _FileView(self.data_path)
+        try:
+            return self._rebuild(src, out_list, out_data, progress, backup)
+        finally:
+            src.close()
+
+    def _rebuild(self, src, out_list, out_data, progress, backup):
         layout = self.layout
-        src = self.data_path.read_bytes()          # read original fully into memory first
         new_list = bytearray(layout.decoded_list)
         # Preserve every unchanged group at its original sector by copying the
         # entire original data region verbatim; edited groups get appended.
-        new_data = bytearray(src)
+        appended: list[bytes] = []          # pieces written after the original
+        new_len = src.size
         total = len(layout.groups)
         changed = 0
 
@@ -310,16 +424,18 @@ class Archive:
             packed = core.encode_group_payload(payload, group["compression"])
 
             # append at the next free sector past the current end
-            sector = core.align(len(new_data), SECTOR_SIZE) // SECTOR_SIZE
-            pad = sector * SECTOR_SIZE - len(new_data)
+            sector = core.align(new_len, SECTOR_SIZE) // SECTOR_SIZE
+            pad = sector * SECTOR_SIZE - new_len
             if pad:
-                new_data.extend(b"\0" * pad)
+                appended.append(b"\0" * pad)
+                new_len += pad
             gw = dict(group)
             gw["sector"] = sector
             gw["packed_size"] = len(packed)
             gw["unpacked_size"] = len(payload)
             gw["unknown2"] = core.compute_unknown2(payload)   # game-validated hash
-            new_data.extend(packed)
+            appended.append(packed)
+            new_len += len(packed)
             layout.write_group(new_list, gw)
             for entry in updated:
                 layout.write_file(new_list, entry)
@@ -327,7 +443,16 @@ class Archive:
 
         if progress:
             progress(total, total, "writing files")
-        write_pair([(out_data, bytes(new_data)),
+        data_path, src_size = self.data_path, src.size
+
+        def write_data(f):
+            with open(data_path, "rb") as s:
+                _copy_range(s, f, 0, src_size)
+            for piece in appended:
+                f.write(piece)
+
+        src.close()
+        write_pair([(out_data, write_data),
                     (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
         return {"changed_groups": changed, "files": len(self.replacements),
-                "data_size": len(new_data)}
+                "data_size": new_len}

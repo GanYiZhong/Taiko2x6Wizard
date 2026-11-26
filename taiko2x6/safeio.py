@@ -75,11 +75,16 @@ def _replace(src, dst, attempts: int = 8):
 
 
 def _write_temp(path: Path, data) -> Path:
+    """``data`` is a bytes-like object or a callable ``writer(fileobj)`` that
+    streams the content (so a multi-GB file never has to sit in memory)."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
                                suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(data)
+            if callable(data):
+                data(f)
+            else:
+                f.write(data)
             f.flush()
             os.fsync(f.fileno())
     except BaseException:
@@ -139,7 +144,8 @@ def txn_path(first_target) -> Path:
 def write_pair(files, backup: bool = True, log=None) -> list[Path]:
     """Replace several files as one all-or-nothing transaction.
 
-    ``files`` is a sequence of ``(path, data)``. Steps:
+    ``files`` is a sequence of ``(path, data)``; ``data`` is bytes-like or a
+    callable ``writer(fileobj)`` that streams the content. Steps:
 
     1. optional rolling ``.bak`` of each existing target;
     2. every new file is written to a temp sibling and fsynced;
