@@ -210,6 +210,12 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
             W("note.longLength", f"type {n['type']} has no longNoteLength (-1)")
             break
 
+    # ---- timing / structure rules (each names its "track N" for the dialog) --
+    try:
+        _structure_checks(tracks, notes, branched, issues)
+    except Exception as exc:                      # never let a rule hide the others
+        logger.warning("structure checks failed: %s", exc)
+
     # ---- per-difficulty note-buffer limit ----------------------------------
     if difficulty:
         limit = tja2sht.DIFFICULTY_NOTE_LIMIT.get(difficulty.lower())
@@ -227,6 +233,178 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
     I("summary", f"{len(tracks)} measures, {len(notes)} notes, "
                  f"first={times[0]:.0f}ms last={times[-1]:.0f}ms" if times else "empty")
     return issues
+
+
+# Rules added by _structure_checks (their details always start "track N ...", so
+# the dialog can jump to the measure).
+STRUCTURE_RULES = frozenset({
+    "note.outOfMeasure", "note.pastMeasure", "note.overlap", "note.beforeZero",
+    "long.overrun", "long.zero", "balloon.hits", "track.bpmHigh",
+    "track.length", "track.gogoBlip", "branch.copyMismatch",
+})
+_CAP = 8                      # issues listed per rule before "... and N more"
+_BPM_ABSURD = 1000.0
+_GOGO_BLIP_MS = 4000.0       # one 4/4 bar down to 60 bpm
+
+
+def _structure_checks(tracks, notes, branched, issues):
+    """Timing rules on the parsed model. A note's time is its track's time plus
+    pos/48 of a 4/4 bar at the track's bpm (240000/bpm ms; see tja2sht), a
+    roll/balloon's longNoteLength is milliseconds. Tolerances are a couple of
+    grid units because the converter places a roll's end ('8') finer than the
+    1/48 grid."""
+    count: dict[str, int] = {}
+
+    def add(sev, rule, detail):
+        c = count[rule] = count.get(rule, 0) + 1
+        if c <= _CAP:
+            issues.append(Issue(sev, rule, detail))
+
+    ntr, nn = len(tracks), len(notes)
+
+    def bar_of(t):
+        b = t["bpm"]
+        return 240000.0 / b if (b > 0 and math.isfinite(b)) else None
+
+    def slice_of(t, si):
+        s = t["subtracks"][si]
+        st, cnt = s["noteIndexSt"], s["noteCount"]
+        if st < 0 or cnt <= 0 or st >= nn:
+            return st, 0
+        return st, min(cnt, nn - st)
+
+    # ---- tracks: bpm, length, gogo blips -----------------------------------
+    for i, t in enumerate(tracks):
+        b = t["bpm"]
+        if math.isfinite(b) and b > _BPM_ABSURD:
+            add(WARN, "track.bpmHigh",
+                f"track {i}: bpm={b:g} is above {_BPM_ABSURD:g} (probably a typo)")
+        if i + 1 < ntr:
+            gap = tracks[i + 1]["time"] - t["time"]
+            if math.isfinite(gap) and gap <= 0:
+                has = any(slice_of(t, si)[1] for si in range(6))
+                if gap < 0:
+                    add(WARN, "track.length",
+                        f"track {i}: negative length ({gap:.1f} ms) — the next "
+                        f"measure starts before this one")
+                elif has:
+                    add(WARN, "track.length",
+                        f"track {i}: zero length but it holds notes "
+                        f"(they all land on one instant)")
+                else:
+                    add(INFO, "track.length", f"track {i}: zero length (empty)")
+            if (0 < i and i + 1 < ntr and math.isfinite(gap)
+                    and t["gogoFlag"] != tracks[i - 1]["gogoFlag"]
+                    and tracks[i - 1]["gogoFlag"] == tracks[i + 1]["gogoFlag"]
+                    and 0 < gap < _GOGO_BLIP_MS):
+                add(INFO, "track.gogoBlip",
+                    f"track {i}: go-go flag toggles for this one short measure only")
+
+    # ---- per-note checks, once per referenced note --------------------------
+    seen: set[int] = set()
+    for i, t in enumerate(tracks):
+        bar = bar_of(t)
+        nxt = tracks[i + 1]["time"] if i + 1 < ntr else None
+        for si in range(6):
+            st, cnt = slice_of(t, si)
+            for k in range(cnt):
+                idx = st + k
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                n = notes[idx]
+                ty, pos = n["type"], n["measure"]
+                if pos < 0 or pos >= 48:
+                    add(ERROR, "note.outOfMeasure",
+                        f"track {i} slot {si}: note position {pos} is outside "
+                        f"the measure grid 0..47")
+                elif (bar is not None and nxt is not None
+                      and math.isfinite(nxt - t["time"]) and nxt - t["time"] > 0
+                      and pos / 48.0 * bar > (nxt - t["time"]) + 1.0):
+                    add(WARN, "note.pastMeasure",
+                        f"track {i} slot {si}: note at position {pos} "
+                        f"({pos / 48.0 * bar:.0f} ms) lies past the end of its "
+                        f"measure ({nxt - t['time']:.0f} ms long)")
+                if ty in (10, 12) and n["balloonHitCount"] <= 0:
+                    add(WARN, "balloon.hits",
+                        f"track {i} slot {si}: balloon/kusudama at position {pos} "
+                        f"has {n['balloonHitCount']} hits (needs at least 1)")
+                if ty in LEN_CARRYING_TYPES and n["longNoteLength"] == 0:
+                    add(WARN, "long.zero",
+                        f"track {i} slot {si}: roll/balloon at position {pos} "
+                        f"has zero duration")
+
+    # ---- per route: shared slots, roll/balloon overruns ---------------------
+    times = [t["time"] for t in tracks]
+    finite = [x for x in times if math.isfinite(x)]
+    chart_end = None
+    if tracks and bar_of(tracks[-1]) is not None and math.isfinite(times[-1]):
+        chart_end = times[-1] + bar_of(tracks[-1])
+    first_note = None                                 # (time, track)
+    reported_over: set[tuple] = set()
+    reported_dup: set[tuple] = set()
+    for r in (range(3) if branched else (0,)):
+        ev = []                                       # (time, track, note, bar)
+        for i, t in enumerate(tracks):
+            bar = bar_of(t)
+            st, cnt = slice_of(t, r)
+            if bar is None or not math.isfinite(t["time"]) or cnt == 0:
+                continue
+            seen_pos: dict[int, int] = {}
+            for k in range(cnt):
+                n = notes[st + k]
+                p = n["measure"]
+                if 0 <= p < 48:
+                    seen_pos[p] = seen_pos.get(p, 0) + 1
+                ev.append((t["time"] + p / 48.0 * bar, i, n, bar))
+            for p, c in seen_pos.items():
+                if c > 1 and (i, p) not in reported_dup:
+                    reported_dup.add((i, p))
+                    add(INFO, "note.overlap",
+                        f"track {i}: {c} notes share position {p} in one route")
+        for j, (tm, i, n, bar) in enumerate(ev):
+            if first_note is None or tm < first_note[0]:
+                first_note = (tm, i)
+            if n["type"] not in LEN_CARRYING_TYPES or n["longNoteLength"] <= 0:
+                continue
+            end = tm + n["longNoteLength"]
+            key = (i, n["measure"], n["type"])
+            if key in reported_over:
+                continue
+            if j + 1 < len(ev) and ev[j + 1][0] >= tm:
+                nt, ni, _nn, nbar = ev[j + 1]
+                if end > nt + 2.0 + 2.0 * nbar / 48.0:
+                    reported_over.add(key)
+                    add(WARN, "long.overrun",
+                        f"track {i}: roll/balloon at position {n['measure']} ends "
+                        f"{end - nt:.0f} ms after the next note (track {ni})")
+            elif j + 1 == len(ev) and chart_end is not None:
+                if end > chart_end + 2.0 + 2.0 * bar / 48.0:
+                    reported_over.add(key)
+                    add(WARN, "long.overrun",
+                        f"track {i}: roll/balloon at position {n['measure']} ends "
+                        f"{end - chart_end:.0f} ms past the end of the chart")
+    if first_note is not None and first_note[0] < 0:
+        add(INFO, "note.beforeZero",
+            f"track {first_note[1]}: first note is at {first_note[0]:.0f} ms "
+            f"(before 0 ms)")
+
+    # ---- branch charts: the second copy of each route must equal the first ---
+    if branched:
+        for i, t in enumerate(tracks):
+            for a in (1, 2):
+                sa, ca = slice_of(t, a)
+                sb, cb = slice_of(t, a + 3)
+                sig = lambda s, c: [(x["type"], x["measure"], x["balloonHitCount"],
+                                     x["longNoteLength"]) for x in notes[s:s + c]]
+                if ca != cb or (sa != sb and sig(sa, ca) != sig(sb, cb)):
+                    add(WARN, "branch.copyMismatch",
+                        f"track {i}: sub-track {a} and its copy {a + 3} differ "
+                        f"(the six copies of a branched measure should agree)")
+
+    for rule, c in count.items():
+        if c > _CAP:
+            issues.append(Issue(INFO, rule, f"... and {c - _CAP} more {rule} issues"))
 
 
 def verdict(issues: list[Issue]) -> str:
@@ -262,6 +440,12 @@ def suggestion_for(issue: Issue) -> str:
         return tr("The file cannot be read as a chart. Convert it again from the TJA.")
     if r in ("track.bpm", "track.time", "track.scroll"):
         return tr("Fix the #BPMCHANGE / #SCROLL / #DELAY command near this measure in the TJA.")
+    if r in ("track.bpmHigh", "track.length"):
+        return tr("Check #BPMCHANGE, #MEASURE and #DELAY near this measure in the TJA.")
+    if r in ("long.overrun", "long.zero", "balloon.hits"):
+        return tr("Check the roll / balloon here: it needs an end (8), a duration and at least one hit.")
+    if r == "branch.copyMismatch":
+        return tr("Rebuild the branch with the converter; the six route copies must match.")
     if r == "track.firstTime":
         return tr("Check OFFSET and the first #DELAY in the TJA.")
     if r == "track.timeOrder":
