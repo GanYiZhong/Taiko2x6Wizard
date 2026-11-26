@@ -28,17 +28,7 @@ from taiko2x6.app.i18n import tr
 from taiko2x6.app.dialog_polish import polish
 
 
-def is_vag(data: bytes) -> bool:
-    """Heuristic: the game's interleaved-VAG container header.
-
-    Accept interleave in (0, 0x8000): decode_vag tolerates interleave == 0 by
-    treating it as the standard block size, so is_vag must classify the same
-    files as decodable (kept in sync with vagtool.decode_vag).
-    """
-    if len(data) < 0x10:
-        return False
-    interleave, _size, ch, rate = struct.unpack_from("<4I", data, 0)
-    return interleave in (0, 0x8000) and ch in (1, 2) and 8000 <= rate <= 48000
+from taiko2x6.audio.vagsniff import is_vag  # noqa: E402,F401  (light module)
 
 
 def _write_wav(path: str, pcm: np.ndarray, rate: int, channels: int):

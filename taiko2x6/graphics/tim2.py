@@ -14,7 +14,19 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-import numpy as np
+
+
+class _LazyNumpy:
+    """Defer the ~150 ms numpy import until the first image is decoded; the
+    first attribute access swaps the real module into this module's ``np``."""
+
+    def __getattr__(self, name):
+        import numpy
+        globals()["np"] = numpy
+        return getattr(numpy, name)
+
+
+np = _LazyNumpy()
 
 
 def is_tim2(data: bytes) -> bool:
