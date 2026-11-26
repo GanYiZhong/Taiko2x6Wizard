@@ -94,6 +94,12 @@ def gen_tja(seed, measures=60, courses=("Easy", "Normal", "Hard", "Oni", "Edit")
 SEEDS = range(40)
 
 
+def _old_rules(issues):
+    """Issues from rules the reference validator already had (the structure
+    rules added later are tested in test_sht_validator_rules.py)."""
+    return [str(i) for i in issues if i.rule not in newv.STRUCTURE_RULES]
+
+
 @pytest.mark.parametrize("seed", SEEDS)
 def test_convert_and_validate_match_old(seed):
     txt = gen_tja(seed, measures=10 + seed * 3, branch=seed % 4 != 0)
@@ -105,7 +111,7 @@ def test_convert_and_validate_match_old(seed):
                 == old.convert_tja(txt, diff, branches=False))
     for diff, data in got.items():
         d = diff.split("_")[0]
-        assert [str(i) for i in newv.validate_sht(data, d)] == \
+        assert _old_rules(newv.validate_sht(data, d)) == \
             [str(i) for i in oldv.validate_sht(data, d)]
         m_new, m_old = new.parse_sht(data), old.parse_sht(data)
         assert m_new == m_old
@@ -136,5 +142,5 @@ def test_sht_variants_and_corrupt_validate_match_old():
         if rnd.random() < .3:
             b = b[:rnd.randrange(len(b))]
         b = bytes(b)
-        assert [str(i) for i in newv.validate_sht(b, "hard")] == \
+        assert _old_rules(newv.validate_sht(b, "hard")) == \
             [str(i) for i in oldv.validate_sht(b, "hard")]
