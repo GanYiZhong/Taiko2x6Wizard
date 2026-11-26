@@ -109,7 +109,7 @@ def _factories():
     from taiko2x6.charts import chart_convert, sht_validator
     from taiko2x6.exe import taiko_exe, usb_keyboard
     from taiko2x6.graphics import flipbook_player, songtex, songtex_all, swg_editor
-    from taiko2x6.ps2 import (apa_merge, hdd_browser, hdd_song_wizard, img_slim,
+    from taiko2x6.ps2 import (apa_merge, backups_undo, hdd_browser, hdd_song_wizard, img_slim,
                               iso_packer, pfsshell_tool, ps2mc_card)
     from taiko2x6.songs import (generators, omnimix_gui, song_builder,
                                 song_manager, song_replacer)
@@ -160,6 +160,7 @@ def _factories():
         "HddBrowserDialog": hdd_browser.HddBrowserDialog,
         "HddSongWizard": hdd_song_wizard.HddSongWizard,
         "ImgSlimDialog": img_slim.ImgSlimDialog,
+        "BackupsUndoDialog": backups_undo.BackupsUndoDialog,
         "PackIsoDialog": lambda: iso_packer.PackIsoDialog(
             tmp / "DATA.000", tmp / "LIST.BIN", str(tmp / "a.iso")),
         "PfsShellDialog": pfsshell_tool.PfsShellDialog,
@@ -175,7 +176,7 @@ def _factories():
     }
 
 
-NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog']
+NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'BackupsUndoDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog']
 
 
 @pytest.fixture(autouse=True)

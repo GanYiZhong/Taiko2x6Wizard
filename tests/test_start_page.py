@@ -35,7 +35,7 @@ def test_each_card_triggers_its_slot(win, monkeypatch):
     names = ["open_archive_dialog", "open_pack_iso", "open_song_manager",
              "open_song_builder", "open_song_replacer", "open_omnimix",
              "open_taiko_boot", "open_taiko_exe", "open_taiko_timer",
-             "open_usb_keyboard", "open_pfsshell", "open_ps2mc", "open_img_slim"]
+             "open_usb_keyboard", "open_pfsshell", "open_ps2mc", "open_img_slim", "open_backups"]
     called = []
     for n in names:
         monkeypatch.setattr(win, n, lambda n=n: called.append(n))

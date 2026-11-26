@@ -37,7 +37,8 @@ from pathlib import Path
 
 __all__ = [
     "atomic_write", "make_backup", "write_pair", "recover_pair", "txn_path",
-    "UndoJournal", "rollback", "journal_info", "undo_path_for",
+    "UndoJournal", "rollback", "journal_info", "journal_ranges",
+    "undo_path_for",
 ]
 
 
@@ -359,8 +360,11 @@ class UndoJournal:
             pass
 
 
-def _iter_records(journal: Path):
+def _iter_records(journal: Path, skip_data: bool = False):
+    """Parse a journal. ``skip_data`` seeks over the saved bytes (yielding
+    ``None`` for them) so a listing does not read a gigabyte-sized journal."""
     with open(journal, "rb") as j:
+        total = os.fstat(j.fileno()).st_size
         hdr = j.read(_HDR.size)
         if len(hdr) < _HDR.size:
             raise ValueError(f"{journal}: not an undo journal (too short)")
@@ -374,6 +378,12 @@ def _iter_records(journal: Path):
                 return                       # clean end or torn header
             off, ln, flags = _REC.unpack(rh)
             if flags & _FLAG_ZERO:
+                yield ("rec", off, ln, None)
+                continue
+            if skip_data:
+                if j.tell() + ln > total:
+                    return                   # torn tail
+                j.seek(ln, 1)
                 yield ("rec", off, ln, None)
                 continue
             data = j.read(ln)
@@ -390,6 +400,21 @@ def journal_info(journal) -> dict:
         n += 1
         total += ln
     return {"original_size": orig, "records": n, "bytes": total}
+
+
+def journal_ranges(journal) -> dict:
+    """Read-only summary of what a journal covers: the original file size and
+    the saved byte ranges (adjacent ones merged), without loading the data."""
+    it = _iter_records(Path(journal), skip_data=True)
+    _, orig = next(it)
+    ranges: list[list[int]] = []
+    for _, off, ln, _d in sorted(it, key=lambda r: r[1]):
+        if ranges and off <= ranges[-1][0] + ranges[-1][1]:
+            ranges[-1][1] = max(ranges[-1][1], off + ln - ranges[-1][0])
+        else:
+            ranges.append([off, ln])
+    return {"original_size": orig, "ranges": [(a, b) for a, b in ranges],
+            "bytes": sum(b for _, b in ranges)}
 
 
 def rollback(journal, target=None, log=None) -> dict:
