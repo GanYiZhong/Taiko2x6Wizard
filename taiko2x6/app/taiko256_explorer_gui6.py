@@ -708,57 +708,87 @@ class MainWindow(QMainWindow):
         self.btn_opts.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
 
     def _build_start_page(self) -> QWidget:
-        page = QWidget()
-        v = QVBoxLayout(page)
-        v.setContentsMargins(32, 32, 32, 32)
-        v.addStretch(1)
-        title = QLabel("Taiko2x6Wizard")
-        f = title.font(); f.setPointSize(f.pointSize() + 10); f.setBold(True)
-        title.setFont(f)
-        v.addWidget(title)
-        sub = QLabel(tr("Pick where to start. Everything here is also in the "
-                        "File and Tools menus."))
-        sub.setWordWrap(True)
-        sub.setStyleSheet("color:palette(mid);")
-        v.addWidget(sub)
-        v.addSpacing(16)
-        self._start_buttons = []
-        for label, hint, slot in (
+        from taiko2x6.app.start_page import StartPage
+        S = QStyle
+        groups = [
+            (tr("Archive"), [
                 (tr("Open archive folder…"),
                  tr("A folder with DATA.000 + list.bin: browse, preview, replace files."),
-                 lambda: self.open_archive_dialog()),
-                (tr("Open PS2 HDD image…"),
-                 tr("Browse a Taiko HDD .img and extract or replace DATA.000 / list.bin."),
-                 lambda: self.open_pfsshell()),
+                 S.SP_DirOpenIcon, lambda: self.open_archive_dialog()),
+                (tr("Pack to ISO…"),
+                 tr("Inject the current DATA.000 + LIST.BIN into a new game ISO"),
+                 S.SP_DriveCDIcon, lambda: self.open_pack_iso()),
+            ]),
+            (tr("Songs & charts"), [
+                (tr("Song Manager…"),
+                 tr("Edit, add or remove songs across musicinfo, tuning and streaminfo."),
+                 S.SP_FileDialogContentsView, lambda: self.open_song_manager()),
+                (tr("Custom Song Builder…"),
+                 tr("Build a song from a TJA and audio: textures, charts, VAG, stars."),
+                 S.SP_FileDialogNewFolder, lambda: self.open_song_builder()),
+                (tr("Song Replacer…"),
+                 tr("Overwrite an existing song slot with a custom song."),
+                 S.SP_BrowserReload, lambda: self.open_song_replacer()),
                 (tr("Omnimix Maker…"),
                  tr("Merge the songs of several Taiko images into one."),
-                 lambda: self.open_omnimix()),
+                 S.SP_FileDialogDetailedView, lambda: self.open_omnimix()),
+            ]),
+            (tr("Game patches"), [
                 (tr("Boot & select patches…"),
                  tr("Skip the Notice / credits screens, freeze the select timers."),
-                 lambda: self.open_taiko_boot())):
-            b = QPushButton(label.replace("&", "&&"))
-            b.setMinimumHeight(40)
-            b.setStyleSheet("text-align:left; padding:6px 14px; font-weight:bold;")
-            b.clicked.connect(slot)
-            v.addWidget(b)
-            h = QLabel(hint)
-            h.setWordWrap(True)
-            h.setStyleSheet("color:palette(mid); margin:0 0 10px 14px;")
-            v.addWidget(h)
-            self._start_buttons.append(b)
-        # setup checklist: only visible while something important is missing
-        self.setup_box = QLabel()
-        self.setup_box.setWordWrap(True)
-        self.setup_box.setStyleSheet(
-            "background:rgba(224,160,48,40); color:palette(text); border:1px solid rgba(224,160,48,160);"
-            "border-radius:4px; padding:8px;")
-        v.addWidget(self.setup_box)
-        self.btn_setup = QPushButton(tr("Open Settings…"))
+                 S.SP_DriveHDIcon, lambda: self.open_taiko_boot()),
+                (tr("Patch taiko song limit (T14+)…"),
+                 tr("Raise the 210-song ceiling in the taiko executable."),
+                 S.SP_DriveHDIcon, lambda: self.open_taiko_exe()),
+                (tr("Song-select timer (T14+)…"),
+                 tr("Change the song-select countdown to any value from 1 to 999 s."),
+                 S.SP_DriveHDIcon, lambda: self.open_taiko_timer()),
+                (tr("USB keyboard patch (T14)…"),
+                 tr("Play Taiko 14 with a USB keyboard and no JVS I/O board."),
+                 S.SP_DriveHDIcon, lambda: self.open_usb_keyboard()),
+            ]),
+            (tr("HDD & disc"), [
+                (tr("Open PS2 HDD image…"),
+                 tr("Browse a Taiko HDD .img and extract or replace DATA.000 / list.bin."),
+                 S.SP_DriveHDIcon, lambda: self.open_pfsshell()),
+                (tr("Open PS2 Memory Card (Arcade/COH)…"),
+                 tr("Browse a PS2 or MagicGate Arcade memory-card image."),
+                 S.SP_DriveFDIcon, lambda: self.open_ps2mc()),
+                (tr("Slim PS2 HDD image…"),
+                 tr("Make a PS2 HDD image smaller."),
+                 S.SP_DriveHDIcon, lambda: self.open_img_slim()),
+            ]),
+        ]
+        page = StartPage(groups, self._open_recent_entry, self._recent_entries,
+                         self._remove_recent_entry)
+        self.start_page = page
+        self.setup_box = page.setup_box
+        self.btn_setup = page.btn_setup
         self.btn_setup.clicked.connect(self.open_settings)
-        v.addWidget(self.btn_setup, 0, Qt.AlignLeft)
+        self._start_buttons = page.cards
         self._refresh_setup_box()
-        v.addStretch(2)
         return page
+
+    def _recent_entries(self) -> list[tuple[str, str]]:
+        out = [("folder", p) for p in self._recent_folders()]
+        raw = QSettings("TaikoTools", "SYSTEM256Explorer").value("recent_hdd_img", "")
+        if raw:
+            out.append(("image", str(raw)))
+        return out
+
+    def _open_recent_entry(self, kind: str, path: str):
+        if kind == "folder":
+            self.open_folder(Path(path))
+        else:
+            self.open_pfsshell()
+
+    def _remove_recent_entry(self, kind: str, path: str):
+        if kind == "folder":
+            keep = [p for p in self._recent_folders() if p != path]
+            appconfig.set_value("recent", "folders", "|".join(keep))
+            self._refresh_recent_menu()
+        else:
+            QSettings("TaikoTools", "SYSTEM256Explorer").remove("recent_hdd_img")
 
     def _refresh_setup_box(self):
         from taiko2x6.app import settings_dialog
@@ -982,6 +1012,8 @@ class MainWindow(QMainWindow):
         cur = [p for p in self._recent_folders() if p != str(folder)]
         appconfig.set_value("recent", "folders", "|".join(([str(folder)] + cur)[:8]))
         self._refresh_recent_menu()
+        if getattr(self, "start_page", None) is not None:
+            self.start_page.refresh_recent()
 
     def _refresh_recent_menu(self):
         self.recent_menu.clear()
