@@ -957,7 +957,8 @@ class SongManager(QDialog):
         QShortcut(QKeySequence(Qt.Key_Escape), self.ed_filter,
                   activated=self._escape_in_search, context=Qt.WidgetShortcut)
         self.setTabOrder(self.ed_filter, self.cb_genre)
-        self.setTabOrder(self.cb_genre, self.tbl)
+        self.setTabOrder(self.cb_genre, self.chk_changed)
+        self.setTabOrder(self.chk_changed, self.tbl)
         self._restore_prefs()
         self._apply_filter()
         self._update_buttons()
@@ -971,7 +972,7 @@ class SongManager(QDialog):
         if self.ed_filter.text():
             self.ed_filter.clear()
         else:
-            self.tbl.setFocus()
+            self.reject()           # empty search: Esc closes, as everywhere
 
     # -- rows --------------------------------------------------------------- #
     def _uid_for(self, song) -> int:
@@ -1144,7 +1145,7 @@ class SongManager(QDialog):
 
     # -- validation / write-through ---------------------------------------- #
     def _set_status(self, text, error=False):
-        self.lbl_status.setStyleSheet("color:#d44;" if error else "")
+        self.lbl_status.setStyleSheet("color: palette(bright-text);" if error else "")
         self.lbl_status.setText(text)
 
     def _apply_cell(self, song, col, text):
