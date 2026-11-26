@@ -67,14 +67,25 @@ def align(n: int, a: int) -> int:
     return (n + a - 1) // a * a
 
 
+def _xor_with_key(data, key_stream: bytes) -> bytes:
+    n = len(data)
+    x = int.from_bytes(data, "little") ^ int.from_bytes(key_stream[:n], "little")
+    return x.to_bytes(n, "little")
+
+
+def _key_stream(n: int) -> bytes:
+    return KEY * (n // len(KEY) + 1)
+
+
 def crypt_list(data: bytes) -> bytes:
-    return bytes(b ^ KEY[i & 0xFF] for i, b in enumerate(data))
+    return _xor_with_key(data, _key_stream(len(data)))
 
 
 def crypt_data_block(data: bytes) -> bytes:
     out = bytearray(data)
-    for chunk_index in range((len(out) + 15) // 16):
-        out[chunk_index * 16] ^= KEY[chunk_index & 0xFF]
+    n = (len(out) + 15) // 16
+    if n:
+        out[0::16] = _xor_with_key(out[0::16], _key_stream(n))
     return bytes(out)
 
 
