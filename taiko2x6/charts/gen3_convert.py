@@ -36,6 +36,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 from taiko2x6.charts import tja2sht
 
@@ -70,25 +71,63 @@ _NOTE_SIZE = 24
 _POS_DIV = 48          # gen2 in-measure grid
 
 
+_AES_IMPL = None        # resolved once: probing a missing module per file is slow
+
+
+def _aes_impl():
+    """(decrypt, encrypt) callables taking (key, iv, data), picked once.
+
+    A failed `import Crypto` re-walks sys.path every time, which cost more than
+    the decryption itself over a whole folder.
+    """
+    global _AES_IMPL
+    if _AES_IMPL is None:
+        try:
+            from Crypto.Cipher import AES
+
+            def dec(key, iv, data):
+                return AES.new(key, AES.MODE_CBC, iv).decrypt(data)
+
+            def enc(key, iv, data):
+                return AES.new(key, AES.MODE_CBC, iv).encrypt(data)
+        except ImportError:
+            from cryptography.hazmat.primitives.ciphers import (
+                Cipher, algorithms, modes)
+
+            def dec(key, iv, data):
+                d = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+                return d.update(data) + d.finalize()
+
+            def enc(key, iv, data):
+                e = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+                return e.update(data) + e.finalize()
+        _AES_IMPL = (dec, enc)
+    return _AES_IMPL
+
+
 def decrypt_fumen(path, key=FUMEN_KEY):
-    """AES-256-CBC (IV = first 16 bytes), strip PKCS7, gunzip."""
+    """AES-256-CBC (IV = first 16 bytes), strip PKCS7, gunzip.
+
+    Raises ValueError (naming the file) for anything that is not a well-formed
+    envelope, so a batch can report the file and carry on.
+    """
     raw = pathlib.Path(path).read_bytes()
     if len(raw) < 32:
         raise ValueError("%s: too small to be a Gen3 fumen (%d bytes)"
                          % (path, len(raw)))
     iv, body = raw[:16], raw[16:]
-    try:
-        from Crypto.Cipher import AES
-        dec = AES.new(key, AES.MODE_CBC, iv).decrypt(body)
-    except ImportError:
-        from cryptography.hazmat.primitives.ciphers import (
-            Cipher, algorithms, modes)
-        d = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-        dec = d.update(body) + d.finalize()
+    if len(body) % 16:
+        raise ValueError("%s: truncated (encrypted size %d is not a multiple "
+                         "of 16)" % (path, len(body)))
+    dec = _aes_impl()[0](key, iv, body)
     pad = dec[-1] if dec else 0
     if 1 <= pad <= 16 and dec[-pad:] == bytes([pad]) * pad:
         dec = dec[:-pad]
-    return gzip.decompress(dec)
+    try:
+        return gzip.decompress(dec)
+    except (OSError, EOFError, zlib.error) as e:
+        raise ValueError("%s: cannot decompress (wrong key, or corrupt/"
+                         "truncated file): %s" % (path, e)) from None
 
 
 # Note types carrying 8 extra bytes beyond the standard 24. Established by
