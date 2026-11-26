@@ -78,8 +78,13 @@ def _read_tja_text(path: str) -> tuple:
 # --------------------------------------------------------------------------- #
 def song_ids(archive) -> list:
     """The 90 song ids in index order (from tuning's music_ pool)."""
-    tu = TU.parse(_read_named(archive, "tuning.bin"))
-    return [s.text[len("music_"):] for s in tu.strings if s.text.startswith("music_")]
+    return song_ids_from(_read_named(archive, "tuning.bin"))
+
+
+def song_ids_from(tuning: bytes) -> list:
+    """song_ids of tuning.bin bytes already read."""
+    return [s.text[len("music_"):] for s in TU.pool_strings(tuning)
+            if s.text.startswith("music_")]
 
 
 def _read_named(archive, filename):

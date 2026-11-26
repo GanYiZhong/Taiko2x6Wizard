@@ -35,6 +35,7 @@ Anything untouched re-serialises identically, so ``serialize(parse(d)) == d``.
 """
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass, field
 
@@ -135,13 +136,12 @@ def _pool_is_printable_to_eof(data: bytes, pool_offset: int) -> bool:
     region = data[pool_offset:]
     if not region:
         return False
-    for b in region:
-        if b == 0x00 or b == 0x09:        # NUL separator / tab
-            continue
-        if 0x20 <= b <= 0xFF:             # printable ASCII or UTF-8 byte
-            continue
-        return False                       # ASCII control byte -> not a pool
-    return True
+    # every byte must be NUL, tab or >= 0x20: deleting those leaves any
+    # ASCII control byte, which marks a record region rather than a pool
+    return not region.translate(None, _POOL_OK_BYTES)
+
+
+_POOL_OK_BYTES = bytes([0x00, 0x09]) + bytes(range(0x20, 0x100))
 
 
 # --------------------------------------------------------------------------- #
@@ -425,14 +425,11 @@ def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_I
     difficulty record) start every block; the gap to the next group of four
     marks the block boundary.
     """
-    negs = []
-    end = pool_offset - 3
-    off = 0
-    while off < end:
-        v = struct.unpack_from("<i", data, off)[0]
-        if -300 < v < -1:
-            negs.append(off)
-        off += 4
+    # one int32 per 4 bytes of [0, pool_offset): same offsets as the old
+    # byte-stepping loop, unpacked in a single C call
+    n = max(0, pool_offset) // 4
+    negs = [4 * i for i, (v,) in enumerate(struct.iter_unpack("<i", data[:4 * n]))
+            if -300 < v < -1]
     if not negs:
         return []
 
@@ -540,22 +537,18 @@ def _validate_blocks(model: TuningModel) -> bool:
     return True
 
 
+_POOL_STRING_RE = re.compile(rb"[ -~]{2,}")
+
+
 def _extract_pool_strings(data: bytes, pool_offset: int):
-    out = []
-    n = len(data)
-    i = pool_offset
-    while i < n:
-        b = data[i]
-        if 0x20 <= b < 0x7F:
-            j = i
-            while j < n and 0x20 <= data[j] < 0x7F:
-                j += 1
-            if (j - i) >= 2:
-                out.append(PoolString(offset=i, text=data[i:j].decode("ascii", "replace")))
-            i = j
-        else:
-            i += 1
-    return out
+    return [PoolString(offset=m.start(), text=m.group().decode("ascii", "replace"))
+            for m in _POOL_STRING_RE.finditer(data, pool_offset)]
+
+
+def pool_strings(data: bytes):
+    """parse(data).strings without the block scan (the strings do not depend
+    on it): the cheap way to list a tuning.bin's ids and titles."""
+    return _extract_pool_strings(data, _find_pool_offset(data))
 
 
 def serialize(model: TuningModel) -> bytes:
