@@ -175,6 +175,10 @@ class Archive:
     def stage_replace(self, group_index: int, file_index: int, data: bytes):
         self.replacements[(group_index, file_index)] = data
 
+    def unstage(self, group_index: int, file_index: int) -> bool:
+        """Drop one staged replacement. Returns True if there was one."""
+        return self.replacements.pop((group_index, file_index), None) is not None
+
     def stage_compact(self, group_index: int):
         """Rebuild this group tightly on save and let its decompressed size
         shrink. The game allocates a group's decompressed size when it loads
