@@ -12,7 +12,7 @@ TRANSLATED = ["taiko2x6/app/taiko256_explorer_gui6.py", "taiko2x6/songs/omnimix_
               "taiko2x6/ps2/hdd_song_wizard.py", "taiko2x6/ps2/hdd_browser.py", "taiko2x6/ps2/iso_packer.py",
               "taiko2x6/ps2/img_slim.py", "taiko2x6/ps2/backups_undo.py", "taiko2x6/ps2/apa_merge.py",
               "taiko2x6/ps2/pfsshell_tool.py", "taiko2x6/ps2/dialog_kit.py",
-              "taiko2x6/songs/song_builder.py", "taiko2x6/songs/song_replacer.py", "taiko2x6/songs/song_manager.py",
+              "taiko2x6/songs/song_builder.py", "taiko2x6/songs/batch_add.py", "taiko2x6/songs/song_replacer.py", "taiko2x6/songs/song_manager.py",
               "taiko2x6/songs/song_dialog_ui.py", "taiko2x6/app/settings_dialog.py", "taiko2x6/app/jobs.py",
               "taiko2x6/charts/chart_convert.py", "taiko2x6/songs/generators.py",
               "taiko2x6/ps2/iso_packer.py", "taiko2x6/ps2/apa_merge.py",

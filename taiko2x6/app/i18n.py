@@ -1485,3 +1485,55 @@ _ARCHIVE_COMPARE_ZH = {
     'Report saved: {n} rows.': '報告已儲存：{n} 列。',
 }
 ZH_TW.update(_ARCHIVE_COMPARE_ZH)
+_BATCH_ADD_ZH = {
+    'Batch add songs': '批次新增歌曲',
+    'Batch add songs…': '批次新增歌曲…',
+    'Add many songs at once: pick a folder of TJAs / Gen3 song folders, untick what you do not want, and build them all as new songs.':
+        '一次新增多首歌：選一個放有 TJA / Gen3 歌曲資料夾的資料夾，取消勾選不要的，再全部建為新歌。',
+    'The existing song whose texture and chart layout every new song copies.': '每首新歌都會沿用其貼圖與譜面配置的既有歌曲。',
+    'template (id):': '範本（id）：',
+    'Add folder…': '加入資料夾…',
+    'Find every TJA (with its audio) and Gen3 song folder inside a folder.': '找出資料夾內所有 TJA（含其音訊）與 Gen3 歌曲資料夾。',
+    'Add TJA files…': '加入 TJA 檔案…',
+    'Clear list': '清空清單',
+    'Pick a folder, or drop TJA files and Gen3 song folders here. Untick what you do not want; the new id can be edited.':
+        '選擇資料夾，或把 TJA 檔案與 Gen3 歌曲資料夾拖放到這裡。取消勾選不要的歌；新 id 可以修改。',
+    'Title': '曲名',
+    'New id': '新 id',
+    'Courses (stars)': '難度（星數）',
+    'Audio': '音訊',
+    'Problems': '問題',
+    'Double-click to edit the new song id.': '點兩下可修改新歌 id。',
+    'Build selected → stage': '建立所選歌曲 → 暫存',
+    'Close': '關閉',
+    'Choose a folder of songs': '選擇歌曲資料夾',
+    'Choose TJA files': '選擇 TJA 檔案',
+    'Scanning…': '掃描中…',
+    'Found {n} song(s).': '找到 {n} 首歌。',
+    'No template song in this archive.': '此封存檔中沒有可用的範本歌曲。',
+    'Nothing selected.': '尚未選擇任何歌曲。',
+    "{total} songs is more than the game's tables can hold ({limit}).": '{total} 首歌超過遊戲資料表的容量（{limit}）。',
+    '{total} songs is past the stock ceiling of {limit}: raise it first (Tools > taiko executable patches), or the game will not show them all.':
+        '{total} 首歌超過原版上限 {limit}：請先提高上限（工具 > taiko 執行檔修補），否則遊戲無法全部顯示。',
+    '{n} song(s) ready to build.': '{n} 首歌可以建立。',
+    "This archive's song-DB bins disagree on the song count; adding songs would produce a non-bootable file. Reload a clean DATA.000 / LIST.BIN first.":
+        '此封存檔的歌曲資料庫 bin 檔歌曲數不一致，新增歌曲會產生無法開機的檔案。請先重新載入乾淨的 DATA.000 / LIST.BIN。',
+    'Building {i}/{n}: {sid} — rebuilding DATA.000, please wait…': '正在建立 {i}/{n}：{sid} — 重建 DATA.000 中，請稍候…',
+    '[{i}/{n}] {sid} — {title}': '[{i}/{n}] {sid} — {title}',
+    'OK': '完成',
+    'FAILED: {err}': '失敗：{err}',
+    'Done: {ok} built, {bad} failed.': '完成：成功 {ok} 首，失敗 {bad} 首。',
+    'failed: {sid}: {err}': '失敗：{sid}：{err}',
+    'Close this dialog to write DATA.000 + LIST.BIN.': '關閉此視窗即可寫入 DATA.000 + LIST.BIN。',
+    'no playable courses': '沒有可玩的難度',
+    'audio not found': '找不到音訊',
+    'no BPM: header': '缺少 BPM: 標頭',
+    'id must be 1-16 characters of a-z, 0-9 or _': 'id 必須是 1–16 個 a-z、0-9 或 _ 字元',
+    'id already in use': 'id 已被使用',
+    "no star ratings in the game data; the template's are used": '遊戲資料中沒有星數；改用範本的星數',
+    'yes': '是',
+    'no': '否',
+    'Could not list songs: {err}': '無法列出歌曲：{err}',
+}
+for _k, _v in _BATCH_ADD_ZH.items():
+    ZH_TW.setdefault(_k, _v)
