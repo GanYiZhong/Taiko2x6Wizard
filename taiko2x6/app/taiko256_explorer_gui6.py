@@ -231,7 +231,10 @@ class PreviewPane(QTabWidget):
         self._audio_layout.addWidget(self._audio_msg)
         self._audio_layout.addStretch(1)
 
+        from taiko2x6.charts import chart_timeline
+        self.chart_view = chart_timeline.ChartTimelineView()
         self.addTab(self.info, tr("Info"))
+        self.addTab(self.chart_view, tr("Chart"))
         self.addTab(self.hex, tr("Hex"))
         self.addTab(self.text, tr("Text"))
         self.addTab(self.image_view, tr("Image"))
@@ -281,9 +284,11 @@ class PreviewPane(QTabWidget):
 
         # chart summary (read-only parse of .sht files)
         from taiko2x6.charts import chart_preview
+        self.chart_view.set_model(None)
         if chart_preview.is_chart_name(name):
             try:
                 info += "\n" + chart_preview.summarize_sht(name, data) + "\n"
+                self.chart_view.set_model(chart_preview.parse_chart(data))
             except Exception as exc:
                 info += "\n" + tr("(chart not readable: {e})").format(e=exc) + "\n"
 
