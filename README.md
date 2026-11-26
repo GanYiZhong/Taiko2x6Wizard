@@ -65,7 +65,10 @@ source can follow the sections below instead.
 
 ## Requirements
 
-- **Python 3.10+**.
+- **Python 3.12+** (with PySide6 6.12, `QStandardItem.setData` on Python 3.10/3.11
+  drops a reference to `None` on every call, and opening a big archive a few
+  times crashes the app; Python 3.12 made `None` immortal). The release build
+  bundles Python 3.13.
 - Windows is the primary/tested platform (the PS2 tooling and native binaries
   are Windows-oriented), but the pure-Python parsers are cross-platform.
 

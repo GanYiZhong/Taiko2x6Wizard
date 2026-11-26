@@ -2199,6 +2199,18 @@ def main():
     app.setApplicationName("Taiko SYSTEM256 Explorer")
     win = MainWindow()
     win.show()
+    if sys.version_info < (3, 12):
+        # PySide6 6.12's QStandardItem.setData drops a reference to None on
+        # every call; before 3.12 None is refcounted, so a few archive opens
+        # free it and the interpreter aborts. 3.12+ (and the release build,
+        # 3.13) are not affected.
+        log.warning("Python %s: PySide6 may crash this app; use Python 3.12+",
+                    sys.version.split()[0])
+        QMessageBox.warning(win, tr("Python version"), tr(
+            "This copy runs on Python {v}. With PySide6 6.12 the app can crash "
+            "after opening large archives on Python older than 3.12. Use "
+            "Python 3.12 or newer, or the release build.").format(
+                v=sys.version.split()[0]))
     if len(argv) > 1:
         arg = Path(argv[1])
         if arg.is_dir():

@@ -55,7 +55,9 @@
 
 ## 系統需求
 
-- **Python 3.10 以上**。
+- **Python 3.12 以上**（PySide6 6.12 在 Python 3.10/3.11 上，`QStandardItem.setData`
+  每呼叫一次就少算一次 `None` 的引用，開幾次大型封存檔就會讓程式崩潰；
+  Python 3.12 起 `None` 不會被釋放）。發佈版內建 Python 3.13。
 - 主要在 Windows 上開發與測試（PS2 相關工具和外部執行檔以 Windows 為主），
   純 Python 的解析器可以跨平台使用。
 

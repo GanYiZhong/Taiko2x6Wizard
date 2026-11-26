@@ -928,6 +928,8 @@ ZH_TW: dict[str, str] = {
     'Copy details': '複製詳細資料',
     'Copied': '已複製',
     'Elapsed {t}': '已用時間 {t}',
+    "Python version": "Python 版本",
+    "This copy runs on Python {v}. With PySide6 6.12 the app can crash after opening large archives on Python older than 3.12. Use Python 3.12 or newer, or the release build.": "目前是用 Python {v} 執行。搭配 PySide6 6.12 時，Python 3.12 以下開啟大型封存檔後可能會崩潰。請改用 Python 3.12 以上，或使用發佈版。",
     '&Help': '說明(&H)',
     'Encoding VAG…': '正在編碼 VAG…',
     'Cancelled. Nothing was written.': '已取消，未寫入任何檔案。',
