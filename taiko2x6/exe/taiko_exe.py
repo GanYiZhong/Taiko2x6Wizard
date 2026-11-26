@@ -429,65 +429,13 @@ def patch_arraya(dec: bytes, songs: int, log=print) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
-#  Song-select inactivity timer (曲選択タイマー)
-# --------------------------------------------------------------------------- #
-# The song-select flow has three independent inactivity countdowns, each a
-# global initialised to 120 (seconds) with `addiu $t7, $zero, 0x78` and then
-# decremented once per tick until it reaches 0, at which point all three call
-# the same attract-mode/exit routine (VA 0x18d5b8). One drives the visible
-# on-screen countdown; the others cover the difficulty/entry sub-steps. They
-# are the ONLY globals initialised to exactly 120 with this countdown-to-exit
-# shape (found by sweeping every `li 120 -> sw <gp-field>` in .text), so
-# patching all three keeps the whole select flow on the same limit.
-#
-# imm16 is the low half-word of the little-endian instruction word, so the
-# value is a plain u16 at the instruction's file offset. Signed 16-bit, and
-# the on-screen counter is 3 digits, so the sane range is 1..999 seconds.
-TIMER_DEFAULT = 120
-TIMER_MIN = 1
-TIMER_MAX = 999
-_TIMER_SITES = [0x00140D18, 0x001424C0, 0x001426C8]   # `addiu $t7,$zero,0x78`
-# addiu $t7,$zero,imm  encodes (LE) as: <imm:u16> 0F 24
-_TIMER_TAIL = bytes.fromhex('0f24')
-
-
-def select_timer(dec: bytes) -> int:
-    """Current song-select timer in seconds (reads the first init site)."""
-    return struct.unpack_from('<H', dec, _TIMER_SITES[0] - DELTA)[0]
-
-
-def patch_select_timer(dec: bytes, seconds: int, log=print) -> bytes:
-    """Set the song-select inactivity timer (all three countdown globals).
-
-    `seconds` in 1..999. Each site must currently be the `addiu $t7,$zero,imm`
-    instruction (tail 0F 24) or the patch refuses, so a shifted/edited binary
-    can never be silently corrupted.
-    """
-    if not (TIMER_MIN <= seconds <= TIMER_MAX):
-        raise TaikoExeError(
-            f'timer must be {TIMER_MIN}..{TIMER_MAX} seconds, got {seconds}')
-    buf = bytearray(dec)
-    for va in _TIMER_SITES:
-        off = va - DELTA
-        if bytes(buf[off + 2: off + 4]) != _TIMER_TAIL:
-            raise TaikoExeError(
-                f'{va:08X}: not the expected `addiu $t7,$zero,imm` timer '
-                f'instruction (tail {buf[off+2]:02x}{buf[off+3]:02x}) — refusing')
-        cur = struct.unpack_from('<H', buf, off)[0]
-        struct.pack_into('<H', buf, off, seconds)
-        log(f'{va:08X}  {cur:#05x} -> {seconds:#05x}  addiu $t7,$zero,N     '
-            f'select timer ({cur} -> {seconds} s)')
-    return bytes(buf)
-
-
-# --------------------------------------------------------------------------- #
 #  Boot-flow patches (RE'd 2026-07): skip Notice/Copyright, kill select timer.
 #
-#  NOTE: `patch_select_timer` above rewrites [0x140D18,0x1424C0,0x1426C8] —
-#  those are the CLOCK-SET / service-screen countdowns, NOT the in-game select
-#  countdowns, which is why editing them had no visible effect. The functions
-#  below target the real handlers found by reversing the ArcadeSystemManager
-#  boot state machine and the CourseSelect update loop.
+#  NOTE: the three `addiu $t7,$zero,120` sites at 0x140D18/0x1424C0/0x1426C8
+#  are the CLOCK-SET / service-screen countdowns, not the in-game select
+#  countdown (an old "select timer" tool edited them with no visible effect).
+#  The functions below target the real handlers found by reversing the
+#  ArcadeSystemManager boot state machine and the CourseSelect update loop.
 # --------------------------------------------------------------------------- #
 
 # Notice + Copyright are a single 600-frame (10 s) screen: NoticeInit(0x134400)
@@ -886,31 +834,6 @@ def patch_hdd(img: str | Path, songs: int, partition: str = PARTITION,
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'songs': songs, 'size': len(new_enc), 'md5': md5}
-
-
-def patch_hdd_timer(img: str | Path, seconds: int, partition: str = PARTITION,
-                    t14load=None, log=print, progress=None) -> dict:
-    """Extract /taiko, set the song-select timer, repack, write back.
-
-    Independent of the song-ceiling patch — both edits can coexist. Returns a
-    summary dict; re-encryption is round-trip-verified before the image is
-    touched.
-    """
-    import hashlib
-    enc = read_from_hdd(img, partition)
-    dec = decrypt_taiko(enc, t14load, progress)
-    cur = select_timer(dec)
-    log(f'decrypted OK (ELF32); current select timer = {cur} s')
-    out = patch_select_timer(dec, seconds, log)
-    new_enc = encrypt_taiko(out, t14load, progress)
-    if decrypt_taiko(new_enc, t14load) != out:
-        raise TaikoExeError('repack failed its round-trip self-check — not writing')
-    from taiko2x6 import history
-    with history.operation('Game patches', f'Select timer: {seconds} s', [img]):
-        write_to_hdd(img, new_enc, partition)
-    md5 = hashlib.md5(new_enc).hexdigest()
-    log(f'written and read back OK — md5 {md5}')
-    return {'seconds': seconds, 'was': cur, 'md5': md5}
 
 
 def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
@@ -1351,181 +1274,6 @@ else:
                     w.wait()
             super().done(r)
 
-    class TaikoTimerDialog(QDialog):
-        """Set the song-select inactivity timer (曲選択タイマー) in `taiko`."""
-
-        def __init__(self, parent=None, default_img=''):
-            super().__init__(parent)
-            self.setWindowTitle(tr('Song-select timer (T14+)'))
-            self.resize(680, 380)
-            self._workers: list[_Worker] = []
-            self._build_ui()
-            default_img = default_img or appconfig.last_existing('hddimg')
-            if default_img:
-                self.ed_img.setText(default_img)
-            polish(self, primary=self.b_patch)
-
-        def _build_ui(self):
-            lay = QVBoxLayout(self)
-
-            row = QHBoxLayout()
-            b = QPushButton(tr('HDD .img…')); b.clicked.connect(self._pick)
-            self.ed_img = QLineEdit(); self.ed_img.setReadOnly(True)
-            row.addWidget(b); row.addWidget(self.ed_img, 1)
-            lay.addLayout(row)
-
-            row = QHBoxLayout()
-            row.addWidget(QLabel(tr('Seconds:')))
-            self.sp = QSpinBox()
-            self.sp.setRange(TIMER_MIN, TIMER_MAX)
-            self.sp.setValue(TIMER_MAX)
-            self.sp.setSuffix(' s')
-            self.sp.setToolTip(
-                f'Song-select countdown, {TIMER_MIN}..{TIMER_MAX} seconds '
-                f'(stock {TIMER_DEFAULT}). Applies to all three select-flow '
-                f'inactivity timers. When it hits 0 the game returns to the '
-                f'attract/demo loop.')
-            row.addWidget(self.sp)
-            for label, val in (('120 (stock)', 120), ('300', 300), ('999 (max)', 999)):
-                pb = QPushButton(label)
-                pb.clicked.connect(lambda _=0, v=val: self.sp.setValue(v))
-                row.addWidget(pb)
-            row.addStretch(1)
-            lay.addLayout(row)
-
-            row = QHBoxLayout()
-            self.b_check = QPushButton(tr('Check')); self.b_check.clicked.connect(self._check)
-            self.b_backup = QPushButton(tr('Back up taiko…')); self.b_backup.clicked.connect(self._backup)
-            self.b_patch = QPushButton(tr('Apply')); self.b_patch.clicked.connect(self._patch)
-            self.b_restore = QPushButton(tr('Restore…')); self.b_restore.clicked.connect(self._restore)
-            for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
-                row.addWidget(w)
-            lay.addLayout(row)
-
-            self.log = QPlainTextEdit(); self.log.setReadOnly(True)
-            self.log.setStyleSheet('font-family: Consolas, monospace;')
-            lay.addWidget(self.log, 1)
-
-            self.status = QLabel(
-                tr('Stock is {n} s. Sets all three select-flow countdowns. '
-                   'Close PCSX2 first — it locks the .img. Back up `taiko` before '
-                   'your first patch.').format(n=TIMER_DEFAULT))
-            self.status.setWordWrap(True)
-            self.status.setStyleSheet('color:palette(mid);')
-            lay.addWidget(self.status)
-
-        def _pick(self):
-            p = appconfig.pick_open(self, 'hddimg', tr('Open PS2 HDD image'),
-                                    'HDD image (*.img *.raw *.bin);;All files (*)')
-            if p:
-                self.ed_img.setText(p)
-
-        def _img(self):
-            p = self.ed_img.text().strip()
-            if not p:
-                QMessageBox.information(self, tr('Song-select timer'), tr('Pick an HDD image first.'))
-                return None
-            return p
-
-        def _check(self):
-            img = self._img()
-            if not img:
-                return
-
-            def task(log):
-                enc = read_from_hdd(img)
-                log(f'read /taiko: {len(enc):,} B')
-                dec = decrypt_taiko(enc, progress=lambda s, n: None)
-                return select_timer(dec)
-
-            def ok(secs):
-                self._say(f'current song-select timer = {secs} s'
-                          f'{" (stock)" if secs == TIMER_DEFAULT else ""}')
-                self.status.setText(f'current timer = {secs} s')
-
-            self._run(task, ok, tr('Reading + decrypting…'))
-
-        def _backup(self):
-            img = self._img()
-            if not img:
-                return
-            dest = appconfig.pick_save(self, 'taiko_backup', tr('Back up taiko to'), 'taiko.bin')
-            if not dest:
-                return
-            self._run(lambda log: (Path(dest).write_bytes(read_from_hdd(img)) or
-                                   Path(dest).stat().st_size),
-                      lambda n: self._say(f'backed up {n:,} B -> {dest}'),
-                      tr('Extracting /taiko…'))
-
-        def _patch(self):
-            img = self._img()
-            if not img:
-                return
-            n = self.sp.value()
-            if QMessageBox.warning(
-                    self, tr('Song-select timer'),
-                    tr('Set the song-select timer to {n} s in {name}?').format(n=n, name=Path(img).name)
-                    + '\n\n' + tr('The image is modified in place; an undo '
-                    'journal is saved first. Make sure PCSX2 is closed. Continue?'),
-                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-                return
-            self._run(lambda log: patch_hdd_timer(img, n, log=log),
-                      self._done_patch, f'Setting timer to {n} s…')
-
-        def _done_patch(self, r):
-            self._say('')
-            self._say(f'DONE — timer {r["was"]} -> {r["seconds"]} s, md5 {r["md5"]}')
-            self.status.setText(f'timer set to {r["seconds"]} s ✓')
-
-        def _restore(self):
-            img = self._img()
-            if not img:
-                return
-            src = appconfig.pick_open(self, 'taiko_backup', tr('Restore taiko from (your backup)'))
-            if not src:
-                return
-            self._run(lambda log: restore_hdd(img, src, log=log),
-                      lambda r: self.status.setText(tr('restored ✓')), tr('Restoring /taiko…'))
-
-        # -- worker plumbing (same pattern as TaikoExeDialog) --
-        def _say(self, s):
-            self.log.appendPlainText(s)
-
-        def _run(self, fn, on_ok, msg):
-            self._say(f'--- {msg}')
-            for b in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
-                b.setEnabled(False)
-            w = _Worker(fn)
-            self._workers.append(w)
-
-            def finished():
-                w.deleteLater()
-                try:
-                    self._workers.remove(w)
-                except ValueError:
-                    pass
-                for b in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
-                    b.setEnabled(True)
-
-            def done(r):
-                if isinstance(r, tuple) and r and r[0] == 'ERROR':
-                    self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, tr('Song-select timer'), friendly_error(r[1]))
-                    self.status.setText(tr('failed — image untouched'))
-                    return
-                on_ok(r)
-
-            w.line.connect(self._say)
-            w.done.connect(done)
-            w.finished.connect(finished)
-            w.start()
-
-        def done(self, r):
-            for w in list(self._workers):
-                if w.isRunning():
-                    w.wait()
-            super().done(r)
-
     class TaikoBootDialog(QDialog):
         """Boot and select-screen switches in `taiko` (T14+), as checkboxes."""
 
@@ -1795,10 +1543,6 @@ if __name__ == '__main__':
     ap.add_argument('--partition', default=PARTITION)
     ap.add_argument('--backup', metavar='FILE',
                     help='write the untouched `taiko` here before patching')
-    ap.add_argument('--select-timer', type=int, metavar='SECONDS',
-                    help=f'set the song-select inactivity timer ({TIMER_MIN}..'
-                         f'{TIMER_MAX} s, stock {TIMER_DEFAULT}) instead of '
-                         f'patching the song ceiling')
     ap.add_argument('--restore', metavar='FILE',
                     help='write this `taiko` back instead of patching')
     ap.add_argument('--dry-run', action='store_true',
@@ -1808,11 +1552,6 @@ if __name__ == '__main__':
     try:
         if a.restore:
             restore_hdd(a.img, a.restore, a.partition)
-        elif a.select_timer is not None:
-            if a.backup:
-                Path(a.backup).write_bytes(read_from_hdd(a.img, a.partition))
-                print(f'backup -> {a.backup}')
-            patch_hdd_timer(a.img, a.select_timer, a.partition)
         elif a.dry_run:
             enc = read_from_hdd(a.img, a.partition)
             dec = decrypt_taiko(enc)

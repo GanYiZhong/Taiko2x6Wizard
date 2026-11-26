@@ -165,7 +165,8 @@ def _pages() -> list[dict]:
         {
             "title": tr("Patch the game executable"),
             "intro": tr("Edit the `taiko` program on a Taiko 14+ HDD image: song "
-                        "limit, select timer, boot patches, category folders."),
+                        "limit, boot patches (including the select-timer freeze), category "
+                        "folders."),
             "needs": [tr("A PS2 HDD .img of Taiko 14 or later."),
                       tr("T14LOAD.bin next to the program (it holds the key to "
                          "decrypt `taiko`)."),
@@ -174,7 +175,6 @@ def _pages() -> list[dict]:
                 tr("Tools > taiko executable patches > Patch taiko song limit: set "
                    "the ceiling (stock 210; up to 214 is the proven path), Check, "
                    "then Patch."),
-                tr("Song-select timer sets the countdown (stock 120 s) to 1-999 s."),
                 tr("Boot & select patches: tick the switches you want, Apply. "
                    "Unticking restores the stock code. “Song select as category "
                    "folders” shows only category cards; don opens one."),
@@ -190,7 +190,6 @@ def _pages() -> list[dict]:
                 tr("Every HDD write also keeps an undo journal <img>.<date-time>.undo."),
             ],
             "actions": [("act_taikoexe", tr("Patch taiko song limit…")),
-                        ("act_taikotimer", tr("Song-select timer…")),
                         ("act_taikoboot", tr("Boot && select patches…"))],
         },
         {

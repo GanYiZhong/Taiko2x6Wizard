@@ -128,9 +128,6 @@ ZH_TW: dict[str, str] = {
     "Patch taiko song limit (T14+)…": "taiko 歌曲上限修補（T14+）…",
     "Raise the 210-song ceiling in `taiko` (the exe T14+ actually runs, on the HDD — not the dongle's T14GAME).":
         "提高 `taiko` 的 210 首上限（T14+ 實際執行的是硬碟上的這支主程式，不是加密狗裡的 T14GAME）。",
-    "Song-select timer (T14+)…": "選歌倒數時間（T14+）…",
-    "Change the song-select countdown in `taiko` (stock 120 s) to any value from 1 to 999 s.":
-        "把 `taiko` 的選歌倒數（原版 120 秒）改成 1 到 999 秒。",
     "Boot & select patches (T14+)…": "開機與選歌修補（T14+）…",
     "Checkboxes for `taiko`: skip the boot Notice screen, skip the attract credits (協力) screen, freeze the song-select countdown, disable the difficulty-select timeout. Unticking restores the stock code.":
         "`taiko` 的勾選項：跳過開機 Notice、跳過待機輪播的「協力」畫面、凍結選歌倒數、關閉難度選擇倒數。取消勾選會還原成原版程式碼。",
@@ -282,7 +279,6 @@ ZH_TW: dict[str, str] = {
     "Song Manager": "歌曲管理",
     "Song Manager failed": "歌曲管理開啟失敗",
     "Patch taiko": "taiko 修補",
-    "Song-select timer": "選歌倒數",
     "Boot & select patches": "開機與選歌修補",
     "Omnimix Maker": "Omnimix 建置",
     "PySide6 is required.": "需要 PySide6。",
@@ -434,11 +430,9 @@ ZH_TW: dict[str, str] = {
 
     # --- taiko exe dialogs ---
     "Patch taiko song limit (T14+)": "taiko 歌曲上限修補（T14+）",
-    "Song-select timer (T14+)": "選歌倒數時間（T14+）",
     "Boot & select patches (T14+)": "開機與選歌修補（T14+）",
     "HDD .img…": "硬碟 .img…",
     "Song ceiling:": "歌曲上限：",
-    "Seconds:": "秒數：",
     "Check": "檢查",
     "Read current": "讀取目前狀態",
     "Back up taiko…": "備份 taiko…",
@@ -461,12 +455,9 @@ ZH_TW: dict[str, str] = {
     "Patches (ticked = on)": "修補（勾選 = 開啟）",
     "Pick an image; its current patches are read in. Tick what you want and Apply. Unticking a patch restores the stock code. Close PCSX2 first — it locks the .img.":
         "選擇映像檔後會讀取目前已開啟的修補。勾選想要的項目再按「套用」；取消勾選會還原成原版程式碼。請先關閉 PCSX2，它會鎖住 .img。",
-    "Stock is {n} s. Sets all three select-flow countdowns. Close PCSX2 first — it locks the .img. Back up `taiko` before your first patch.":
-        "原版是 {n} 秒，會同時修改選歌流程的三個倒數。請先關閉 PCSX2（它會鎖住 .img），第一次修補前請先備份 `taiko`。",
     "The image is modified in place; an undo journal is saved first. Make sure PCSX2 is closed. Continue?":
         "映像檔會被直接修改，修改前會先存一份復原日誌。請確認 PCSX2 已關閉。要繼續嗎？",
     "Raise the song ceiling to {n} in {name}?": "要把 {name} 的歌曲上限提高到 {n} 嗎？",
-    "Set the song-select timer to {n} s in {name}?": "要把 {name} 的選歌倒數設為 {n} 秒嗎？",
     "Change these in {name}?": "要在 {name} 套用以下變更嗎？",
     "ON ": "開啟",
     "OFF": "關閉",
@@ -1135,7 +1126,6 @@ ZH_TW: dict[str, str] = {
     'Build a song from a TJA and audio: textures, charts, VAG, stars.': '由 TJA 與音訊建置歌曲：貼圖、譜面、VAG、星數。',
     'Overwrite an existing song slot with a custom song.': '用自製歌曲覆寫現有的歌曲欄位。',
     'Raise the 210-song ceiling in the taiko executable.': '提高 taiko 主程式的 210 首歌曲上限。',
-    'Change the song-select countdown to any value from 1 to 999 s.': '把選歌倒數改為 1 到 999 秒的任意值。',
     'Play Taiko 14 with a USB keyboard and no JVS I/O board.': '不用 JVS I/O 板，以 USB 鍵盤遊玩太鼓 14。',
     'Browse a PS2 or MagicGate Arcade memory-card image.': '瀏覽 PS2 或 MagicGate Arcade 記憶卡映像檔。',
     'Make a PS2 HDD image smaller.': '縮小 PS2 硬碟映像檔。',
@@ -1167,8 +1157,8 @@ _GUIDE_ZH: dict[str, str] = {
     'Fuse the songs of several Taiko images (7 to 14) into one target image.':
         '把多個太鼓映像檔（第 7 代到第 14 代）的歌曲合併進同一個目標映像檔。',
     'Patch the game executable': '修補遊戲主程式',
-    'Edit the `taiko` program on a Taiko 14+ HDD image: song limit, select timer, boot patches, category folders.':
-        '修改太鼓 14 以上 HDD 映像檔中的 `taiko` 程式：歌曲上限、選歌計時、開機修補、分類資料夾。',
+    'Edit the `taiko` program on a Taiko 14+ HDD image: song limit, boot patches (including the select-timer freeze), category folders.':
+        '修改太鼓 14 以上 HDD 映像檔中的 `taiko` 程式：歌曲上限、開機修補（含凍結選歌倒數）、分類資料夾。',
     'Play Taiko 14 with a USB keyboard': '用 USB 鍵盤玩太鼓 14',
     'Install KBD2EE so a plain USB keyboard works without a JVS I/O board.':
         '安裝 KBD2EE，讓一般 USB 鍵盤不需 JVS I/O 板也能使用。',
@@ -1266,8 +1256,6 @@ _GUIDE_ZH: dict[str, str] = {
     'PCSX2 closed: it locks the .img.': '先關閉 PCSX2：它會鎖住 .img。',
     'Tools > taiko executable patches > Patch taiko song limit: set the ceiling (stock 210; up to 214 is the proven path), Check, then Patch.':
         '工具 > taiko 主程式修補 > taiko 歌曲上限修補：設定上限（原版 210；214 以內是已驗證的路徑），按「檢查」，再按「套用修補」。',
-    'Song-select timer sets the countdown (stock 120 s) to 1-999 s.':
-        '「選歌倒數時間」可把倒數（原版 120 秒）改成 1 到 999 秒。',
     'Boot & select patches: tick the switches you want, Apply. Unticking restores the stock code. “Song select as category folders” shows only category cards; don opens one.':
         '開機與選歌修補：勾選想要的開關後按「套用」。取消勾選會還原原版程式碼。「選歌改成類別資料夾」只顯示分類卡片；按「咚」開啟其中一個。',
     'Omnimix Maker patches the ceiling for you; patch by hand only for songs added another way.':
@@ -1279,7 +1267,6 @@ _GUIDE_ZH: dict[str, str] = {
     'Every HDD write also keeps an undo journal <img>.<date-time>.undo.':
         '每次寫入 HDD 也會保留復原日誌 <img>.<日期-時間>.undo。',
     'Patch taiko song limit…': 'taiko 歌曲上限修補…',
-    'Song-select timer…': '選歌倒數時間…',
     'Boot && select patches…': '開機與選歌修補…',
     # page 6
     'A Taiko 14 HDD image, plus the stock IRXARC.BIN from the dongle card image (needed once).':

@@ -799,9 +799,6 @@ class MainWindow(QMainWindow):
                 (tr("Patch taiko song limit (T14+)…"),
                  tr("Raise the 210-song ceiling in the taiko executable."),
                  'patch', lambda: self.open_taiko_exe()),
-                (tr("Song-select timer (T14+)…"),
-                 tr("Change the song-select countdown to any value from 1 to 999 s."),
-                 'timer', lambda: self.open_taiko_timer()),
                 (tr("USB keyboard patch (T14)…"),
                  tr("Play Taiko 14 with a USB keyboard and no JVS I/O board."),
                  'keyboard', lambda: self.open_usb_keyboard()),
@@ -1060,10 +1057,6 @@ class MainWindow(QMainWindow):
             'patch',
             tr("Raise the 210-song ceiling in `taiko` (the exe T14+ actually "
                "runs, on the HDD — not the dongle's T14GAME).") + close_first)
-        act("act_taikotimer", tr("Song-select timer (T14+)…"), self.open_taiko_timer,
-            'timer',
-            tr("Change the song-select countdown in `taiko` (stock 120 s) to any "
-               "value from 1 to 999 s.") + close_first)
         act("act_taikoboot", tr("Boot & select patches (T14+)…"), self.open_taiko_boot,
             'patch',
             tr("Checkboxes for `taiko`: skip the boot Notice screen, skip the "
@@ -1155,7 +1148,6 @@ class MainWindow(QMainWindow):
                                                 self.act_backups,
                                                 self.act_apamerge, self.act_packiso)),
                 (tr("taiko executable patches"), (self.act_taikoexe,
-                                                  self.act_taikotimer,
                                                   self.act_taikoboot,
                                                   self.act_usbkbd))):
             sub = tools.addMenu(title)
@@ -1836,16 +1828,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("Patch taiko"), str(exc))
             return
         dlg = taiko_exe.TaikoExeDialog(self, default_img=self._recent_hdd_img())
-        dlg.exec()
-
-    def open_taiko_timer(self):
-        from taiko2x6.exe import taiko_exe
-        try:
-            taiko_exe.find_t14load()
-        except taiko_exe.TaikoExeError as exc:
-            QMessageBox.warning(self, tr("Song-select timer"), str(exc))
-            return
-        dlg = taiko_exe.TaikoTimerDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
 
     def open_taiko_boot(self):
