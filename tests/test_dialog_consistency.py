@@ -161,6 +161,8 @@ def _factories():
         "StreaminfoEditor": ed(bineditor_streaminfo, _streaminfo()),
         "TuningEditor": ed(bineditor_tuning, _tuning()),
         "ChartConverterDialog": chart_convert.ChartConverterDialog,
+        "TjaCheckDialog": lambda: __import__(
+            "taiko2x6.charts.tja_check_dialog", fromlist=["x"]).TjaCheckDialog(),
         "ShtValidatorDialog": sht_validator.ShtValidatorDialog,
         "TaikoExeDialog": taiko_exe.TaikoExeDialog,
         "TaikoTimerDialog": taiko_exe.TaikoTimerDialog,
@@ -201,7 +203,7 @@ def _factories():
     }
 
 
-NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SyncPreviewDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'AboutDialog', 'UpdateDialog', 'OpenWithDialog', 'BackupsUndoDialog', 'HistoryDialog', 'ImageReplaceDialog', 'ArchiveCompareDialog', 'ComparePreviewDialog', 'BatchAddDialog']
+NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SyncPreviewDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'AboutDialog', 'UpdateDialog', 'OpenWithDialog', 'BackupsUndoDialog', 'HistoryDialog', 'ImageReplaceDialog', 'ArchiveCompareDialog', 'ComparePreviewDialog', 'BatchAddDialog', 'TjaCheckDialog']
 
 
 @pytest.fixture(autouse=True)

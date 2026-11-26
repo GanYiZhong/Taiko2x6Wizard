@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 from taiko2x6.app.i18n import tr
 
 _COURSE_NAMES = {0: "easy", 1: "normal", 2: "hard", 3: "oni", 4: "ura"}
-_BAD_STYLE = "border:1px solid palette(bright-text);"
+MAX_LINT_WARNINGS = 6
+_BAD_STYLE ="border:1px solid palette(bright-text);"
 
 
 def summarize_tja(text: str) -> dict:
@@ -51,6 +52,18 @@ def summarize_tja(text: str) -> dict:
         out["warnings"].append("no playable courses found")
     if not out["bpm"]:
         out["warnings"].append("no BPM: header")
+    try:
+        from taiko2x6.charts import tja_lint
+        found = [i for i in tja_lint.lint_tja(text)
+                 if i.severity == tja_lint.WARNING]
+        lines = [tja_lint.format_issue(i) for i in found[:MAX_LINT_WARNINGS]]
+    except Exception:
+        found, lines = [], []
+    out["warnings"].extend(lines)
+    if len(found) > MAX_LINT_WARNINGS:
+        out["warnings"].append(tr("(+{n} more; see Check TJA… in the chart "
+                                  "converter)").format(
+                                      n=len(found) - MAX_LINT_WARNINGS))
     return out
 
 
