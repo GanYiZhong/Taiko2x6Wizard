@@ -93,38 +93,42 @@ def _decode_channel(adpcm: bytes) -> np.ndarray:
     scaled = (nib << 12) >> shift[:, None]
     scaled = scaled.astype(np.float64)
 
-    out = np.empty((n_frames, FRAME_SAMPLES), dtype=np.float64)
-    hist1 = 0.0
-    hist2 = 0.0
-    silence = (flags == 7)
+    # The recursion is sequential; plain Python lists/ints are several times
+    # faster than indexing numpy scalars. Arithmetic order is unchanged, so the
+    # result is bit-identical to the original numpy-scalar loop.
+    scaled_rows = scaled.tolist()
+    f0l = f0.tolist()
+    f1l = f1.tolist()
+    silence = (flags == 7).tolist()
+    out_l = []
+    ext = out_l.extend
+    hist1 = 0
+    hist2 = 0
+    zero_row = [0] * FRAME_SAMPLES
     for fi in range(n_frames):
         if silence[fi]:
-            out[fi, :] = 0.0
-            hist1 = 0.0
-            hist2 = 0.0
+            ext(zero_row)
+            hist1 = 0
+            hist2 = 0
             continue
-        a0 = f0[fi]
-        a1 = f1[fi]
-        s_row = scaled[fi]
-        for i in range(FRAME_SAMPLES):
-            val = s_row[i] + hist1 * a0 + hist2 * a1
-            # A bit-exact integer VAG decoder rounds each output sample to int16
-            # and feeds THAT back as predictor history. Rounding here (rather
-            # than only at the very end) keeps the IIR identical to vgmstream and
-            # avoids sub-LSB drift.
-            val = float(round(val))
-            # PS2/vgmstream clamp each sample to int16 BEFORE feeding it back
-            # into the predictor history. Without this, loud peaks make the IIR
-            # diverge and produce audible clicks/distortion on following samples.
-            if val > 32767.0:
-                val = 32767.0
-            elif val < -32768.0:
-                val = -32768.0
+        a0 = f0l[fi]
+        a1 = f1l[fi]
+        row = []
+        app = row.append
+        for s in scaled_rows[fi]:
+            # Round each sample and clamp to int16 BEFORE feeding it back as
+            # predictor history (bit-exact with vgmstream / the PS2 decoder).
+            val = round(s + hist1 * a0 + hist2 * a1)
+            if val > 32767:
+                val = 32767
+            elif val < -32768:
+                val = -32768
             hist2 = hist1
             hist1 = val
-            out[fi, i] = val
+            app(val)
+        ext(row)
 
-    return out.reshape(-1).astype(np.int16)
+    return np.array(out_l, dtype=np.int16)
 
 
 class EncodeCancelled(Exception):
@@ -415,7 +419,9 @@ def resample_sinc(pcm: np.ndarray, src_rate: int, dst_rate: int,
             w = cutoff * np.sinc(cutoff * d) * (0.5 + 0.5 * np.cos(np.pi * d / half_taps))
             idx = i0 + k
             ok = (idx >= 0) & (idx < n)
-            acc += np.where(ok[:, None], x[np.clip(idx, 0, n - 1)], 0.0) * w[:, None]
+            # Out-of-range taps get weight 0 (same result as zeroing the sample).
+            w = np.where(ok, w, 0.0)
+            acc += x[np.clip(idx, 0, n - 1)] * w[:, None]
         out[s:s + len(t)] = acc
     return out
 
