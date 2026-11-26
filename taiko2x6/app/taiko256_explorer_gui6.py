@@ -518,6 +518,21 @@ class MainWindow(QMainWindow):
         form.addRow(self.chk_full_rebuild)
         form.addRow(self.chk_relayout)
         form.addRow(self.chk_overwrite)
+        from taiko2x6.app import guide
+        form.addRow(guide.help_button(
+            save_box, tr("Save options"),
+            tr("Full rebuild (always on): repacks DATA.000 so a replaced file can "
+               "be any size. Every group you did not edit stays at its original "
+               "sector, which is what keeps the game booting; only edited groups "
+               "are recompressed and appended.\n\n"
+               "Relayout (greyed out while full rebuild is on) belongs to the "
+               "older in-place patch: an edited file may grow inside its own "
+               "group as long as the compressed group still fits its original "
+               "slot.\n\n"
+               "Overwrite originals: on, the old DATA.000 / list.bin are kept as "
+               ".bak first. Off, nothing is overwritten and the results are "
+               "written next to the originals as .new files."),
+            self.chk_full_rebuild, self.chk_relayout, self.chk_overwrite))
         self.lbl_save_hint = QLabel()
         self.lbl_save_hint.setWordWrap(True)
         self.lbl_save_hint.setEnabled(False)       # greyed: a hint, not a control
@@ -960,10 +975,24 @@ class MainWindow(QMainWindow):
             theme_menu.addAction(a)
             self.theme_actions[mode] = a
         help_menu = self.menuBar().addMenu(tr("&Help"))
+        self.act_guide = QAction(tr("Quick guide"), self)
+        self.act_guide.setShortcut(QKeySequence.HelpContents)
+        self.act_guide.triggered.connect(self.open_guide)
+        help_menu.addAction(self.act_guide)
         self.act_open_log = QAction(tr("Open log folder"), self)
         self.act_open_log.triggered.connect(jobs.open_log_folder)
         help_menu.addAction(self.act_open_log)
         self._update_actions()
+
+    def open_guide(self):
+        """Help > Quick guide: a non-modal window, one page per workflow."""
+        from taiko2x6.app import guide
+        g = getattr(self, "_guide", None)
+        if g is None:
+            g = self._guide = guide.GuideDialog(self)
+        g.show()
+        g.raise_()
+        g.activateWindow()
 
     def _set_theme(self, mode: str):
         theme.save_mode(mode)

@@ -910,6 +910,19 @@ try:
             self.ed_newid.setEnabled(False)
             self.ck_new.toggled.connect(self.ed_newid.setEnabled)
             f_target.addRow(self.ck_new)
+            from taiko2x6.app import guide
+            f_target.addRow(guide.help_button(
+                self, tr("Add or replace"),
+                tr("Off: the selected song's slot is overwritten with your song; "
+                   "the song count does not change.\n\n"
+                   "On: a brand-new song is added under the id you type, using the "
+                   "selected song as the template for the texture and chart "
+                   "layout. This raises the song count, so past the game's "
+                   "ceiling patch it first (Tools > taiko executable patches).\n\n"
+                   "Nothing is written yet: Build stages the files, and the main "
+                   "window's Save (or the write prompt of a new song) puts them in "
+                   "DATA.000 with a .bak backup."),
+                self.ck_new, self.cb_song))
             f_target.addRow(tr("new song id:"), self.ed_newid)
             f_target.addRow(tr("target / template (id):"), self.cb_song)
             lay.addWidget(g_target)
@@ -957,6 +970,14 @@ try:
                 "run through test.py. Use this only to taste-tune a song that "
                 "feels a hair off: + moves the music later, − earlier."))
             f_src.addRow(tr("sync nudge (ms, optional):"), self.ed_gap)
+            f_src.addRow(guide.help_button(
+                self, tr("Sync nudge"),
+                tr("Leave this at 0. The music is synced to the TJA's BPM and "
+                   "OFFSET automatically, so give it the ORIGINAL .tja and "
+                   ".ogg, not files already processed by another tool. Use it only "
+                   "to tune a song that feels slightly off: a positive value moves "
+                   "the music later, a negative one earlier."),
+                self.ed_gap))
             self.lbl_gap = f_src.labelForField(self.ed_gap)
 
             # parsed-chart preview

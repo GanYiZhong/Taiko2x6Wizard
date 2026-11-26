@@ -1589,6 +1589,27 @@ else:
             self.b_patch.setEnabled(False)
             for w in (self.b_check, self.b_backup, self.b_patch, self.b_restore):
                 row.addWidget(w)
+            from taiko2x6.app import guide
+            row.addWidget(guide.help_button(
+                self, tr('Boot & select patches'),
+                tr('Each box is one switch in the game program `taiko`. Ticked = '
+                   'the patch is on. Pick an image and its current state is read '
+                   'in; the label next to a box says whether it will change.\n\n'
+                   'Apply writes only the boxes you changed. Unticking a patch '
+                   'puts the stock code back, so every switch can be undone.\n\n'
+                   'Skip the boot Notice screen / attract credits: the boot and '
+                   'attract loop move on without those screens.\n'
+                   'Freeze the song-select countdown: it stays on screen but never '
+                   'runs out. Disable the difficulty-select timeout: that screen '
+                   'never auto-starts.\n'
+                   'Keep songs already played: a song played earlier in the credit '
+                   'stays in the list.\n'
+                   'Category folders: song select shows only the category cards; '
+                   'don opens a folder, both ka close it.\n\n'
+                   'Before Apply: close PCSX2, and use Back up taiko… once; '
+                   'Restore… puts that copy back. An undo journal is also saved '
+                   'before the image is changed.'),
+                *self.cbs.values()))
             lay.addLayout(row)
 
             self.log = QPlainTextEdit(); self.log.setReadOnly(True)

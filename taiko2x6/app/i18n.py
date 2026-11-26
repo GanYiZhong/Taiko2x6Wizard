@@ -989,3 +989,204 @@ ZH_TW: dict[str, str] = {
     'Taiko Song Manager (cross-bin)': '太鼓歌曲管理員（跨 bin）',
     'Import Audio -> Game VAG': '匯入音訊 -> 遊戲 VAG',
 }
+
+
+# --- Help > Quick guide and the "?" help buttons (taiko2x6/app/guide.py) ---
+_GUIDE_ZH: dict[str, str] = {
+    'What does this do?': '這是做什麼的？',
+    'Help': '說明',
+    'Quick guide': '快速指南',
+    'What you need': '需要準備',
+    'Steps': '步驟',
+    'What can go wrong': '可能出錯的地方',
+    'Backup and undo': '備份與復原',
+    'Not available right now (for example, no archive is open).':
+        '目前無法使用（例如尚未開啟封存檔）。',
+    # page titles + intros
+    'Open an archive and edit files': '開啟封存檔並編輯檔案',
+    "Browse the game's DATA.000 + list.bin, preview files and replace them.":
+        '瀏覽遊戲的 DATA.000 + list.bin，預覽並替換檔案。',
+    'Add or replace a song': '新增或替換歌曲',
+    'Build a song from a TJA chart and a wav/ogg, or from a Gen3 (Nijiiro) song folder.':
+        '用 TJA 譜面加 wav/ogg，或用 Gen3（Nijiiro）歌曲資料夾製作歌曲。',
+    'Convert charts': '轉換譜面',
+    'Convert between TJA, PS2-arcade .sht and Nijiiro (Gen3) fumen .bin, in any direction.':
+        '在 TJA、PS2 街機 .sht 與 Nijiiro（Gen3）fumen .bin 之間任意方向轉換。',
+    'Build an Omnimix': '製作 Omnimix',
+    'Fuse the songs of several Taiko images (7 to 14) into one target image.':
+        '把多個太鼓映像檔（第 7 代到第 14 代）的歌曲合併進同一個目標映像檔。',
+    'Patch the game executable': '修補遊戲執行檔',
+    'Edit the `taiko` program on a Taiko 14+ HDD image: song limit, select timer, boot patches, category folders.':
+        '修改太鼓 14 以上 HDD 映像檔中的 `taiko` 程式：歌曲上限、選曲計時、開機修補、分類資料夾。',
+    'Play Taiko 14 with a USB keyboard': '用 USB 鍵盤玩太鼓 14',
+    'Install KBD2EE so a plain USB keyboard works without a JVS I/O board.':
+        '安裝 KBD2EE，讓一般 USB 鍵盤不需 JVS I/O 板也能使用。',
+    'PS2 HDD and memory card tools': 'PS2 HDD 與記憶卡工具',
+    'Browse images, shrink them, merge several games onto one disk, or edit a memory card.':
+        '瀏覽映像檔、縮小映像檔、把多個遊戲合併到同一顆磁碟，或編輯記憶卡。',
+    # page 1
+    'A folder holding DATA.000 and list.bin (extracted from your own game image).':
+        '一個含有 DATA.000 與 list.bin 的資料夾（從你自己的遊戲映像檔取出）。',
+    'File > Open, then pick that folder (recent folders are under Open Recent).':
+        '檔案 > 開啟，然後選那個資料夾（最近開啟的資料夾在「最近開啟」裡）。',
+    'Pick a file in the tree to preview it (textures, audio); the per-song .bin tables have their own editors.':
+        '在樹狀清單選一個檔案即可預覽（貼圖、音訊）；各歌曲的 .bin 表格有專用編輯器。',
+    'Replace File… (or drop a file onto its row in the tree) stages an edit. Staged edits are listed under Pending edits; Discard selected edit(s) drops one of them.':
+        '「替換檔案…」（或把檔案拖到樹狀清單中的那一列）會暫存一項修改。暫存的修改列在「待存的修改」；「捨棄選取的修改」可丟掉其中幾項。',
+    'Save (Ctrl+S) writes DATA.000 and list.bin together.':
+        '儲存（Ctrl+S）會同時寫出 DATA.000 與 list.bin。',
+    'Save options: full rebuild is always on, so a replacement may be any size and unchanged groups keep their sectors.':
+        '儲存選項：完整重建一律開啟，所以替換的檔案可以是任何大小，沒改動的群組也維持原本的磁區。',
+    'Untick “overwrite originals” to write .new files next to the originals instead.':
+        '取消勾選「覆蓋原檔」，就會改在原檔旁寫出 .new 檔。',
+    'Before Save: Discard Edits (Ctrl+Shift+Z) drops every staged edit.':
+        '儲存前：「捨棄修改」（Ctrl+Shift+Z）會丟掉所有暫存的修改。',
+    'After Save: overwriting keeps a rolling .bak, .bak.1, … of both files.':
+        '儲存後：覆寫時會為兩個檔案保留輪替的 .bak、.bak.1、… 備份。',
+    'If the app dies mid-save, the next open of the archive finishes or undoes the save.':
+        '若程式在儲存途中中斷，下次開啟封存檔時會自動完成或復原該次儲存。',
+    'Open archive…': '開啟封存檔…',
+    # page 2
+    'An open archive.': '一個已開啟的封存檔。',
+    'A .tja and a wav/ogg file, or a Nijiiro …/fumen/<id> folder.':
+        '一個 .tja 加 wav/ogg 檔，或一個 Nijiiro 的 …/fumen/<id> 資料夾。',
+    "Font.ttf next to the program (the title texture is drawn with it); a Gen3 song's audio also needs vgmstream-win64/.":
+        '程式旁要有 Font.ttf（曲名貼圖用它繪製）；Gen3 歌曲的音訊還需要 vgmstream-win64/。',
+    'Tools > Songs > Custom Song Builder. Tick “Add as NEW song” and type a song id to create a new slot; leave it off to overwrite the selected slot.':
+        '工具 > 歌曲 > 自製歌曲建置。勾選「新增為「新歌曲」」並輸入歌曲 ID 會建立新欄位；不勾則覆寫所選欄位。',
+    'Choose the source, fill in the title and credits, then Build → stage. The files are only staged.':
+        '選擇來源、填寫曲名與作者資訊，然後按「建立 → 暫存」。檔案只會被暫存。',
+    'Save in the main window writes them. Song Replacer overwrites an existing slot and offers to write straight away.':
+        '在主視窗按「儲存」才會寫出。歌曲替換會覆寫既有欄位，並可立即寫出。',
+    'Song Manager edits the per-song database rows (names, stars, ids) in one searchable table.':
+        '歌曲管理員用一張可搜尋的表格編輯各歌曲的資料庫列（名稱、星數、ID）。',
+    "A new song raises the song count. If it passes the game's ceiling, raise it first with “Patch taiko song limit”.":
+        '新增歌曲會增加歌曲數。若超過遊戲的上限，請先用「taiko 歌曲上限 patch」提高它。',
+    'Leave “sync nudge” at 0 and feed the original .tja/.ogg; the sync is computed from the TJA.':
+        '「對齊微調」維持 0，並使用原始的 .tja/.ogg；同步會依 TJA 自動計算。',
+    'Nothing is written until you Save (Discard Edits drops the staging); a new-song build asks before overwriting and keeps a .bak.':
+        '按「儲存」之前不會寫入任何東西（「捨棄修改」可丟掉暫存）；新增歌曲時會先詢問才覆寫，並保留 .bak。',
+    'Custom Song Builder…': '自製歌曲建置…',
+    'Song Replacer…': '歌曲替換…',
+    'Song Manager…': '歌曲管理…',
+    # page 3
+    'The chart files to convert; nothing needs to be open.':
+        '要轉換的譜面檔；不需要先開啟任何封存檔。',
+    'For a Gen3 song_<id>.nus3bank: vgmstream-win64/.':
+        '若要轉 Gen3 的 song_<id>.nus3bank：需要 vgmstream-win64/。',
+    'Tools > Charts & audio > Chart converter.': '工具 > 譜面與音訊 > 譜面轉換器。',
+    'Add files…, tick the output format(s) under Write, choose the Output folder, then Convert.':
+        '按「加入檔案…」，在「輸出」下勾選輸出格式，選好輸出資料夾，再按「轉換」。',
+    "Check a result with SHT Validator; VAG Generator turns a wav/ogg into the game's VAG audio.":
+        '可用 SHT 驗證器檢查結果；VAG 產生器能把 wav/ogg 轉成遊戲的 VAG 音訊。',
+    "Branches are kept, but read the converter's log for warnings before using the output.":
+        '分歧會保留，但使用輸出前請先看轉換器記錄裡有沒有警告。',
+    'Converters write new files to the folder you choose and do not touch your game files.':
+        '轉換器只會把新檔寫到你選的資料夾，不會動到你的遊戲檔。',
+    'Chart converter…': '譜面轉換器…',
+    'SHT Validator…': 'SHT 驗證器…',
+    'VAG Generator…': 'VAG 產生器…',
+    # page 4
+    'A target PS2 HDD .img (Taiko 14+) or a DATA.000 + list.bin folder, and at least one source (.img, ISO or folder).':
+        '一個目標 PS2 HDD .img（太鼓 14 以上）或含 DATA.000 + list.bin 的資料夾，以及至少一個來源（.img、ISO 或資料夾）。',
+    'Close PCSX2 first and work on a copy: the .img is written in place.':
+        '請先關閉 PCSX2 並在副本上操作：.img 會直接原地寫入。',
+    'Tools > Songs > Omnimix Maker. Set the target, then add sources; order them with Up / Down (first wins on ties).':
+        '工具 > 歌曲 > Omnimix 製作。設定目標後加入來源，用「上移 / 下移」排序（重複時排前面的優先）。',
+    'Pick the options, then Preview plan to see what would be added.':
+        '選好選項後，按「預覽計畫」看會新增哪些歌曲。',
+    'Build Omnimix; confirm the write. It rewrites the whole archive and can take a while.':
+        '按「建置 Omnimix」並確認寫入。它會重寫整個封存檔，可能要一段時間。',
+    'Repair existing Omnimix fixes an Omnimix made by an older version without rebuilding it.':
+        '「修復現有的 Omnimix」可修正舊版製作的 Omnimix，不必重新建立。',
+    'DATA.000 must stay under 2 GiB or the game hangs on LOADING: use the 30 kHz or 24 kHz audio option for ~430+ songs.':
+        'DATA.000 必須小於 2 GiB，否則遊戲會卡在 LOADING：約 430 首以上請選 30 kHz 或 24 kHz 的音訊選項。',
+    'Above 214 songs the song tables are grown; records of songs past 210 are not kept across a reboot.':
+        '超過 214 首時會擴充歌曲表；第 210 首之後的歌曲成績在重新開機後不會保留。',
+    '“back up the target .img” copies it to <img>.omnimix.bak first.':
+        '勾選「寫入前備份目標 .img」會先複製成 <img>.omnimix.bak。',
+    'With it off, the write is journaled instead: <img>.<date-time>.undo (python -m taiko2x6.safeio rollback <file>).':
+        '若不勾選，則改為記錄復原日誌：<img>.<日期-時間>.undo（python -m taiko2x6.safeio rollback <檔案>）。',
+    'Omnimix Maker…': 'Omnimix 製作…',
+    # page 5
+    'A PS2 HDD .img of Taiko 14 or later.': '太鼓 14 以上的 PS2 HDD .img。',
+    'T14LOAD.bin next to the program (it holds the key to decrypt `taiko`).':
+        '程式旁要有 T14LOAD.bin（內含解密 `taiko` 的金鑰）。',
+    'PCSX2 closed: it locks the .img.': '先關閉 PCSX2：它會鎖住 .img。',
+    'Tools > taiko executable patches > Patch taiko song limit: set the ceiling (stock 210; up to 214 is the proven path), Check, then Patch.':
+        '工具 > taiko 主程式 patch > taiko 歌曲上限 patch：設定上限（原版 210；214 以內是已驗證的路徑），按「檢查」，再按「套用 patch」。',
+    'Song-select timer sets the countdown (stock 120 s) to 1-999 s.':
+        '「選歌倒數時間」可把倒數（原版 120 秒）改成 1 到 999 秒。',
+    'Boot & select patches: tick the switches you want, Apply. Unticking restores the stock code. “Song select as category folders” shows only category cards; don opens one.':
+        '開機與選歌 patch：勾選想要的開關後按「套用」。取消勾選會還原原版程式碼。「選歌改成類別資料夾」只顯示分類卡片；按「咚」開啟其中一個。',
+    'Omnimix Maker patches the ceiling for you; patch by hand only for songs added another way.':
+        'Omnimix 製作會替你修補上限；只有用其他方式加歌時才需要手動修補。',
+    'A big ceiling can glitch the song wheel: test on a copy.':
+        '上限設得太大可能讓選曲轉盤出問題：請先在副本上測試。',
+    'Back up taiko… saves the original program; Restore… puts it back.':
+        '「備份 taiko…」會保存原始程式；「還原…」可把它放回去。',
+    'Every HDD write also keeps an undo journal <img>.<date-time>.undo.':
+        '每次寫入 HDD 也會保留復原日誌 <img>.<日期-時間>.undo。',
+    'Patch taiko song limit…': 'taiko 歌曲上限 patch…',
+    'Song-select timer…': '選歌倒數時間…',
+    'Boot && select patches…': '開機與選歌 patch…',
+    # page 6
+    'A Taiko 14 HDD image, plus the stock IRXARC.BIN from the dongle card image (needed once).':
+        '一個太鼓 14 的 HDD 映像檔，以及取自加密狗記憶卡映像檔的原版 IRXARC.BIN（只需要一次）。',
+    'T14LOAD.bin next to the program.': '程式旁要有 T14LOAD.bin。',
+    'Tools > taiko executable patches > USB keyboard patch.':
+        '工具 > taiko 主程式 patch > USB 鍵盤 patch。',
+    "Pick the HDD image (and the card image if asked), choose the build, then Install. The image's `taiko` is checked first.":
+        '選擇 HDD 映像檔（需要時再選記憶卡映像檔）和建置方式，然後按「安裝」。會先檢查映像檔中的 `taiko`。',
+    'Keys: 1P D F J K, 2P Z X C V, COIN 5, SERVICE 9, TEST F1, SELECT Up / Down / Enter. Unplug and replug the keyboard once after boot.':
+        '按鍵：1P D F J K、2P Z X C V、投幣 5、SERVICE 9、TEST F1、選擇 上 / 下 / Enter。開機後請把鍵盤拔掉再插一次。',
+    'A `taiko` that does not match is refused, so live code is never overwritten.':
+        '`taiko` 版本不符時會拒絕安裝，所以不會蓋到正在使用的程式碼。',
+    'Keyboard + dummy JVS plays with no I/O board; keyboard-only is for a machine that keeps its real board.':
+        '「鍵盤 + 虛擬 JVS」不需 I/O 板即可遊玩；「僅鍵盤」適用於仍保留實體 I/O 板的機台。',
+    'Remove deletes the files and the game uses the card again.':
+        '「移除」會刪除這些檔案，遊戲會改回使用記憶卡。',
+    'HDD installs keep an undo journal; a card image gets a .bak first.':
+        '安裝到 HDD 會保留復原日誌；記憶卡映像檔會先建立 .bak。',
+    'USB keyboard patch…': 'USB 鍵盤 patch…',
+    # page 7
+    'The .img / card image to work on.': '要處理的 .img / 記憶卡映像檔。',
+    'PCSX2 closed before writing an .img.': '寫入 .img 前先關閉 PCSX2。',
+    'pfsshell.exe next to the program for the pfsshell browser.':
+        '要用 pfsshell 瀏覽器，程式旁需要 pfsshell.exe。',
+    'Open PS2 HDD via pfsshell: browse a partition, extract or replace DATA.000 and list.bin.':
+        '用 pfsshell 開啟 PS2 HDD：瀏覽分割區，取出或替換 DATA.000 與 list.bin。',
+    'Slim PS2 HDD image reclaims space; the emulator reads the same bytes. Merge HDD images combines games into one disk.':
+        '「縮小 PS2 硬碟映像檔」可回收空間，模擬器讀到的內容不變。「合併 HDD 映像檔」可把多個遊戲合成一顆磁碟。',
+    'Open PS2 Memory Card: extract or replace T14GAME, boot.bin, IRXARC.BIN…; ECC is regenerated.':
+        '開啟 PS2 記憶卡：取出或替換 T14GAME、boot.bin、IRXARC.BIN…；ECC 會重新產生。',
+    'Pack to ISO injects the open DATA.000 + LIST.BIN into a new game ISO.':
+        '「封裝成 ISO」會把目前開啟的 DATA.000 + LIST.BIN 注入新的遊戲 ISO。',
+    '“Can\'t write the .img” almost always means an emulator still holds it.':
+        '「無法寫入 .img」幾乎都是因為模擬器還佔用著它。',
+    'HDD writes keep <img>.<date-time>.undo; roll back newest first with python -m taiko2x6.safeio rollback <file>.':
+        '寫入 HDD 會保留 <img>.<日期-時間>.undo；用 python -m taiko2x6.safeio rollback <檔案> 從最新的開始復原。',
+    'A memory card gets a .bak copy before it is opened for writing; merge sources are never modified.':
+        '記憶卡在開啟寫入前會先建立 .bak 副本；合併的來源映像檔絕不會被修改。',
+    'Open PS2 HDD via pfsshell…': '用 pfsshell 開啟 PS2 HDD…',
+    'Slim PS2 HDD image…': '縮小 PS2 HDD 映像檔…',
+    'Merge HDD images…': '合併 HDD 映像檔…',
+    'Open PS2 Memory Card…': '開啟 PS2 記憶卡…',
+    'Pack to ISO…': '封裝成 ISO…',
+    # "?" help texts
+    'Full rebuild (always on): repacks DATA.000 so a replaced file can be any size. Every group you did not edit stays at its original sector, which is what keeps the game booting; only edited groups are recompressed and appended.\n\nRelayout (greyed out while full rebuild is on) belongs to the older in-place patch: an edited file may grow inside its own group as long as the compressed group still fits its original slot.\n\nOverwrite originals: on, the old DATA.000 / list.bin are kept as .bak first. Off, nothing is overwritten and the results are written next to the originals as .new files.':
+        '完整重建（一律開啟）：重新封裝 DATA.000，讓替換的檔案可以是任何大小。你沒編輯的群組都留在原本的磁區，這正是遊戲能正常開機的關鍵；只有被編輯的群組會重新壓縮並附加在後面。\n\n重新配置（完整重建開啟時為灰色）屬於較舊的原地修補：被編輯的檔案可以在自己的群組內變大，只要壓縮後的群組仍放得進原本的空間。\n\n覆蓋原檔：勾選時，舊的 DATA.000 / list.bin 會先留成 .bak。不勾選則不覆寫任何東西，結果會寫成原檔旁的 .new 檔。',
+    'Omnimix: sources and options': 'Omnimix：來源與選項',
+    "The target is the base: only songs it does not already have are added, matched by song id.\n\nSource order: sources are read top to bottom, and when two have the same song id the one higher in the list wins. Use Up / Down to reorder.\n\nMore than 214 songs: “Fit everything” grows the game's song tables and patches the exe ceiling (up to 644); records of songs past 210 are not kept across a reboot. “Cap at 214” stops at 214.\n\nSong audio: DATA.000 must stay under 2 GiB or the game hangs on LOADING (about 430 songs at 44.1 kHz). 30 or 24 kHz keeps speed and pitch, with less treble.\n\nBackup: ticked, the target .img is copied to <img>.omnimix.bak before writing; unticked, an undo journal is kept instead.\n\nGame patches: ticked ones are applied to `taiko` after the build; unticked ones are left as they are. Preview plan writes nothing.":
+        '目標是基底：只會加入目標還沒有的歌曲，以歌曲 ID 比對。\n\n來源順序：來源由上到下讀取，兩個來源有相同歌曲 ID 時，排在清單較上面的優先。用「上移 / 下移」調整順序。\n\n超過 214 首：「全部放入並提高上限」會擴充遊戲的歌曲表並修補執行檔上限（最多 644）；第 210 首之後的歌曲成績在重新開機後不會保留。「限制在 214 首」則在 214 首停止。\n\n歌曲音訊：DATA.000 必須小於 2 GiB，否則遊戲會卡在 LOADING（44.1 kHz 約 430 首）。30 或 24 kHz 速度與音高不變，只是高音較少。\n\n備份：勾選時，寫入前會把目標 .img 複製成 <img>.omnimix.bak；不勾選則改為保留復原日誌。\n\n遊戲修補：勾選的項目會在建立完成後套用到 `taiko`；沒勾選的維持原狀。「預覽計畫」不會寫入任何東西。',
+    'Boot & select patches': '開機與選歌 patch',
+    'Each box is one switch in the game program `taiko`. Ticked = the patch is on. Pick an image and its current state is read in; the label next to a box says whether it will change.\n\nApply writes only the boxes you changed. Unticking a patch puts the stock code back, so every switch can be undone.\n\nSkip the boot Notice screen / attract credits: the boot and attract loop move on without those screens.\nFreeze the song-select countdown: it stays on screen but never runs out. Disable the difficulty-select timeout: that screen never auto-starts.\nKeep songs already played: a song played earlier in the credit stays in the list.\nCategory folders: song select shows only the category cards; don opens a folder, both ka close it.\n\nBefore Apply: close PCSX2, and use Back up taiko… once; Restore… puts that copy back. An undo journal is also saved before the image is changed.':
+        '每個方塊是遊戲程式 `taiko` 裡的一個開關。勾選 = 該修補已開啟。選好映像檔後會讀入目前狀態；方塊旁的文字會告訴你它是否將被改變。\n\n「套用」只會寫入你改過的方塊。取消勾選會放回原版程式碼，所以每個開關都能復原。\n\n略過開機提示畫面 / 待機製作人員名單：開機與待機循環會直接跳過這些畫面。\n凍結選曲倒數：倒數會顯示但永遠不會結束。停用難度選擇逾時：該畫面不會自動開始。\n保留本局已玩歌曲：同一局稍早玩過的歌曲仍留在清單中。\n分類資料夾：選曲只顯示分類卡片；按「咚」開啟資料夾，按任一「喀」關閉。\n\n套用前：先關閉 PCSX2，並至少用一次「備份 taiko…」；「還原…」會把該備份放回去。修改映像檔前也會先保存復原日誌。',
+    'Add or replace': '新增或替換',
+    "Off: the selected song's slot is overwritten with your song; the song count does not change.\n\nOn: a brand-new song is added under the id you type, using the selected song as the template for the texture and chart layout. This raises the song count, so past the game's ceiling patch it first (Tools > taiko executable patches).\n\nNothing is written yet: Build stages the files, and the main window's Save (or the write prompt of a new song) puts them in DATA.000 with a .bak backup.":
+        '關閉：所選歌曲的欄位會被你的歌曲覆寫；歌曲數不變。\n\n開啟：以你輸入的 ID 新增一首全新的歌曲，並以所選歌曲作為貼圖與譜面配置的範本。這會增加歌曲數，超過遊戲上限時請先修補（工具 > taiko 主程式 patch）。\n\n此時還沒寫入任何東西：「建立」只會暫存檔案，之後由主視窗的「儲存」（或新增歌曲時的寫入提示）把它們寫進 DATA.000，並保留 .bak 備份。',
+    'Sync nudge': '對齊微調',
+    "Leave this at 0. The music is synced to the TJA's BPM and OFFSET automatically, so give it the ORIGINAL .tja and .ogg, not files already processed by another tool. Use it only to tune a song that feels slightly off: a positive value moves the music later, a negative one earlier.":
+        '請維持 0。音樂會自動依 TJA 的 BPM 與 OFFSET 同步，所以請提供原始的 .tja 與 .ogg，不要用已被其他工具處理過的檔案。只有當歌曲感覺略有偏差時才微調：正值讓音樂延後，負值讓音樂提前。',
+}
+ZH_TW.update(_GUIDE_ZH)
