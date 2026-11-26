@@ -280,6 +280,78 @@ def song_id_set(archive) -> set:
 
 
 # --------------------------------------------------------------------------- #
+#  per-archive read cache (planning only)
+#
+#  plan_merge reads each archive's tuning.bin / musicinfo.bin and derives the
+#  same id list / genre table from them a dozen times (every helper re-reads
+#  the file, and each read walks the whole group table and decompresses the
+#  group). While a plan_merge / repair_song_db is running the archives are
+#  read-only, so within `_read_cache()` those reads and derivations are
+#  memoised per archive object. Outside the context nothing is cached.
+# --------------------------------------------------------------------------- #
+import threading
+from contextlib import contextmanager
+
+_cache_state = threading.local()
+
+
+@contextmanager
+def _read_cache():
+    """Memoise _named / _ordered_ids / _genres for the archives touched inside."""
+    outer = getattr(_cache_state, "cache", None)
+    if outer is None:
+        _cache_state.cache = {}
+    try:
+        yield
+    finally:
+        if outer is None:
+            _cache_state.cache = None
+
+
+def _cached(archive, key, compute):
+    cache = getattr(_cache_state, "cache", None)
+    if cache is None:
+        return compute()
+    # the archive is kept in the value so its id() cannot be reused meanwhile
+    ent = cache.get((id(archive), key))
+    if ent is None:
+        try:
+            ent = (archive, True, compute())
+        except Exception as exc:
+            ent = (archive, False, exc)
+        cache[(id(archive), key)] = ent
+    if not ent[1]:
+        raise ent[2]
+    return ent[2]
+
+
+def _named(archive, filename):
+    """song_builder._read_named, memoised inside _read_cache()."""
+    from taiko2x6.songs import song_builder
+    return _cached(archive, ("file", filename.lower()),
+                   lambda: song_builder._read_named(archive, filename))
+
+
+def _rows(archive) -> list:
+    """_musicinfo_rows of the archive's musicinfo.bin (memoised, shared list:
+    callers must not modify it)."""
+    return _cached(archive, ("rows",),
+                   lambda: _musicinfo_rows(_named(archive, "musicinfo.bin")))
+
+
+def _previews(archive) -> dict:
+    return _cached(archive, ("previews",),
+                   lambda: musicinfo_previews(_named(archive, "musicinfo.bin")))
+
+
+def _genres(archive) -> dict:
+    """musicinfo_genres of the archive's musicinfo.bin (memoised, shared dict:
+    callers must not modify it)."""
+    return _cached(archive, ("genres",),
+                   lambda: musicinfo_genres(_named(archive, "musicinfo.bin")))
+
+
+# --------------------------------------------------------------------------- #
 #  reading per-song metadata (stars / genre) in the source's own DB variant
 # --------------------------------------------------------------------------- #
 CPOP = 8                 # C-POP song genre
@@ -288,7 +360,11 @@ CPOP_HEADER = 15         # its folder header row ("selcpp")
 
 def musicinfo_genres(raw: bytes) -> dict:
     """{song id: genre} for the song rows of musicinfo.bin (headers left out)."""
-    return {sid: g for sid, g in _musicinfo_rows(raw)
+    return _song_genres(_musicinfo_rows(raw))
+
+
+def _song_genres(rows) -> dict:
+    return {sid: g for sid, g in rows
             if 0 <= g <= 6 or g == CPOP}       # 8 = C-POP (T11T/T12T, TK14 .0001)
 
 
@@ -411,15 +487,15 @@ def read_song_meta(archive) -> dict:
     from taiko2x6.songs import song_builder
     from taiko2x6.songs.song_manager import SongManager
     from taiko2x6.bineditors import bineditor_tuning as TU
-    tuning = song_builder._read_named(archive, "tuning.bin")
+    tuning = _named(archive, "tuning.bin")
     sm = SongManager(
-        song_builder._read_named(archive, "musicinfo.bin"),
+        _named(archive, "musicinfo.bin"),
         tuning,
-        song_builder._read_named(archive, "streaminfo.bin"))
+        _named(archive, "streaminfo.bin"))
     meta = {s.id: {"stars": list(s.stars), "genre": s.genre} for s in sm._songs}
     # SongManager pairs musicinfo rows with ids by position, which drifts on
     # other builds; take each song's genre from its own musicinfo row instead.
-    genres = musicinfo_genres(song_builder._read_named(archive, "musicinfo.bin"))
+    genres = _genres(archive)
     for sid, g in genres.items():
         meta.setdefault(sid, {"stars": [1, 1, 1, 1], "genre": g})["genre"] = g
     if TU.is_t14_layout(tuning):
@@ -453,13 +529,13 @@ def read_play_fields(archive) -> dict:
     Needs a QApplication for Taiko 7 (ids come from SongManager there)."""
     from taiko2x6.songs import song_builder
     from taiko2x6.bineditors import bineditor_tuning as TU
-    tuning = song_builder._read_named(archive, "tuning.bin")
+    tuning = _named(archive, "tuning.bin")
     if TU.is_t14_layout(tuning):
         return TU.t14_play_fields(tuning)
     if TU.is_t7_layout(tuning):
         from taiko2x6.songs.song_manager import SongManager
-        sm = SongManager(song_builder._read_named(archive, "musicinfo.bin"), tuning,
-                         song_builder._read_named(archive, "streaminfo.bin"))
+        sm = SongManager(_named(archive, "musicinfo.bin"), tuning,
+                         _named(archive, "streaminfo.bin"))
         rows = TU.t7_play_fields(tuning)
         return {s.id: rows[s.k] for s in sm._songs if s.k < len(rows)}
     try:
@@ -520,7 +596,45 @@ def _fumen_belongs(group_name: str, sid: str) -> bool:
     return bool(m) and m.group("id") == sid
 
 
-def harvest_song(archive, sid: str) -> tuple:
+_STREAM_PREFIX = "sound.stream.music_"
+_TEX_PREFIXES = tuple(f"music_texture.{t}_" for t in _TEX_TYPES)
+_SELECT_GROUP = "music_texture.music_select"
+
+
+class HarvestIndex:
+    """One pass over an archive's group table, so harvesting N songs costs
+    O(groups + N) instead of O(N x groups).
+
+    per_song[sid]: that song's chart / stream / name-texture groups in layout
+    order; select: [(group, is_shared, {entry name: [(pos, entry)]})] for the
+    shared music_texture.music_select* groups, in layout order.
+    """
+
+    def __init__(self, archive):
+        self.per_song = {}
+        self.select = []
+        layout = archive.layout
+        for grp in layout.groups:
+            gn = grp["name"]
+            m = _FUMEN_RE.match(gn)
+            sid = m.group("id") if m else None
+            if sid is None and gn.startswith(_STREAM_PREFIX):
+                sid = gn[len(_STREAM_PREFIX):]
+            if sid is None:
+                for pre in _TEX_PREFIXES:
+                    if gn.startswith(pre):
+                        sid = gn[len(pre):]
+                        break
+            if sid is not None:
+                self.per_song.setdefault(sid, []).append(grp)
+            elif gn == _SELECT_GROUP or gn.startswith(_SELECT_GROUP + "_"):
+                names = {}
+                for pos, e in enumerate(layout.files_for_group(grp)):
+                    names.setdefault(e["name"], []).append((pos, e))
+                self.select.append((grp, gn == _SELECT_GROUP, names))
+
+
+def harvest_song(archive, sid: str, index: HarvestIndex = None) -> tuple:
     """Collect sid's assets from `archive`.
 
     Returns (new_groups, extra_files):
@@ -532,39 +646,37 @@ def harvest_song(archive, sid: str) -> tuple:
       * extra_files: this song's files that live inside SHARED groups
         (music_texture.music_select*, holding select_full/short/non) as
         {group_name: [(fname, raw_bytes)]}.
+
+    `index` (HarvestIndex(archive)) skips the per-call scan of the group
+    table when many songs are harvested from one archive.
     """
     from taiko2x6.charts import sht_t7
+    if index is None:
+        index = HarvestIndex(archive)
     new_groups = []
     extra_files = {}
     want_select = {f"select_full_{sid}", f"select_short_{sid}"}
     non_name = f"select_non_{sid}"
-    for grp in archive.layout.groups:
+    for grp in index.per_song.get(sid, ()):
         gn = grp["name"]
         comp = grp.get("compression", 2)
-        per_song = (
-            _fumen_belongs(gn, sid)
-            or gn == f"sound.stream.music_{sid}"
-            or any(gn == f"music_texture.{t}_{sid}" for t in _TEX_TYPES))
-        if per_song:
-            files = [(e["name"], archive.read_file(grp, e))
-                     for e in archive.layout.files_for_group(grp)]
-            g = {"name": gn, "files": files, "compression": comp}
-            if gn.startswith("fumen."):
-                conv = [sht_t7.ensure_gen2(d) for _n, d in files]
-                if any(c for _d, c in conv):
-                    g["files"] = [(n, d) for (n, _o), (d, _c) in zip(files, conv)]
-                    g["converted"] = True
-            new_groups.append(g)
-        elif gn == "music_texture.music_select":
-            for e in archive.layout.files_for_group(grp):
-                if e["name"] in want_select:
-                    extra_files.setdefault(gn, []).append(
-                        (e["name"], archive.read_file(grp, e)))
-        elif gn.startswith("music_texture.music_select_"):
-            for e in archive.layout.files_for_group(grp):
-                if e["name"] == non_name:
-                    extra_files.setdefault(gn, []).append(
-                        (e["name"], archive.read_file(grp, e)))
+        files = [(e["name"], archive.read_file(grp, e))
+                 for e in archive.layout.files_for_group(grp)]
+        g = {"name": gn, "files": files, "compression": comp}
+        if gn.startswith("fumen."):
+            conv = [sht_t7.ensure_gen2(d) for _n, d in files]
+            if any(c for _d, c in conv):
+                g["files"] = [(n, d) for (n, _o), (d, _c) in zip(files, conv)]
+                g["converted"] = True
+        new_groups.append(g)
+    for grp, shared, names in index.select:
+        gn = grp["name"]
+        if shared:
+            hits = sorted(h for w in want_select for h in names.get(w, ()))
+        else:
+            hits = names.get(non_name, ())
+        for _pos, e in hits:
+            extra_files.setdefault(gn, []).append((e["name"], archive.read_file(grp, e)))
     return new_groups, extra_files
 
 
@@ -650,7 +762,7 @@ def song_titles(archive) -> dict:
     """
     from collections import Counter
     from taiko2x6.songs import song_builder
-    tu = song_builder._read_named(archive, "tuning.bin")
+    tu = _named(archive, "tuning.bin")
     toks = tu.split(b"\0")
     out = {}
     for i in range(len(toks) - 1):
@@ -681,6 +793,11 @@ def plan_merge(target, sources, log=lambda s: None,
     every archive involved, so a target song with a placeholder title still
     gets its real one from the game it was taken from.
     """
+    with _read_cache():
+        return _plan_merge(target, sources, log, dedupe_titles)
+
+
+def _plan_merge(target, sources, log, dedupe_titles) -> MergePlan:
     from taiko2x6.songs import song_builder
     target_ids = list(_ordered_ids(target))
     have = set(target_ids)
@@ -719,12 +836,11 @@ def plan_merge(target, sources, log=lambda s: None,
                 log(f"{spec.label}: no gauge/scoring values ({exc})")
                 plays[spec.label] = {}
             try:
-                previews[spec.label] = musicinfo_previews(
-                    song_builder._read_named(src, "musicinfo.bin"))
+                previews[spec.label] = _previews(src)
             except Exception:
                 previews[spec.label] = {}
             try:
-                rows = _musicinfo_rows(song_builder._read_named(src, "musicinfo.bin"))
+                rows = _rows(src)
             except Exception:
                 rows = []
             # song rows only: a folder header is not a song either (the old
@@ -791,7 +907,7 @@ def _vote_genres(target, opened, items, log=lambda s: None, metas=None) -> None:
     from taiko2x6.songs import song_builder
     def genres(arc):
         try:
-            return musicinfo_genres(song_builder._read_named(arc, "musicinfo.bin"))
+            return _genres(arc)
         except Exception:
             return {}
     tgt = genres(target)
@@ -872,11 +988,11 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
     def info(arc):
         try:
             ids = list(_ordered_ids(arc))
-            g = musicinfo_genres(song_builder._read_named(arc, "musicinfo.bin"))
+            g = _genres(arc)
         except Exception:
             return [], {}, False
         try:
-            t14 = TU.is_t14_layout(song_builder._read_named(arc, "tuning.bin"))
+            t14 = TU.is_t14_layout(_named(arc, "tuning.bin"))
         except Exception:
             t14 = False
         return ids, g, t14
@@ -1000,7 +1116,7 @@ def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None
             n_items += 1
     n_tgt = 0
     try:
-        tuning = song_builder._read_named(target, "tuning.bin")
+        tuning = _named(target, "tuning.bin")
         if TU.is_t14_layout(tuning) and opened:
             cur, stars = TU.t14_play_fields(tuning), TU.t14_stars(tuning)
             base = set(_ordered_ids(opened[0][1]))
@@ -1020,6 +1136,11 @@ def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None
 
 
 def repair_song_db(target, sources, log=lambda s: None) -> dict:
+    with _read_cache():
+        return _repair_song_db(target, sources, log)
+
+
+def _repair_song_db(target, sources, log) -> dict:
     """{file name: new bytes} that fix an already built Omnimix, empty if
     nothing changes.
 
@@ -1032,8 +1153,8 @@ def repair_song_db(target, sources, log=lambda s: None) -> dict:
     """
     from taiko2x6.songs import song_builder
     from taiko2x6.bineditors import bineditor_tuning as TU
-    tuning = song_builder._read_named(target, "tuning.bin")
-    music = song_builder._read_named(target, "musicinfo.bin")
+    tuning = _named(target, "tuning.bin")
+    music = _named(target, "musicinfo.bin")
     if not TU.is_t14_layout(tuning):
         raise ValueError("target is not a Taiko 14 tuning layout")
     opened, plays, previews = [], {}, {}
@@ -1042,8 +1163,7 @@ def repair_song_db(target, sources, log=lambda s: None) -> dict:
             src = open_pair(spec.list_path, spec.data_path, spec.fmt)
             opened.append((spec, src))
             plays[spec.label] = read_play_fields(src)
-            previews[spec.label] = musicinfo_previews(
-                song_builder._read_named(src, "musicinfo.bin"))
+            previews[spec.label] = _previews(src)
         _g, _s, _r, pfix, vfix = _resolve_trusted(target, opened, [], {}, log,
                                                   plays, previews)
         _estimate_missing_play(target, opened, [], pfix, log)
@@ -1164,7 +1284,8 @@ def trim_title_textures(archive, log=lambda s: None) -> int:
 
 def _ordered_ids(archive):
     from taiko2x6.songs import song_builder
-    return song_builder.song_ids(archive)
+    return list(_cached(archive, ("ids",), lambda: song_builder.song_ids_from(
+        _named(archive, "tuning.bin"))))
 
 
 # --------------------------------------------------------------------------- #
@@ -1184,7 +1305,7 @@ def _target_star_fixes(target, opened, metas, log=lambda s: None) -> dict:
     from taiko2x6.songs import song_builder
     from taiko2x6.bineditors import bineditor_tuning as TU
     try:
-        tuning = song_builder._read_named(target, "tuning.bin")
+        tuning = _named(target, "tuning.bin")
         if not TU.is_t14_layout(tuning):
             return {}
         tgt = TU.t14_stars(tuning)
@@ -1529,9 +1650,10 @@ def assemble(target, sources, plan, precomputed_db, log=lambda s: None,
         spec = src_by_label[label]
         src = open_pair(spec.list_path, spec.data_path, spec.fmt)
         try:
+            hindex = HarvestIndex(src)
             for it in its:
                 try:
-                    g, x = harvest_song(src, it.sid)
+                    g, x = harvest_song(src, it.sid, hindex)
                     if not any(gg["name"].startswith("fumen.") for gg in g):
                         result["warnings"].append(
                             f"{it.sid} ({label}): no chart groups found — skipped")
