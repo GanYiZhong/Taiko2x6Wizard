@@ -671,6 +671,8 @@ ZH_TW: dict[str, str] = {
     'Missing': '缺少',
     'Not set': '未設定',
     'Nothing found automatically. Use Browse… to pick it.': '無法自動找到。請用「瀏覽…」自行選擇。',
+    'Reset window layouts': '重設視窗版面',
+    'Forget the saved size and position of every dialog? They will open at their default layout next time.': '清除所有對話框已儲存的大小與位置？下次開啟時會使用預設版面。',
     'Forget all remembered paths': '清除所有記住的路徑',
     'Forget every remembered path? File pickers will start from scratch. Files on disk are not touched.': '清除所有記住的路徑？檔案選擇器會從頭開始。磁碟上的檔案不會被更動。',
     'Open Settings…': '開啟設定…',
