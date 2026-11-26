@@ -112,7 +112,8 @@ def _factories():
     from taiko2x6.ps2 import (apa_merge, backups_undo, hdd_browser, hdd_song_wizard, img_slim,
                               iso_packer, pfsshell_tool, ps2mc_card)
     from taiko2x6.songs import (generators, omnimix_gui, song_builder,
-                                song_manager, song_replacer)
+                                song_manager, song_replacer, sync_preview)
+    song_builder.sync_preview = sync_preview
 
     def sound_bank():
         from taiko2x6.audio import hdbd
@@ -130,6 +131,18 @@ def _factories():
 
     tmp = Path(os.environ.get("TEMP", ".")) / "_dlg_consistency"
     tmp.mkdir(exist_ok=True)
+
+    def sync_preview_dialog():
+        import wave
+        wav = tmp / "sync.wav"
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(22050)
+            w.writeframes(bytes(22050 * 2))
+        return song_builder.sync_preview.SyncPreviewDialog(
+            "BPM:120\nOFFSET:-1\nCOURSE:Oni\nLEVEL:8\n#START\n1020,\n#END\n",
+            str(wav), 0.0)
     for n in ("a.iso", "DATA.000", "LIST.BIN"):
         (tmp / n).write_bytes(b"x" * 64)
     ed = lambda mod, data: (lambda: mod.Editor(data, "t"))
@@ -169,6 +182,7 @@ def _factories():
         "OmnimixDialog": omnimix_gui.OmnimixDialog,
         "PlanDetailsDialog": lambda: omnimix_gui.PlanDetailsDialog(_plan(), [_NS(label="A")]),
         "StarsDialog": lambda: song_builder.StarsDialog("sid", [1, 2, 3, 4]),
+        "SyncPreviewDialog": sync_preview_dialog,
         "SongBuilderDialog": lambda: song_builder.SongBuilderDialog(object()),
         "SongManager": lambda: song_manager.SongManager(_musicinfo(), _tuning(), _streaminfo()),
         "SongReplacerDialog": lambda: song_replacer.SongReplacerDialog(object()),
@@ -178,7 +192,7 @@ def _factories():
     }
 
 
-NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'OpenWithDialog', 'BackupsUndoDialog']
+NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SyncPreviewDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog', 'GuideDialog', 'OpenWithDialog', 'BackupsUndoDialog']
 
 
 @pytest.fixture(autouse=True)
