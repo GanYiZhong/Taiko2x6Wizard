@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         self.setup_box = QLabel()
         self.setup_box.setWordWrap(True)
         self.setup_box.setStyleSheet(
-            "background:#fff4e0; color:#7a4b00; border:1px solid #e0b060;"
+            "background:rgba(224,160,48,40); color:palette(text); border:1px solid rgba(224,160,48,160);"
             "border-radius:4px; padding:8px;")
         v.addWidget(self.setup_box)
         self.btn_setup = QPushButton(tr("Open Settings…"))
