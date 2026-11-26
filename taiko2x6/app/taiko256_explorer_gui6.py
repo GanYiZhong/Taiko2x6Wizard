@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QProgressDialog, QPlainTextEdit, QTabWidget, QStyle, QToolBar, QStatusBar,
     QHeaderView, QMenu, QCheckBox, QGroupBox, QFormLayout, QSpinBox,
     QStackedWidget, QToolButton, QFrame, QListWidget, QListWidgetItem,
+    QAbstractItemView,
 )
 
 SECTOR_SIZE = core.SECTOR_SIZE
@@ -1547,6 +1548,10 @@ class MainWindow(QMainWindow):
                 self.archive.layout.files[fi0]["name"]))
             act_export = menu.addAction("Export This File…")
             act_export.triggered.connect(lambda: self._export_one(item))
+            sid = self._song_id_for_item(item)
+            if sid:
+                act_song = menu.addAction(tr("Show song in Song Manager"))
+                act_song.triggered.connect(lambda: self.open_song_manager(select_sid=sid))
             entry = self.archive.layout.files[item.data(ROLE_FILE)]
             group = self.archive.layout.groups[item.data(ROLE_GROUP)]
             if entry["name"].lower().endswith(".nut") and \
@@ -1703,7 +1708,39 @@ class MainWindow(QMainWindow):
                     return grp, e
         return None
 
-    def open_song_manager(self):
+    def reveal_file(self, gi: int, fi: int) -> bool:
+        """Select (and scroll to) file (gi, fi) in the tree, clearing a filter
+        that hides it. False if the file is not in the tree."""
+        item = self._find_file_item(gi, fi)
+        if item is None:
+            return False
+        ix = self.proxy.mapFromSource(item.index())
+        if not ix.isValid():
+            self.filter_box.clear()
+            ix = self.proxy.mapFromSource(item.index())
+            if not ix.isValid():
+                return False
+        p = ix.parent()
+        while p.isValid():
+            self.tree.expand(p)
+            p = p.parent()
+        self.tree.selectionModel().clearSelection()
+        self.tree.setCurrentIndex(ix)
+        self.tree.selectionModel().select(
+            ix, self.tree.selectionModel().SelectionFlag.ClearAndSelect
+            | self.tree.selectionModel().SelectionFlag.Rows)
+        self.tree.scrollTo(ix, QAbstractItemView.PositionAtCenter)
+        return True
+
+    def _song_id_for_item(self, item) -> str | None:
+        if item is None or item.data(ROLE_KIND) != "file":
+            return None
+        from taiko2x6.songs import song_assets
+        return song_assets.song_id_of(
+            self.archive.layout.groups[item.data(ROLE_GROUP)]["name"],
+            self.archive.layout.files[item.data(ROLE_FILE)]["name"])
+
+    def open_song_manager(self, select_sid: str | None = None):
         if not self.archive:
             return
         from taiko2x6.songs import song_manager
@@ -1719,11 +1756,16 @@ class MainWindow(QMainWindow):
         try:
             data = {fn: self.archive.read_file(g, e) for fn, (g, e) in located.items()}
             dlg = song_manager.SongManager(
-                data["musicinfo.bin"], data["tuning.bin"], data["streaminfo.bin"], self)
+                data["musicinfo.bin"], data["tuning.bin"], data["streaminfo.bin"], self,
+                archive=self.archive, host=self)
         except Exception as exc:
             QMessageBox.critical(self, tr("Song Manager failed"),
                                  f"{exc}\n\n{traceback.format_exc()}")
             return
+        if select_sid and not dlg.select_song(select_sid):
+            QMessageBox.information(
+                self, tr("Song Manager"),
+                tr("Song {id} is not in the song database.").format(id=select_sid))
         accepted = dlg.exec()
         result = getattr(dlg, "result", None)
         dlg.deleteLater()

@@ -735,8 +735,14 @@ class SongManager(QDialog):
 
     NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
 
-    def __init__(self, mi_bytes: bytes, tu_bytes: bytes, si_bytes: bytes, parent=None):
+    def __init__(self, mi_bytes: bytes, tu_bytes: bytes, si_bytes: bytes, parent=None,
+                 archive=None, host=None):
         super().__init__(parent)
+        # optional: the opened archive (+ explorer window) enables the
+        # read-only "Song assets" panel
+        self._archive = archive
+        self._host = host
+        self.assets_panel = None
         self.setWindowTitle(tr("Taiko Song Manager (cross-bin)"))
         self.setSizeGripEnabled(True)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
@@ -916,6 +922,12 @@ class SongManager(QDialog):
         self.tbl.itemChanged.connect(self._on_item_changed)
         self.tbl.itemSelectionChanged.connect(self._update_buttons)
         lay.addWidget(self.tbl, 1)
+
+        if self._archive is not None:
+            from taiko2x6.songs.song_assets import SongAssetsPanel
+            self.assets_panel = SongAssetsPanel(self._archive, self._host)
+            lay.addWidget(self.assets_panel)
+            self.tbl.itemSelectionChanged.connect(self._update_assets)
 
         self.lbl_status = QLabel("")
         self.lbl_status.setWordWrap(True)
@@ -1271,6 +1283,30 @@ class SongManager(QDialog):
                 out.append(s)
         return out
 
+    def _update_assets(self):
+        if self.assets_panel is None:
+            return
+        sel = self._selected_songs()
+        if len(sel) == 1:
+            self.assets_panel.set_song(sel[0].id, sel[0].stars)   # _Song.id
+        else:
+            self.assets_panel.set_song(None)
+
+    def select_song(self, sid: str) -> bool:
+        """Select (and scroll to) the row of song id ``sid``; False if absent."""
+        if self.ed_filter.text() or self.chk_changed.isChecked() \
+                or self.cb_genre.currentIndex() != 0:
+            self.ed_filter.clear()
+            self.chk_changed.setChecked(False)
+            self.cb_genre.setCurrentIndex(0)
+        for r in range(self.tbl.rowCount()):
+            it = self.tbl.item(r, COL_ID)
+            if it is not None and it.text() == sid and not self.tbl.isRowHidden(r):
+                self.tbl.selectRow(r)
+                self.tbl.scrollToItem(it)
+                return True
+        return False
+
     def _update_buttons(self):
         n = len(self._selected_songs())
         self.b_bulk_genre.setEnabled(n > 0 and not self._t14)
@@ -1403,6 +1439,8 @@ class SongManager(QDialog):
             pass
 
     def done(self, code):
+        if self.assets_panel is not None:
+            self.assets_panel.close_previews()
         self._save_prefs()
         super().done(code)
 
