@@ -426,10 +426,15 @@ def _scan_blocks(data: bytes, pool_offset: int, marker_index: int = NEG_MARKER_I
     marks the block boundary.
     """
     # one int32 per 4 bytes of [0, pool_offset): same offsets as the old
-    # byte-stepping loop, unpacked in a single C call
+    # byte-stepping loop, found in one vectorised pass
     n = max(0, pool_offset) // 4
-    negs = [4 * i for i, (v,) in enumerate(struct.iter_unpack("<i", data[:4 * n]))
-            if -300 < v < -1]
+    try:
+        import numpy as np
+        v = np.frombuffer(data, dtype="<i4", count=n)
+        negs = (np.flatnonzero((v > -300) & (v < -1)) * 4).tolist()
+    except ImportError:
+        negs = [4 * i for i, (v,) in enumerate(struct.iter_unpack("<i", data[:4 * n]))
+                if -300 < v < -1]
     if not negs:
         return []
 
@@ -580,6 +585,9 @@ try:
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
 
+    # read-only item flags, computed once (per-item flags() & ~Editable is slow)
+    _RO = QTableWidgetItem().flags() & ~Qt.ItemIsEditable
+
     class Editor(QDialog):
         """Modal editor. After exec(), ``result_bytes`` holds new bytes if saved."""
 
@@ -617,9 +625,9 @@ try:
                 self.tbl_str.setHorizontalHeaderLabels([tr("offset"), tr("text")])
                 for r, s in enumerate(m.strings):
                     o = QTableWidgetItem(f"0x{s.offset:X}")
-                    o.setFlags(o.flags() & ~Qt.ItemIsEditable)
+                    o.setFlags(_RO)
                     t = QTableWidgetItem(s.text)
-                    t.setFlags(t.flags() & ~Qt.ItemIsEditable)
+                    t.setFlags(_RO)
                     self.tbl_str.setItem(r, 0, o)
                     self.tbl_str.setItem(r, 1, t)
                 self.tbl_str.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -654,7 +662,7 @@ try:
                 meta = [str(blk.index), str(blk.song_index), blk.player, DIFF_NAMES[di]]
                 for c, val in enumerate(meta):
                     it = QTableWidgetItem(val)
-                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                    it.setFlags(_RO)
                     self.tbl.setItem(r, c, it)
                 for c, val in enumerate(rec.values):
                     self.tbl.setItem(r, 4 + c, QTableWidgetItem(str(val)))
@@ -672,9 +680,9 @@ try:
             self.tbl_str.setHorizontalHeaderLabels([tr("offset"), tr("text")])
             for r, s in enumerate(self.model.strings):
                 o = QTableWidgetItem(f"0x{s.offset:X}")
-                o.setFlags(o.flags() & ~Qt.ItemIsEditable)
+                o.setFlags(_RO)
                 t = QTableWidgetItem(s.text)
-                t.setFlags(t.flags() & ~Qt.ItemIsEditable)
+                t.setFlags(_RO)
                 self.tbl_str.setItem(r, 0, o)
                 self.tbl_str.setItem(r, 1, t)
             self.tbl_str.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)

@@ -34,6 +34,7 @@ Public interface:
 from __future__ import annotations
 
 import struct
+from bisect import bisect_right
 from dataclasses import dataclass, field
 
 FILENAME = "streaminfo.bin"
@@ -104,6 +105,7 @@ def parse(data: bytes) -> Model:
 
     records = []
     n_pool = len(raw_pool)
+    offs_sorted = sorted({r[0] for r in raw})   # next strictly-greater offset
     # Highest end (terminator inclusive) actually used by any slot, so trailing
     # pool padding past the last real string can be preserved as a raw span and
     # excluded from any slot's writable capacity.
@@ -117,8 +119,8 @@ def parse(data: bytes) -> Model:
         # or the pool end. Within that region the writable capacity is capped at
         # the real NUL terminator (name bytes + that single NUL). This stops an
         # edit on the final name from overwriting trailing pool alignment.
-        higher = [r[0] for r in raw if r[0] > name_off]
-        region_end = min(higher) if higher else n_pool
+        j = bisect_right(offs_sorted, name_off)
+        region_end = offs_sorted[j] if j < len(offs_sorted) else n_pool
         region = raw_pool[name_off:region_end]
         term = region.find(b"\x00")
         if term < 0:

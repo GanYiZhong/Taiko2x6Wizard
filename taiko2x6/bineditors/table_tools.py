@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, QEvent
 from PySide6.QtGui import QBrush, QColor, QKeySequence
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QWidget)
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QHeaderView, QLabel,
+                               QLineEdit, QPushButton, QWidget)
 
 from taiko2x6.app import appconfig
 from taiko2x6.app.i18n import tr
@@ -49,15 +49,26 @@ class TableTools(QObject):
         self.on_change = []
         self.max_len = dict(max_len or {})  # col -> max characters (text columns)
         self.int_cols = set(range(table.columnCount())) if int_cols is None else set(int_cols)
+        edit = Qt.ItemIsEditable.value       # int test: Flag.__and__ is slow
+        item, ncols = table.item, table.columnCount()
         for r in range(table.rowCount()):
-            for c in range(table.columnCount()):
-                it = table.item(r, c)
-                if it is not None and it.flags() & Qt.ItemIsEditable:
+            for c in range(ncols):
+                it = item(r, c)
+                if it is not None and it.flags().value & edit:
                     self._base[(r, c)] = it.text()
+        # A header item edit re-measures every row while the header sizes its
+        # sections to their contents (hundreds of ms on a 600-row table): park
+        # the mode while the tooltips are set, then restore it (one measure).
+        hdr = table.horizontalHeader()
+        mode = hdr.sectionResizeMode(0) if table.columnCount() else None
+        if mode == QHeaderView.ResizeToContents:
+            hdr.setSectionResizeMode(QHeaderView.Interactive)
         for c, tip in enumerate(col_tips or []):
             h = table.horizontalHeaderItem(c)
             if tip and h is not None:
                 h.setToolTip(tip)
+        if mode == QHeaderView.ResizeToContents:
+            hdr.setSectionResizeMode(QHeaderView.ResizeToContents)
         table.itemChanged.connect(self._changed)
         table.installEventFilter(self)
         self._tip_range = tr("Integer between {lo} and {hi} (0x... hex allowed)").format(
