@@ -78,3 +78,24 @@ def test_levels_and_grouping(tmp_path):
     assert pc["levels"] == {"oni": 9, "easy": 2}
     assert pc["title"] == "Demo" and pc["wave"] == "demo.ogg"
     assert set(pc["charts"]) == {"oni", "easy"}
+
+
+def test_dialog_state_and_persistence(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+    from taiko2x6.app import appconfig
+    monkeypatch.setattr(appconfig, "INI_PATH", tmp_path / "config.ini")
+    QApplication.instance() or QApplication([])
+    d = chart_convert.ChartConverterDialog()
+    assert not d.b_go.isEnabled()                  # nothing queued
+    f = tmp_path / "a.tja"
+    f.write_text("x")
+    d.add_paths([str(f)])
+    assert d.b_go.isEnabled() and d.ed_out.text()
+    d.lst.selectAll()
+    d._remove()
+    assert not d.b_go.isEnabled()
+    d._save_settings("O:/out", {"sht", "tja"}, ("1p",))
+    d2 = chart_convert.ChartConverterDialog()
+    assert d2.ed_out.text() == "O:/out"
+    assert d2.ck["sht"].isChecked() and not d2.ck["vag"].isChecked()
+    assert not d2.ck_2p.isChecked()
