@@ -19,6 +19,7 @@ from taiko2x6.app import icons
 from taiko2x6.app.i18n import tr
 
 CARD_MIN_W = 260
+MAX_COLS = 4
 RECENT_ROLE = Qt.UserRole
 
 
@@ -250,7 +251,7 @@ class StartPage(QWidget):
     # ---- responsive layout -------------------------------------------
     def _columns(self) -> int:
         avail = self.scroll.viewport().width() - 56
-        return max(1, avail // (CARD_MIN_W + 8))
+        return max(1, min(MAX_COLS, avail // (CARD_MIN_W + 8)))
 
     def relayout(self):
         cols = self._columns()
