@@ -28,6 +28,7 @@ section with no such points is written as a drumroll (r) condition.
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import gzip
 import math
@@ -44,6 +45,12 @@ _NONE = [-1] * 6
 # TJA cells per Gen2 grid unit: notes sit on the 1/48-bar grid, but a roll's
 # end is placed on a grid 8x finer so long rolls keep their length.
 _SUB = 8
+# Finer grids tried, per measure, until every roll end in it lands within
+# _TOL_MS of its true time (a longer line only where a roll ends).
+_SUBS = (8, 16, 32, 64, 128)
+_TOL_MS = 0.5
+# An end this close before a track's time belongs to that track (cell 0).
+_SNAP_MS = 0.5
 
 COURSES = ("easy", "normal", "hard", "oni")
 _TJA_COURSE = {"easy": "Easy", "normal": "Normal", "hard": "Hard",
@@ -266,24 +273,59 @@ class _Course:
             d = d if abs(d) >= 0.25 else 0.0
             self.delay.append(d)
             cur += d + self.n48[k] / 48.0 * _bar_ms(t)
+        self.times = [t["time"] for t in tr]
+        self.sub = self._pick_subs()
         self.balloons = [[], [], []]
         self.grid = [[{} for _ in tr] for _ in range(3)]
         for b in range(3):
             self._fill(b)
 
+    def _pick_subs(self):
+        """Cells per 1/48 slot for each track: the smallest of _SUBS that
+        puts every roll end of that track within _TOL_MS."""
+        tr = self.tracks
+        K = len(tr)
+        times = [t["time"] for t in tr]
+        need = [[] for _ in tr]          # fractional 1/48 slots of the ends
+        for k, t in enumerate(tr):
+            bar = _bar_ms(t)
+            if bar <= 0:
+                continue
+            for r in self.rts[k]:
+                for n in r:
+                    if int(n["type"]) not in _ROLL:
+                        continue
+                    ms = (t["time"] + int(n["measure"]) / 48.0 * bar
+                          + max(1, int(n["longNoteLength"])))
+                    j = bisect.bisect_right(times, ms + _SNAP_MS) - 1
+                    j = max(j, 0)
+                    bj = _bar_ms(tr[j])
+                    if bj > 0:
+                        need[j].append((ms - times[j]) / bj * 48.0)
+        subs = []
+        for k in range(K):
+            tol = _TOL_MS / _bar_ms(tr[k]) * 48.0 if _bar_ms(tr[k]) > 0 else 1
+            pick = _SUBS[-1]
+            for sub in _SUBS:
+                if all(abs(f * sub - round(f * sub)) <= tol * sub
+                       for f in need[k]):
+                    pick = sub
+                    break
+            subs.append(pick)
+        return subs
+
     def _locate(self, ms):
         """(measure, cell) of an absolute time, for a roll's end marker."""
         tr = self.tracks
-        k = 0
-        while k + 1 < len(tr) and tr[k + 1]["time"] <= ms + 1e-6:
-            k += 1
+        k = max(0, bisect.bisect_right(self.times, ms + _SNAP_MS) - 1)
         bar = _bar_ms(tr[k])
-        p = int(round((ms - tr[k]["time"]) / bar * 48 * _SUB)) if bar > 0 else 0
-        if (p >= self.n48[k] * _SUB and k + 1 < len(tr)
-                and ms >= tr[k + 1]["time"] - 1e-6):
+        sub = self.sub[k]
+        p = int(round((ms - tr[k]["time"]) / bar * 48 * sub)) if bar > 0 else 0
+        if (p >= self.n48[k] * sub and k + 1 < len(tr)
+                and ms >= tr[k + 1]["time"] - _SNAP_MS):
             return k + 1, 0
         # an end in the pause before the next track stays in this one
-        return k, max(0, min(p, self.n48[k] * _SUB - 1))
+        return k, max(0, min(p, self.n48[k] * sub - 1))
 
     def _fill(self, b):
         g = self.grid[b]
@@ -291,13 +333,14 @@ class _Course:
         for k, r in enumerate(self.rts):
             # TJA reads a measure left to right (BALLOON counts too); the sht
             # does not always list a measure's notes in that order.
-            last = self.n48[k] * _SUB - 1
+            sub = self.sub[k]
+            last = self.n48[k] * sub - 1
             for n in sorted(r[b], key=lambda n: n["measure"]):
                 ty = int(n["type"])
                 ch = _TJA_CHAR.get(ty)
                 if ch is None:
                     continue
-                pos = int(n["measure"]) * _SUB
+                pos = int(n["measure"]) * sub
                 # two notes on one 1/48 slot (a chart denser than the grid):
                 # the second goes to the next free fine cell, not over it
                 while pos in g[k] and pos < last:
@@ -307,7 +350,7 @@ class _Course:
                     self.balloons[b].append(max(0, int(n["balloonHitCount"])))
                 if ty in _ROLL:
                     t = self.tracks[k]
-                    start = t["time"] + pos / (48.0 * _SUB) * _bar_ms(t)
+                    start = t["time"] + pos / (48.0 * sub) * _bar_ms(t)
                     ends.append((k, pos, start + max(1, int(n["longNoteLength"]))))
         # Roll ends go in after every note, so no note can land on (and
         # erase) one. A taken cell moves the end back towards its roll.
@@ -318,9 +361,9 @@ class _Course:
             while ep in g[ek] and (ek, ep) > (k, pos + 1):
                 if ep == 0:
                     ek -= 1
-                    ep = self.n48[ek] * _SUB
+                    ep = self.n48[ek] * self.sub[ek]
                 ep -= 1
-            while ep in g[ek] and ep < self.n48[ek] * _SUB - 1:
+            while ep in g[ek] and ep < self.n48[ek] * self.sub[ek] - 1:
                 ep += 1
             g[ek].setdefault(ep, "8")
 
@@ -363,7 +406,7 @@ class _Course:
 
     def line(self, b, k):
         cells = self.grid[b][k]
-        n = self.n48[k] * _SUB
+        n = self.n48[k] * self.sub[k]
         step = n
         for p in cells:
             step = math.gcd(step, p)
