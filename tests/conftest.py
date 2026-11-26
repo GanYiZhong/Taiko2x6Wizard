@@ -97,3 +97,25 @@ def pfs_image(tmp_path):
     img = tmp_path / "synthetic.img"
     pname, fpath = ps2hdd._build_synthetic_pfs(str(img), part_zones=4096)
     return img, pname, fpath
+
+
+@pytest.fixture(autouse=True)
+def _close_leftover_windows():
+    """Close and delete every top-level widget a test leaves open.
+
+    Dialogs a test never closes outlive it; later app-wide operations (a
+    theme's setStyleSheet repolishes every widget) or interpreter shutdown,
+    with widgets outliving the QApplication, then crashed the run."""
+    yield
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()

@@ -87,7 +87,12 @@ def mono_font(point_size: int = 9) -> QFont:
 def apply(app: QApplication, mode: str | None = None) -> bool:
     """Apply the theme; returns True if the dark variant is active."""
     mode = mode or saved_mode()
-    app.setStyle("Fusion")
+    # Setting a style again repolishes every live widget; doing that while a
+    # window is being torn down crashed (seen in the test run), and the
+    # Settings > Theme switch only needs the palette. Set Fusion once.
+    style = app.style()
+    if style is None or style.name().lower() != "fusion":
+        app.setStyle("Fusion")
     dark = system_is_dark(app) if mode == "system" else mode == "dark"
     if mode != "system":
         try:
@@ -96,5 +101,6 @@ def apply(app: QApplication, mode: str | None = None) -> bool:
         except AttributeError:
             pass
     app.setPalette(make_palette(dark))
-    app.setStyleSheet(_QSS)
+    if app.styleSheet() != _QSS:
+        app.setStyleSheet(_QSS)
     return dark
