@@ -8,7 +8,9 @@ from taiko2x6.app import appconfig, i18n
 
 ROOT = Path(__file__).resolve().parents[1]
 TRANSLATED = ["taiko2x6/app/taiko256_explorer_gui6.py", "taiko2x6/songs/omnimix_gui.py",
-              "taiko2x6/exe/taiko_exe.py"]
+              "taiko2x6/exe/taiko_exe.py",
+              "taiko2x6/songs/song_builder.py", "taiko2x6/songs/song_replacer.py",
+              "taiko2x6/songs/song_dialog_ui.py"]
 
 
 def _tr_keys(path):
