@@ -43,7 +43,7 @@ from PySide6.QtCore import (  # noqa: E402
 )
 from PySide6.QtGui import (  # noqa: E402
     QStandardItem, QStandardItemModel, QAction, QActionGroup, QIcon, QImage,
-    QPixmap, QFont, QColor, QKeySequence,
+    QPixmap, QFont, QColor, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication, QMainWindow, QWidget, QTreeView, QVBoxLayout, QHBoxLayout,
@@ -388,6 +388,8 @@ class MainWindow(QMainWindow):
 
         # filter box
         self.filter_box = QLineEdit(placeholderText=tr("Filter by name…"))
+        self.filter_box.setClearButtonEnabled(True)
+        self.filter_box.setToolTip(tr("Filter the tree by name (Ctrl+F to focus, Esc to clear)"))
         self.filter_box.textChanged.connect(self.proxy.setFilterFixedString)
 
         browser = QWidget()
@@ -484,6 +486,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.split)
 
         self.setStatusBar(QStatusBar())
+        self.dirty_label = QLabel()
+        self.statusBar().addPermanentWidget(self.dirty_label)
         self.statusBar().showMessage(tr("Open an archive folder (File ▸ Open) to begin."))
 
     def _toggle_options(self, on: bool):
@@ -563,6 +567,17 @@ class MainWindow(QMainWindow):
         self.act_save.setShortcut(QKeySequence.Save)
         act("act_discard", tr("Discard Edits"), self.discard_edits,
             QStyle.SP_DialogResetButton)
+        self.act_extract_all.setShortcut(QKeySequence("Ctrl+E"))
+        self.act_extract_sel.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self.act_discard.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        act("act_find", tr("Find…"), self._focus_filter)
+        self.act_find.setShortcut(QKeySequence.Find)
+        self.addAction(self.act_find)
+        act("act_quit", tr("Quit"), self.close)
+        self.act_quit.setShortcut(QKeySequence("Ctrl+Q"))
+        # Esc inside the filter box clears it
+        QShortcut(QKeySequence(Qt.Key_Escape), self.filter_box,
+                  activated=self.filter_box.clear, context=Qt.WidgetShortcut)
 
         act("act_songmgr", tr("Song Manager…"), self.open_song_manager,
             QStyle.SP_FileDialogContentsView,
@@ -645,6 +660,8 @@ class MainWindow(QMainWindow):
 
         menu = self.menuBar().addMenu(tr("&File"))
         menu.addAction(self.act_open)
+        self.recent_menu = menu.addMenu(tr("Open Recent"))
+        self._refresh_recent_menu()
         menu.addSeparator()
         menu.addAction(self.act_extract_all)
         menu.addAction(self.act_extract_sel)
@@ -652,6 +669,9 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_replace)
         menu.addAction(self.act_save)
         menu.addAction(self.act_discard)
+        menu.addSeparator()
+        menu.addAction(self.act_find)
+        menu.addAction(self.act_quit)
 
         tools = self.menuBar().addMenu(tr("&Tools"))
         for title, acts in (
@@ -687,6 +707,35 @@ class MainWindow(QMainWindow):
             self.lang_actions[code] = a
         self._update_actions()
 
+    def _focus_filter(self):
+        if self.archive is not None:
+            self.filter_box.setFocus()
+            self.filter_box.selectAll()
+
+    def _recent_folders(self) -> list[str]:
+        raw = appconfig.get("recent", "folders", "")
+        return [p for p in raw.split("|") if p]
+
+    def _remember_folder(self, folder: Path):
+        cur = [p for p in self._recent_folders() if p != str(folder)]
+        appconfig.set_value("recent", "folders", "|".join(([str(folder)] + cur)[:8]))
+        self._refresh_recent_menu()
+
+    def _refresh_recent_menu(self):
+        self.recent_menu.clear()
+        folders = [p for p in self._recent_folders() if Path(p).is_dir()]
+        for p in folders:
+            a = self.recent_menu.addAction(p.replace("&", "&&"))
+            a.triggered.connect(lambda _=False, p=p: self.open_folder(Path(p)))
+        self.recent_menu.setEnabled(bool(folders))
+
+    def _refresh_dirty_ui(self):
+        dirty = self.archive is not None and self.archive.dirty
+        self.dirty_label.setText(tr("Unsaved edits") if dirty else "")
+        if self.archive is not None:
+            self.setWindowTitle(f"{'* ' if dirty else ''}Taiko2x6Wizard — "
+                                f"{self.archive.data_path}")
+
     def _set_language(self, code: str):
         if code == i18n.lang():
             return
@@ -703,6 +752,7 @@ class MainWindow(QMainWindow):
         self.act_save.setEnabled(has and self.archive.dirty)
         self.act_discard.setEnabled(has and self.archive.dirty)
         self.left_stack.setCurrentIndex(1 if has else 0)
+        self._refresh_dirty_ui()
 
     def _restore_layout(self):
         s = _settings()
@@ -745,6 +795,7 @@ class MainWindow(QMainWindow):
             log.error("open failed for %s: %s", data_path, exc)
             QMessageBox.critical(self, tr("Open failed"), f"{exc}\n\n{traceback.format_exc()}")
             return
+        self._remember_folder(data_path.parent)
         self.setWindowTitle(f"Taiko2x6Wizard — {data_path}")
         self._populate_tree()
         a = self.archive
