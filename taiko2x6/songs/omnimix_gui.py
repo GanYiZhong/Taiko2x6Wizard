@@ -15,7 +15,9 @@ Pipeline, respecting the "SongManager is a QWidget → GUI thread only" rule:
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -30,7 +32,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QComboBox, QLineEdit,
     QPushButton, QFileDialog, QCheckBox, QPlainTextEdit, QLabel, QMessageBox,
     QWidget, QListWidget, QListWidgetItem, QInputDialog, QGroupBox,
-    QProgressBar, QSplitter,
+    QProgressBar, QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
 )
 
 from taiko2x6.app import appconfig
@@ -55,6 +57,67 @@ def genre_summary(items) -> list:
     return out
 
 logger = logging.getLogger("taiko.omnimix.gui")
+
+_CFG = "omnimix"
+
+
+def source_summary(plan, specs) -> list:
+    """[(label, songs added, duplicates skipped)] per source, in source order.
+    A song counts as skipped for a source when an earlier source (or the target)
+    already provided it, or another id with the same title did."""
+    added, skipped = {}, {}
+    for it in plan.items:
+        added[it.source_label] = added.get(it.source_label, 0) + 1
+    for labels in plan.skipped_dupes.values():
+        for lb in labels:
+            skipped[lb] = skipped.get(lb, 0) + 1
+    for v in plan.skipped_titles.values():
+        skipped[v[0]] = skipped.get(v[0], 0) + 1
+    labels = [sp.label for sp in specs]
+    for lb in list(added) + list(skipped):
+        if lb not in labels:
+            labels.append(lb)
+    return [(lb, added.get(lb, 0), skipped.get(lb, 0)) for lb in labels]
+
+
+def source_path_errors(sources) -> list:
+    """Messages for sources whose files are gone (checked before a long job)."""
+    errs = []
+    for s in sources:
+        if s["kind"] == "img":
+            paths = [s["img"]]
+        elif s["kind"] == "iso":
+            paths = [s["iso"]]
+        else:
+            paths = [s["list"], s["data"]]
+        for p in paths:
+            if not os.path.exists(p):
+                errs.append(tr("Source “{label}” is missing: {path}").format(
+                    label=s["label"], path=p))
+    return errs
+
+
+def input_error(target: str, is_img: bool, sources) -> str:
+    """First problem with the chosen target/sources ('' when fine)."""
+    target = (target or "").strip()
+    if not target:
+        return tr("Choose a target.")
+    if is_img and not os.path.isfile(target):
+        return tr("The target image does not exist:") + "\n" + target
+    if not is_img:
+        for n in ("DATA.000", "list.bin"):
+            if not os.path.isfile(os.path.join(target, n)):
+                return tr("The target folder has no {name}:").format(name=n) + "\n" + target
+    if not sources:
+        return tr("Add at least one source.")
+    errs = source_path_errors(sources)
+    if errs:
+        return "\n".join(errs)
+    return ""
+
+
+def fmt_size(n: int) -> str:
+    return f"{n / (1 << 20):,.0f} MiB" if n < (1 << 30) else f"{n / (1 << 30):.2f} GiB"
 
 
 class _Worker(QThread):
@@ -102,9 +165,12 @@ class OmnimixDialog(QDialog):
         self._plan = None
         self._db = None
         self._target_pair = None     # (list_path, data_path) after extraction
+        self._worker = None
         self._build_ui()
+        self._load_settings()
         if default_img:
             self.ed_timg.setText(default_img)
+        self.ed_timg.textChanged.connect(self._target_edited)
 
     # -- ui -------------------------------------------------------------------
     def _build_ui(self):
@@ -118,7 +184,7 @@ class OmnimixDialog(QDialog):
         lay.addWidget(note)
 
         # --- target ---
-        gt = QGroupBox(tr("Target (merge INTO this — the base)"))
+        gt = self.gb_target = QGroupBox(tr("Target (merge INTO this — the base)"))
         tf = QFormLayout(gt)
         self.cb_tkind = QComboBox(); self.cb_tkind.addItems(
             [tr("HDD .img (Taiko 14+)"), tr("Folder (DATA.000 + list.bin)")])
@@ -133,9 +199,10 @@ class OmnimixDialog(QDialog):
         lay.addWidget(gt)
 
         # --- sources ---
-        gs = QGroupBox(tr("Sources (harvest FROM these — first one wins on ties)"))
+        gs = self.gb_sources = QGroupBox(tr("Sources (harvest FROM these — first one wins on ties)"))
         sv = QVBoxLayout(gs)
-        self.lst = QListWidget(); self.lst.setMinimumHeight(120)
+        self.lst = QListWidget(); self.lst.setMinimumHeight(100)
+        self.lst.setToolTip(tr("Order matters: the first source wins when two have the same song."))
         sv.addWidget(self.lst)
         sb = QHBoxLayout()
         for txt, fn in ((tr("Add .img…"), self._add_img), (tr("Add ISO…"), self._add_iso),
@@ -148,7 +215,7 @@ class OmnimixDialog(QDialog):
         lay.addWidget(gs)
 
         # --- options ---
-        go = QGroupBox(tr("Options"))
+        go = self.gb_options = QGroupBox(tr("Options"))
         of = QFormLayout(go)
         self.cb_over = QComboBox(); self.cb_over.addItems([
             tr("Fit everything, patch the ceiling (up to 644)"),
@@ -172,7 +239,7 @@ class OmnimixDialog(QDialog):
 
         # --- boot / select patches, applied to `taiko` after the build ---
         from taiko2x6.exe import taiko_exe
-        gp = QGroupBox(tr("Game patches applied after the build (.img target)"))
+        gp = self.gb_patches = QGroupBox(tr("Game patches applied after the build (.img target)"))
         gl = QVBoxLayout(gp)
         self.ck_boot = {}
         for key, (label, *_fns) in taiko_exe.BOOT_PATCHES.items():
@@ -186,6 +253,18 @@ class OmnimixDialog(QDialog):
         hint.setWordWrap(True); hint.setStyleSheet("color:#888;")
         gl.addWidget(hint)
         lay.addWidget(gp)
+
+        # --- plan summary (filled after Preview) ---
+        self.tbl = QTableWidget(0, 3)
+        self.tbl.setHorizontalHeaderLabels(
+            [tr("Source"), tr("Songs added"), tr("Duplicates skipped")])
+        self.tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl.setMaximumHeight(150)
+        self.tbl.setVisible(False)
+        self.lbl_size = QLabel(""); self.lbl_size.setWordWrap(True)
+        self.lbl_size.setVisible(False)
+        lay.addWidget(self.tbl); lay.addWidget(self.lbl_size)
 
         # --- progress + log ---
         prow = QHBoxLayout()
@@ -201,7 +280,8 @@ class OmnimixDialog(QDialog):
 
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setFont(QFont("Consolas", 9))
-        self.log.setMinimumHeight(220)
+        self.log.setMinimumHeight(180)
+        self.log.setMaximumBlockCount(20000)
         self.log.setLineWrapMode(QPlainTextEdit.NoWrap)
         lay.addWidget(QLabel(tr("log:"))); lay.addWidget(self.log, 1)
 
@@ -237,6 +317,8 @@ class OmnimixDialog(QDialog):
         self.ck_backup.setEnabled(img)
         for cb in getattr(self, "ck_boot", {}).values():
             cb.setEnabled(img)
+        if hasattr(self, "tbl"):
+            self._invalidate_plan()
 
     def _pick_target(self):
         if self._target_is_img():
@@ -334,14 +416,63 @@ class OmnimixDialog(QDialog):
             else:
                 where = Path(s["data"]).parent.name
             self.lst.addItem(QListWidgetItem(f"{i+1}. {s['label']}  —  {where}"))
-        self.b_build.setEnabled(False)     # plan is stale after edits
+        self._invalidate_plan()            # plan is stale after edits
+        self._save_settings()
+
+    def _invalidate_plan(self):
+        self._plan = None; self._db = None
+        self.b_build.setEnabled(False)
+        self.tbl.setVisible(False); self.lbl_size.setVisible(False)
+
+    def _target_edited(self, _text=""):
+        self.ed_tpart.clear()
+        self._invalidate_plan()
+
+    # -- remembered settings --------------------------------------------------
+    def _load_settings(self):
+        g = lambda k, d="": appconfig.get(_CFG, k, d)
+        self.cb_tkind.setCurrentIndex(1 if g("target_kind", "0") == "1" else 0)
+        self.ed_timg.setText(g("target"))
+        if self._target_is_img():
+            self.ed_tpart.setText(g("target_part"))
+        try:
+            srcs = json.loads(g("sources", "[]"))
+        except ValueError:
+            srcs = []
+        need = {"img": ("img", "partition"), "iso": ("iso",), "pair": ("list", "data")}
+        if isinstance(srcs, list):
+            self._sources = [s for s in srcs if isinstance(s, dict)
+                             and s.get("kind") in need and s.get("label")
+                             and all(k in s for k in need[s["kind"]])]
+        self.cb_over.setCurrentIndex(int(g("over", "0") == "1"))
+        a = g("audio", "0")
+        self.cb_audio.setCurrentIndex(int(a) if a in ("0", "1", "2") else 0)
+        self.ck_backup.setChecked(g("backup", "1") != "0")
+        self.ck_limit.setChecked(g("limit", "1") != "0")
+        if appconfig.get(_CFG, "target_kind") != "":     # saved at least once
+            keys = g("boot").split(",")
+            for k, cb in self.ck_boot.items():
+                cb.setChecked(k in keys)
+        self._refresh_sources()
+
+    def _save_settings(self):
+        s = appconfig.set_value
+        s(_CFG, "target_kind", self.cb_tkind.currentIndex())
+        s(_CFG, "target", self.ed_timg.text().strip())
+        s(_CFG, "target_part", self.ed_tpart.text().strip())
+        s(_CFG, "sources", json.dumps(self._sources, ensure_ascii=False))
+        s(_CFG, "over", self.cb_over.currentIndex())
+        s(_CFG, "audio", self.cb_audio.currentIndex())
+        s(_CFG, "backup", int(self.ck_backup.isChecked()))
+        s(_CFG, "limit", int(self.ck_limit.isChecked()))
+        s(_CFG, "boot", ",".join(k for k, cb in self.ck_boot.items() if cb.isChecked()))
 
     # -- pipeline: extraction -------------------------------------------------
     def _validate(self):
-        if not self.ed_timg.text().strip():
-            QMessageBox.warning(self, tr("Omnimix Maker"), tr("Choose a target.")); return False
-        if not self._sources:
-            QMessageBox.warning(self, tr("Omnimix Maker"), tr("Add at least one source.")); return False
+        err = input_error(self.ed_timg.text(), self._target_is_img(), self._sources)
+        if err:
+            QMessageBox.warning(self, tr("Omnimix Maker"), err); return False
+        self._save_settings()
         return True
 
     def _extract_all(self, log):
@@ -415,10 +546,32 @@ class OmnimixDialog(QDialog):
             msg += "\n\n" + tr("Songs to add by folder:") + "\n" + "\n".join(
                 f"  {name:<12} {n:>4}" for name, n in genre_summary(p.items))
         self.log.appendPlainText("\n" + msg)
+        self._show_summary(p, specs, td)
         self.b_build.setEnabled(len(p.items) > 0)
         self._end(tr("plan ready"))
         QMessageBox.information(self, tr("Plan ready"), msg
                                 + "\n\n" + tr("Click “Build Omnimix” to assemble."))
+
+    def _show_summary(self, plan, specs, data_path):
+        rows = source_summary(plan, specs)
+        self.tbl.setRowCount(len(rows))
+        for r, (lb, a, sk) in enumerate(rows):
+            for c, v in enumerate((lb, str(a), str(sk))):
+                it = QTableWidgetItem(v)
+                if c:
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.tbl.setItem(r, c, it)
+        self.tbl.setVisible(True)
+        try:
+            cur = os.path.getsize(data_path)
+            self.lbl_size.setText(tr(
+                "Target DATA.000 now: {cur} of the {limit} limit ({pct}). The added songs "
+                "come on top; re-encode the audio if the total would pass the limit.").format(
+                    cur=fmt_size(cur), limit=fmt_size(OM.MAX_DATA_SIZE),
+                    pct=f"{cur / OM.MAX_DATA_SIZE:.0%}"))
+            self.lbl_size.setVisible(True)
+        except OSError:
+            self.lbl_size.setVisible(False)
 
     # -- pipeline: build ------------------------------------------------------
     def _build(self):
@@ -497,6 +650,13 @@ class OmnimixDialog(QDialog):
                                 tr("Repair works on a HDD .img target. Choose one."))
             return
         img = self.ed_timg.text().strip()
+        if not os.path.isfile(img):
+            QMessageBox.warning(self, tr("Omnimix Maker"),
+                                tr("The target image does not exist:") + "\n" + img)
+            return
+        errs = source_path_errors(self._sources)
+        if errs:
+            QMessageBox.warning(self, tr("Omnimix Maker"), "\n".join(errs)); return
         if not self.ed_tpart.text().strip():
             part = _pick_partition(self, img)
             if not part:
@@ -586,6 +746,8 @@ class OmnimixDialog(QDialog):
     def _begin(self, stage=""):
         for b in (self.b_prev, self.b_build, self.b_repair):
             b.setEnabled(False)
+        for g in (self.gb_target, self.gb_sources, self.gb_options, self.gb_patches):
+            g.setEnabled(False)
         self.progress.setRange(0, 0)          # busy until a "n/total" line shows up
         self.progress.setFormat("")
         self.lbl_stage.setText(stage)
@@ -594,6 +756,8 @@ class OmnimixDialog(QDialog):
     def _end(self, stage=""):
         self.b_prev.setEnabled(True)
         self.b_repair.setEnabled(True)
+        for g in (self.gb_target, self.gb_sources, self.gb_options, self.gb_patches):
+            g.setEnabled(True)
         self._tick.stop(); self._update_time()
         self.progress.setRange(0, 1); self.progress.setValue(1 if stage == tr("done") else 0)
         self.progress.setFormat("")
@@ -631,6 +795,19 @@ class OmnimixDialog(QDialog):
             shutil.rmtree(self._tmproot, ignore_errors=True)
         self._tmproot = None
 
+    def _busy(self):
+        return self._worker is not None and self._worker.isRunning()
+
+    def done(self, r):
+        if self._busy():
+            QMessageBox.information(self, tr("Omnimix Maker"),
+                                    tr("A job is still running. Wait for it to finish."))
+            return
+        self._save_settings()
+        super().done(r)
+
     def reject(self):
+        if self._busy():
+            return self.done(0)
         self._cleanup_tmp()
         super().reject()
