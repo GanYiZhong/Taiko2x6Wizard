@@ -533,8 +533,34 @@ class MainWindow(QMainWindow):
             h.setStyleSheet("color:#888; margin:0 0 10px 14px;")
             v.addWidget(h)
             self._start_buttons.append(b)
+        # setup checklist: only visible while something important is missing
+        self.setup_box = QLabel()
+        self.setup_box.setWordWrap(True)
+        self.setup_box.setStyleSheet(
+            "background:#fff4e0; color:#7a4b00; border:1px solid #e0b060;"
+            "border-radius:4px; padding:8px;")
+        v.addWidget(self.setup_box)
+        self.btn_setup = QPushButton(tr("Open Settings…"))
+        self.btn_setup.clicked.connect(self.open_settings)
+        v.addWidget(self.btn_setup, 0, Qt.AlignLeft)
+        self._refresh_setup_box()
         v.addStretch(2)
         return page
+
+    def _refresh_setup_box(self):
+        from taiko2x6.app import settings_dialog
+        missing = settings_dialog.missing_important()
+        if missing:
+            lines = "<br>".join(f"&#9744; {tr(d['label'])} — {tr(d['note'])}"
+                                for d in missing)
+            self.setup_box.setText(f"<b>{tr('Setup')}</b><br>{lines}")
+        self.setup_box.setVisible(bool(missing))
+        self.btn_setup.setVisible(bool(missing))
+
+    def open_settings(self):
+        from taiko2x6.app import settings_dialog
+        settings_dialog.SettingsDialog(self).exec()
+        self._refresh_setup_box()
 
     def _build_actions(self):
         style = self.style()
@@ -694,6 +720,9 @@ class MainWindow(QMainWindow):
                     sub.addAction(a)
 
         settings = self.menuBar().addMenu(tr("&Settings"))
+        self.act_settings = QAction(tr("External files…"), self)
+        self.act_settings.triggered.connect(self.open_settings)
+        settings.addAction(self.act_settings)
         lang_menu = settings.addMenu(tr("Language"))
         group = QActionGroup(self)
         group.setExclusive(True)

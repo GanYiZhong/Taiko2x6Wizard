@@ -60,7 +60,10 @@ def find_t14load(hint: str | Path | None = None) -> str:
     env = os.environ.get('T14LOAD_BIN')
     if env:
         cands.append(Path(env))
-    from taiko2x6.app import apppaths
+    from taiko2x6.app import apppaths, appconfig
+    saved = appconfig.last_existing('t14load')      # Settings / last pick
+    if saved:
+        cands.append(Path(saved))
     cands.append(apppaths.resource_dir() / T14LOAD_NAME)
     cands.append(Path(__file__).resolve().parent / T14LOAD_NAME)
     for c in cands:
