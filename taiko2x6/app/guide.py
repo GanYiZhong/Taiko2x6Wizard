@@ -245,9 +245,12 @@ def _pages() -> list[dict]:
                    "first with python -m taiko2x6.safeio rollback <file>."),
                 tr("A memory card gets a .bak copy before it is opened for "
                    "writing; merge sources are never modified."),
+                tr("Tools > PS2 HDD & memory card > Backups & undo lists the "
+                   "journals and rolls back for you."),
             ],
             "actions": [("act_pfsshell", tr("Open PS2 HDD via pfsshell…")),
                         ("act_imgslim", tr("Slim PS2 HDD image…")),
+                        ("act_backups", tr("Backups & undo…")),
                         ("act_apamerge", tr("Merge HDD images…")),
                         ("act_ps2mc", tr("Open PS2 Memory Card…")),
                         ("act_packiso", tr("Pack to ISO…"))],

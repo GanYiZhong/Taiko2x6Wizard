@@ -796,6 +796,10 @@ class MainWindow(QMainWindow):
                 (tr("Slim PS2 HDD image…"),
                  tr("Make a PS2 HDD image smaller."),
                  'slim', lambda: self.open_img_slim()),
+                (tr("Backups & undo…"),
+                 tr("Roll an image back from its undo journals, or restore a "
+                    "DATA.000 / list.bin backup."),
+                 'log', lambda: self.open_backups()),
             ]),
         ]
         page = StartPage(groups, self._open_recent_entry, self._recent_entries,
@@ -1046,6 +1050,11 @@ class MainWindow(QMainWindow):
             tr("Reclaim disk space from a .img. Punches holes over regions that "
                "already read as zero, so the emulator still reads identical "
                "bytes.") + close_first)
+        act("act_backups", tr("Backups & undo…"), self.open_backups,
+            QStyle.SP_BrowserReload,
+            tr("List the undo journals an image kept and roll it back to before "
+               "any of them, or restore a DATA.000 / list.bin .bak pair.")
+            + close_first)
         act("act_apamerge", tr("Merge HDD images (multi-game disk)…"),
             self.open_apa_merge, 'hdd',
             tr("Combine several game HDD images into one APA disk. Each game's "
@@ -1101,6 +1110,7 @@ class MainWindow(QMainWindow):
                                          self.act_shtval)),
                 (tr("PS2 HDD && memory card"), (self.act_pfsshell, self.act_ps2mc,
                                                 None, self.act_imgslim,
+                                                self.act_backups,
                                                 self.act_apamerge, self.act_packiso)),
                 (tr("taiko executable patches"), (self.act_taikoexe,
                                                   self.act_taikotimer,
@@ -1731,6 +1741,14 @@ class MainWindow(QMainWindow):
                 tr("Slimming uses NTFS sparse files and needs Windows."))
             return
         dlg = img_slim.ImgSlimDialog(self, default_img=self._recent_hdd_img() or "")
+        dlg.exec()
+
+    def open_backups(self):
+        from taiko2x6.ps2 import backups_undo
+        if backups_undo.QDialog is None:
+            QMessageBox.warning(self, tr("Backups & undo"), tr("PySide6 is required."))
+            return
+        dlg = backups_undo.BackupsUndoDialog(self, default_path=self._recent_hdd_img())
         dlg.exec()
 
     def open_apa_merge(self):
