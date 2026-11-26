@@ -695,7 +695,7 @@ try:
                 self.tbl, int_cols=range(4, 4 + RECORD_INTS),
                 row_text=lambda r: "%s %s" % (self._rows[r][0].player,
                                               DIFF_NAMES[self._rows[r][1]]))]
-            bar = ToolBar(self._tools, tr("Filter by song number, 1P/2P, difficulty or value..."))
+            bar = ToolBar(self._tools, tr("Filter by song number, 1P/2P, difficulty or value…"))
             self.ed_filter = bar.ed
             bar_slot.addWidget(bar)
 

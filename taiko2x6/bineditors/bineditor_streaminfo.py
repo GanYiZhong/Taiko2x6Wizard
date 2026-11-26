@@ -254,7 +254,7 @@ class Editor(QDialog):
         lay.addWidget(self.tbl, 1)
         self._tools = [TableTools(self.tbl, int_cols=(3, 4, 5, 6), max_len={1: 200},
                                   col_tips=[tr(t) if t else "" for t in _FIELD_TIPS])]
-        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by stream name or value...")))
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by stream name or value…")))
 
         btns = QHBoxLayout()
         btns.addStretch(1)

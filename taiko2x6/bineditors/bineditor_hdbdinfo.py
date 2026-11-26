@@ -328,7 +328,7 @@ if _HAVE_QT:
                         if f is not None and lbl != "name"]
             self._tools = [TableTools(self.tbl, int_cols=int_cols),
                            TableTools(self.tbl_str, int_cols=())]
-            bar = ToolBar(self._tools, tr("Filter by sound name, category or value..."))
+            bar = ToolBar(self._tools, tr("Filter by sound name, category or value…"))
             self.ed_filter = bar.ed
             bar_slot.addWidget(bar)
 
