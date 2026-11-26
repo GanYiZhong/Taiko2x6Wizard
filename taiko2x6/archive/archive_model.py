@@ -10,6 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 
+from taiko2x6 import history
 from taiko2x6.archive import taiko256_archive_tool_v2 as core
 from taiko2x6.safeio import recover_pair, txn_path, write_pair
 
@@ -293,8 +294,10 @@ class Archive:
         # read phase is over: release our handle so an in-place commit is not
         # blocked by it (the writer opens its own)
         view.close()
-        write_pair([(out_data, write_data),
-                    (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
+        with history.operation(
+                "Archive", f"Saved {len(affected)} groups ({len(self.replacements)} files)"):
+            write_pair([(out_data, write_data),
+                        (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
         if progress:
             progress(len(affected), len(affected), "done")
         return {"changed_groups": changed, "files": len(self.replacements)}
@@ -456,7 +459,9 @@ class Archive:
                 f.write(piece)
 
         src.close()
-        write_pair([(out_data, write_data),
-                    (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
+        with history.operation(
+                "Archive", f"Saved {changed} groups ({len(self.replacements)} files)"):
+            write_pair([(out_data, write_data),
+                        (out_list, core.crypt_list(bytes(new_list)))], backup=backup)
         return {"changed_groups": changed, "files": len(self.replacements),
                 "data_size": new_len}

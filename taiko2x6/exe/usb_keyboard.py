@@ -433,6 +433,7 @@ def hdd_install(img, source=None, partition: str | None = None, irx=None,
     re-install reuses the archive already on the HDD. Undo-journaled
     (ps2hdd.write_session): an error rolls the image back. ``check`` first
     verifies the image's ``taiko`` (see :func:`check_taiko`)."""
+    from taiko2x6 import history
     from taiko2x6.ps2 import ps2hdd
     st = hdd_status(img, partition)
     part = st["partition"]
@@ -452,7 +453,7 @@ def hdd_install(img, source=None, partition: str | None = None, irx=None,
         raise KeyboardPatchError("first install needs the stock IRXARC.BIN: "
                                  "pass the dongle card image or a dumped IRXARC.BIN")
     new = patch_irxarc(stock, irx, log=log)
-    with ps2hdd.write_session(str(img), log=log) as w:
+    with history.operation("USB keyboard", "Installed USB keyboard support", [img]),             ps2hdd.write_session(str(img), log=log) as w:
         have = {e["name"] for e in w.pfs_listdir(part, "/")}
         for name in HDD_NAMES:
             if name in have:
@@ -469,12 +470,13 @@ def hdd_install(img, source=None, partition: str | None = None, irx=None,
 
 def hdd_remove(img, partition: str | None = None, log=print) -> dict:
     """Delete the IRXARC copies from the HDD (the game falls back to the card)."""
+    from taiko2x6 import history
     from taiko2x6.ps2 import ps2hdd
     st = hdd_status(img, partition)
     if not st["files"]:
         log("nothing to remove")
         return {"partition": st["partition"], "removed": []}
-    with ps2hdd.write_session(str(img), log=log) as w:
+    with history.operation("USB keyboard", "Removed USB keyboard support", [img]),             ps2hdd.write_session(str(img), log=log) as w:
         for name in st["files"]:
             w.pfs_delete(st["partition"], "/" + name)
             log(f"deleted {st['partition']}:/{name}")

@@ -1248,8 +1248,11 @@ def repair_image(img, partition, sources, tmpdir, log=lambda s: None,
         check.close()
     if od.stat().st_size != Path(dp).stat().st_size:
         raise ValueError("DATA.000 would change size; nothing written")
-    write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
-    log(f"written: {', '.join(list(new) + (['title textures'] if trimmed else []))}")
+    what = ', '.join(list(new) + (['title textures'] if trimmed else []))
+    from taiko2x6 import history
+    with history.operation("Omnimix", f"Omnimix repair: {what}", [img]):
+        write_partition(img, partition, ol.read_bytes(), od.read_bytes(), log)
+    log(f"written: {what}")
     return True
 
 

@@ -150,6 +150,17 @@ def _isolated_appconfig(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_history(tmp_path_factory, monkeypatch):
+    """Never let a test write the real activity history (every write_pair /
+    write_session records one entry)."""
+    from taiko2x6 import history
+    # outside tmp_path: tests list their own tmp_path contents
+    path = tmp_path_factory.mktemp("history") / "activity_test.jsonl"
+    monkeypatch.setattr(history, "history_path", lambda: path)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_qsettings(tmp_path, monkeypatch):
     """Point every taiko2x6 module's QSettings at a throwaway INI file.
 

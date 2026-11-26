@@ -1931,26 +1931,32 @@ def write_session(path, undo=True, log=None):
 
         python -m taiko2x6.safeio rollback <img>.<stamp>.undo
     """
-    from taiko2x6 import safeio
-    h = Ps2Hdd(path, writable=True, undo=undo)
-    try:
-        yield h
-    except BaseException:
-        j = h.dev.undo
-        h.close()
-        if j is not None and j.bytes_saved:
-            try:
-                safeio.rollback(j.path, path, log=log)
-                j.path.unlink()
-            except Exception as rb_exc:          # keep the journal for a manual retry
-                if log:
-                    log(f"ROLLBACK FAILED ({rb_exc}); restore manually with: "
-                        f"python -m taiko2x6.safeio rollback \"{j.path}\"")
-        raise
-    else:
-        h.close()
-        if log and h.undo_path:
-            log(f"undo journal: {h.undo_path}")
+    from taiko2x6 import history, safeio
+    with history.operation("HDD image", "Wrote to the HDD image",
+                           [path]) as op:
+        h = Ps2Hdd(path, writable=True, undo=undo)
+        try:
+            yield h
+        except BaseException:
+            j = h.dev.undo
+            h.close()
+            if j is not None and j.bytes_saved:
+                try:
+                    safeio.rollback(j.path, path, log=log)
+                    j.path.unlink()
+                except Exception as rb_exc:      # keep the journal for a manual retry
+                    if log:
+                        log(f"ROLLBACK FAILED ({rb_exc}); restore manually with: "
+                            f"python -m taiko2x6.safeio rollback \"{j.path}\"")
+            raise
+        else:
+            h.close()
+            if h.undo_path:
+                op.add(undo=h.undo_path)
+            elif undo:
+                op.skip = True          # journaled session that wrote nothing
+            if log and h.undo_path:
+                log(f"undo journal: {h.undo_path}")
 
 
 # ===========================================================================

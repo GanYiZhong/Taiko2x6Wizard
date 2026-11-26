@@ -1206,6 +1206,9 @@ class MainWindow(QMainWindow):
         self._icon_names[self.act_open_log] = "log"
         self.act_open_log.triggered.connect(jobs.open_log_folder)
         help_menu.addAction(self.act_open_log)
+        self.act_history = QAction(tr("Activity history…"), self)
+        self.act_history.triggered.connect(self.open_history)
+        help_menu.addAction(self.act_history)
         help_menu.addSeparator()
         self.act_update = QAction(tr("Check for updates..."), self)
         self.act_update.triggered.connect(self.open_update_check)
@@ -1872,6 +1875,10 @@ class MainWindow(QMainWindow):
             return
         dlg = img_slim.ImgSlimDialog(self, default_img=self._recent_hdd_img() or "")
         dlg.exec()
+
+    def open_history(self):
+        from taiko2x6.app import history_dialog
+        history_dialog.HistoryDialog(self).exec()
 
     def open_backups(self):
         from taiko2x6.ps2 import backups_undo
