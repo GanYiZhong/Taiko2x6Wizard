@@ -110,6 +110,12 @@ NOTE_SIZE      = 16
 # ===========================================================================
 # STEP 1 -- exact sht parser / serializer
 # ===========================================================================
+# whole track record: time,bpm,line,gogo [,unk] 6 bunkis, 6 scrolls, 6x(st,cnt,pts)
+_TRACK_NEW_ST = struct.Struct("<ffii6i6f18i")
+_TRACK_OLD_ST = struct.Struct("<ffiii6i6f18i")
+_NOTE_ST = struct.Struct("<iiii")
+
+
 def _detect_is_old(track_count, note_offset):
     """Return True if the OLD (140-byte, with _unk) track variant is in use.
 
@@ -168,33 +174,28 @@ def parse_sht(data):
 
     tracks = []
     off = HEADER_SIZE
+    tstruct = _TRACK_OLD_ST if is_old else _TRACK_NEW_ST
+    unpack_from = tstruct.unpack_from
     for _ in range(track_count):
-        time, bpm, track_line, gogo = struct.unpack_from("<ffii", data, off)
-        p = off + 16
+        v = unpack_from(data, off)
         if is_old:
-            unk = struct.unpack_from("<i", data, p)[0]
-            p += 4
+            unk = v[4]
+            o = 5
         else:
             unk = 0
-        bunkis = list(struct.unpack_from("<6i", data, p)); p += 24
-        scrolls = list(struct.unpack_from("<6f", data, p)); p += 24
-        subs = []
-        for _s in range(6):
-            st, cnt, pts = struct.unpack_from("<iii", data, p); p += 12
-            subs.append({"noteIndexSt": st, "noteCount": cnt, "pointGain": pts})
+            o = 4
+        subs = [{"noteIndexSt": v[q], "noteCount": v[q + 1], "pointGain": v[q + 2]}
+                for q in range(o + 12, o + 30, 3)]
         tracks.append({
-            "time": time, "bpm": bpm, "trackLine": track_line, "gogoFlag": gogo,
-            "_unk": unk, "bunkis": bunkis, "scrollSpeeds": scrolls, "subtracks": subs,
+            "time": v[0], "bpm": v[1], "trackLine": v[2], "gogoFlag": v[3],
+            "_unk": unk, "bunkis": list(v[o:o + 6]),
+            "scrollSpeeds": list(v[o + 6:o + 12]), "subtracks": subs,
         })
         off += trec
 
-    notes = []
-    no = note_offset
-    for _ in range(note_count):
-        t, m, bal, lng = struct.unpack_from("<iiii", data, no)
-        notes.append({"type": t, "measure": m,
-                      "balloonHitCount": bal, "longNoteLength": lng})
-        no += NOTE_SIZE
+    notes = [{"type": t, "measure": m, "balloonHitCount": bal, "longNoteLength": lng}
+             for t, m, bal, lng in struct.iter_unpack(
+                 "<iiii", memoryview(data)[note_offset:note_end])]
 
     return {
         "noteOffset": note_offset,
@@ -226,39 +227,47 @@ def serialize_sht(model):
     if note_offset is None:
         note_offset = HEADER_SIZE + track_count * trec + len(gap)
 
-    out = bytearray()
-    out += struct.pack("<IIii", track_count, note_offset, note_count,
-                       model.get("padding", 0))
+    gap_end = HEADER_SIZE + track_count * trec + len(gap)
+    note_start = max(gap_end, note_offset)
+    out = bytearray(note_start + note_count * NOTE_SIZE + len(tail))
+    struct.pack_into("<IIii", out, 0, track_count, note_offset, note_count,
+                     model.get("padding", 0))
 
+    tstruct = _TRACK_OLD_ST if is_old else _TRACK_NEW_ST
+    pack_into = tstruct.pack_into
+    zero_sub = (0, 0, 0)
+    off = HEADER_SIZE
     for t in tracks:
-        out += struct.pack("<ffii", t["time"], t["bpm"],
-                           t["trackLine"], t["gogoFlag"])
-        if is_old:
-            out += struct.pack("<i", t.get("_unk", 0))
         bunkis = list(t["bunkis"]) + [-1] * (6 - len(t["bunkis"]))
-        out += struct.pack("<6i", *bunkis[:6])
         scrolls = list(t["scrollSpeeds"]) + [1.0] * (6 - len(t["scrollSpeeds"]))
-        out += struct.pack("<6f", *scrolls[:6])
         subs = t["subtracks"]
+        flat = []
         for s in range(6):
             if s < len(subs):
                 sd = subs[s]
-                out += struct.pack("<iii", sd["noteIndexSt"], sd["noteCount"],
-                                   sd["pointGain"])
+                flat += (sd["noteIndexSt"], sd["noteCount"], sd["pointGain"])
             else:
-                out += struct.pack("<iii", 0, 0, 0)
+                flat += zero_sub
+        if is_old:
+            pack_into(out, off, t["time"], t["bpm"], t["trackLine"], t["gogoFlag"],
+                      t.get("_unk", 0), *bunkis[:6], *scrolls[:6], *flat)
+        else:
+            pack_into(out, off, t["time"], t["bpm"], t["trackLine"], t["gogoFlag"],
+                      *bunkis[:6], *scrolls[:6], *flat)
+        off += trec
 
-    # gap (between track table and note table)
-    out += gap
-    # pad with zeros if the stored noteOffset is beyond current position
-    if len(out) < note_offset:
-        out += b"\x00" * (note_offset - len(out))
+    # gap (between track table and note table); the zero padding up to
+    # noteOffset is already in the zeroed buffer
+    out[off:off + len(gap)] = gap
 
+    off = note_start
+    pack_into = _NOTE_ST.pack_into
     for n in notes:
-        out += struct.pack("<iiii", n["type"], n["measure"],
-                           n["balloonHitCount"], n["longNoteLength"])
+        pack_into(out, off, n["type"], n["measure"],
+                  n["balloonHitCount"], n["longNoteLength"])
+        off += NOTE_SIZE
 
-    out += tail
+    out[off:off + len(tail)] = tail
     return bytes(out)
 
 
@@ -286,6 +295,19 @@ BRANCH_MASTER = 2
 # Which branch path the converter renders. The master (clear) path is the
 # canonical "full" chart in Taiko.
 SELECTED_BRANCH = BRANCH_MASTER
+
+
+class _NoteLineTable(dict):
+    """str.translate table: whitespace dropped, anything that is not a note
+    digit / A / B / comma becomes "0". Filled lazily per character seen."""
+    def __missing__(self, k):
+        c = chr(k)
+        v = None if c.isspace() else (c if c in "0123456789AB," else "0")
+        self[k] = v
+        return v
+
+
+_NOTE_LINE_TABLE = _NoteLineTable()
 
 
 def _to_float(s, default=0.0):
@@ -471,8 +493,7 @@ def parse_tja(text):
             # the measure keeps its length and its comma.
             if ":" in line:
                 continue
-            seg = "".join(c if c in "0123456789AB," else "0"
-                          for c in line.upper() if not c.isspace())
+            seg = line.upper().translate(_NOTE_LINE_TABLE)
             # a line may contain a trailing ',' ending a measure; may have
             # multiple commas; accumulate
             while "," in seg:
@@ -575,7 +596,11 @@ def convert_tja(tja_text, course, player="1p", branches=True, warn=None):
     measure's note block is written twice (sub-track 0 + sub-track 3) to match
     the corpus duplication invariant.
     """
-    parsed = parse_tja(tja_text)
+    return _convert_parsed(parse_tja(tja_text), course, player, branches, warn)
+
+
+def _convert_parsed(parsed, course, player="1p", branches=True, warn=None):
+    """convert_tja on an already parsed TJA (parse_tja output is only read)."""
     courses = parsed["courses"]
 
     cidx = _COURSE_ALIASES.get(str(course).lower(), None)
@@ -614,12 +639,17 @@ def convert_tja(tja_text, course, player="1p", branches=True, warn=None):
         it, kept = iter(all_balloons), []
         for m in cdata["measures"]:
             keep = m.get("branch", BRANCH_COMMON) in (BRANCH_COMMON, route)
-            for ch in m["notes"]:
+            ns = m["notes"]
+            if "7" not in ns and "9" not in ns:
+                continue
+            for ch in ns:
                 if ch in "79":
                     v = next(it, None)
                     if keep and v is not None:
                         kept.append(v)
         return kept
+
+    ceil = math.ceil
 
     def layout(route):
         """First pass for one route: (measure, start ms, bpm, note recs) per
@@ -658,7 +688,7 @@ def convert_tja(tja_text, course, player="1p", branches=True, warn=None):
             cur_time_ms += m.get("delay_ms", 0.0)
             measure_start = cur_time_ms
 
-            note_chars = [c for c in m["notes"] if not c.isspace()]
+            note_chars = "".join(m["notes"].split())
             n = len(note_chars)
 
             # The Gen2 position grid is 1/48 of a 4/4 BAR at this tempo, not 1/48
@@ -672,6 +702,8 @@ def convert_tja(tja_text, course, player="1p", branches=True, warn=None):
             nseg = max(1, int(math.ceil(span / POS_DIV - 1e-9)))
             seg_recs = [[] for _ in range(nseg)]
             used_pos = set()
+            top0 = min(POS_DIV, int(ceil(span - 1e-9)))
+            top1 = max(top0, 1) - 1
             for i, ch in enumerate(note_chars):
                 if ch == "0":
                     continue
@@ -681,18 +713,27 @@ def convert_tja(tja_text, course, player="1p", branches=True, warn=None):
                 # measure denser than the grid) do they share one, so a dense
                 # run can't push the rest of the measure off its time.
                 q = int(round(i * span / n)) if n > 0 else 0
-                seg = min(max(q, 0) // POS_DIV, nseg - 1)
-                top = min(POS_DIV, int(math.ceil(span - seg * POS_DIV - 1e-9)))
-                pos = min(max(q - seg * POS_DIV, 0), max(top, 1) - 1)
+                if nseg == 1:
+                    # single-bar fast path (same values as the general case)
+                    seg = 0
+                    top = top0
+                    pos = q if q > 0 else 0
+                    if pos > top1:
+                        pos = top1
+                else:
+                    seg = min(max(q, 0) // POS_DIV, nseg - 1)
+                    top = min(POS_DIV, int(ceil(span - seg * POS_DIV - 1e-9)))
+                    pos = min(max(q - seg * POS_DIV, 0), max(top, 1) - 1)
                 if ch != "8":
                     # '8' only ends a roll: it takes no slot and needs no nudge.
-                    if (seg, pos) in used_pos:
+                    key = seg * 64 + pos          # pos < 64: one int per slot
+                    if key in used_pos:
                         for cand in (pos + 1, pos - 1):
                             if (0 <= cand < top
-                                    and (seg, cand) not in used_pos):
+                                    and seg * 64 + cand not in used_pos):
                                 pos = cand
                                 break
-                    used_pos.add((seg, pos))
+                    used_pos.add(seg * 64 + pos)
                 recs = seg_recs[seg]
 
                 note_time = measure_start + (seg + pos / float(POS_DIV)) * bar_ms
@@ -907,11 +948,14 @@ def _diverge_layout(routes3, conds):
     thresholds in bunkis on the measure where a branch block starts."""
     K = len(routes3[0])
     tracks, notes = [], []
+    extend = notes.extend
     remaining = [sum(len(rec[3]) for rec in r) for r in routes3]
     prev_seq, since = None, 0
+    ra, rb, rc = routes3
     for k in range(K):
-        m, start, bpm, _ = routes3[2][k]
-        seqs = [routes3[b][k][0].get("bseq") for b in range(3)]
+        recs3 = (ra[k], rb[k], rc[k])
+        m, start, bpm, _ = recs3[2]
+        seqs = [x[0].get("bseq") for x in recs3]
         seq = next((x for x in seqs if x is not None), None)
         bunkis = [-1] * 6
         if seq is not None and seq != prev_seq:
@@ -921,19 +965,26 @@ def _diverge_layout(routes3, conds):
                    for r in range(3)]
             bunkis = _bunki_values(conds.get(seq, ("p", 101.0, 101.0)), pts)
             since = k
-        if any(routes3[b][k][0].get("section") for b in range(3)):
+        if (recs3[0][0].get("section") or recs3[1][0].get("section")
+                or recs3[2][0].get("section")):
             since = k
         if seq is not None:
             prev_seq = seq
-        starts = []
-        for _copy in range(2):
-            for b in range(3):
-                starts.append(len(notes))
-                notes.extend(dict(r) for r in routes3[b][k][3])
+        lists = (recs3[0][3], recs3[1][3], recs3[2][3])
+        counts = (len(lists[0]), len(lists[1]), len(lists[2]))
+        n_before = len(notes)
+        starts = [n_before, n_before + counts[0],
+                  n_before + counts[0] + counts[1]]
+        starts += [n_before + sum(counts) + (x - n_before) for x in starts]
+        for _copy in (0, 1):
+            for lst in lists:
+                if lst:
+                    extend([r.copy() for r in lst])
+        rem = remaining
         for b in range(3):
-            remaining[b] -= len(routes3[b][k][3])
-        subs = [{"noteIndexSt": starts[s], "noteCount": len(routes3[s % 3][k][3]),
-                 "pointGain": remaining[s % 3]} for s in range(6)]
+            rem[b] -= counts[b]
+        subs = [{"noteIndexSt": starts[s], "noteCount": counts[s % 3],
+                 "pointGain": rem[s % 3]} for s in range(6)]
         tracks.append({
             "time": start,
             "bpm": bpm,
@@ -941,7 +992,7 @@ def _diverge_layout(routes3, conds):
             "gogoFlag": 1 if m["gogo"] else 0,
             "_unk": 0,
             "bunkis": bunkis,
-            "scrollSpeeds": [float(routes3[s % 3][k][0]["scroll"])
+            "scrollSpeeds": [float(recs3[s % 3][0]["scroll"])
                              for s in range(6)],
             "subtracks": subs,
         })
@@ -959,7 +1010,7 @@ def tja_to_all_charts(tja_text):
     out = {}
     for cidx in sorted(parsed["courses"].keys()):
         diff = _DIFF_NAMES.get(cidx, "oni")
-        data = convert_tja(tja_text, diff, "1p")
+        data = _convert_parsed(parsed, diff, "1p")
         out[diff] = data
         out[diff + "_2p"] = data  # mirror
     return out

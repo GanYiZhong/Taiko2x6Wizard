@@ -178,6 +178,8 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
         if s0["noteCount"] != s3["noteCount"]:
             dup_ok = False
             continue
+        if not s0["noteCount"] or s0["noteIndexSt"] == s3["noteIndexSt"]:
+            continue                     # nothing to compare / the same slice
         a = notes[s0["noteIndexSt"]: s0["noteIndexSt"] + s0["noteCount"]]
         b = notes[s3["noteIndexSt"]: s3["noteIndexSt"] + s3["noteCount"]]
         if [(x["type"], x["measure"]) for x in a] != [(x["type"], x["measure"]) for x in b]:
@@ -189,10 +191,10 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
     bad_types = sorted({n["type"] for n in notes} - VALID_NOTE_TYPES)
     if bad_types:
         E("note.type", f"unknown note types present: {bad_types}")
-    if any(n["measure"] >= 48 or n["measure"] < 0 for n in notes):
+    positions = {n["measure"] for n in notes}
+    if any(p >= 48 or p < 0 for p in positions):
         E("note.position", "some note positions are outside 0..47")
-    off_grid = sorted({n["measure"] for n in notes if 0 <= n["measure"] < 48}
-                      - CORPUS_POSITIONS)
+    off_grid = sorted({p for p in positions if 0 <= p < 48} - CORPUS_POSITIONS)
     if off_grid:
         W("note.position", f"positions never seen in official charts: {off_grid}")
     for n in notes:
@@ -205,15 +207,6 @@ def validate_sht(data: bytes, difficulty: str | None = None) -> list[Issue]:
         if want_len and n["longNoteLength"] < 0:
             W("note.longLength", f"type {n['type']} has no longNoteLength (-1)")
             break
-
-    # roll/balloon start (5/6/7/9) should have a matching type-8 end after it
-    depth = 0
-    for n in notes:
-        if n["type"] in (5, 6, 7, 9):
-            depth += 1
-        elif n["type"] == 8 and depth > 0:
-            depth -= 1
-    # (depth can stay >0 legitimately across the two copies; only flag negative)
 
     # ---- per-difficulty note-buffer limit ----------------------------------
     if difficulty:
