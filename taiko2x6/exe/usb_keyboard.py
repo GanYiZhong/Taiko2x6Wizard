@@ -619,6 +619,7 @@ except ImportError:                     # CLI-only environment
 else:
     from taiko2x6.app import appconfig
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
 
     class _Worker(QThread):
         done = Signal(object)
@@ -733,6 +734,7 @@ else:
             self.rb_kbdonly.toggled.connect(self._update_buttons)
             self.ed_target.editingFinished.connect(self._refresh)
             self._mode_changed()
+            polish(self, primary=self.b_install)
 
         # ---- state --------------------------------------------------------
         def _busy(self):

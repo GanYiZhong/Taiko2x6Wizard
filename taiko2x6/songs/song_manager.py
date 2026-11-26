@@ -38,6 +38,8 @@ import sys
 from taiko2x6.bineditors import bineditor_musicinfo as MI
 from taiko2x6.bineditors import bineditor_tuning as TU
 from taiko2x6.bineditors import bineditor_streaminfo as SI
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 from PySide6.QtCore import Qt, QByteArray
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
@@ -728,6 +730,8 @@ class SongManager(QDialog):
     if cancelled or nothing changed.
     """
 
+    NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
     def __init__(self, mi_bytes: bytes, tu_bytes: bytes, si_bytes: bytes, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Taiko Song Manager (cross-bin)"))
@@ -770,6 +774,7 @@ class SongManager(QDialog):
         self._next_uid = 0
         self._sort_col, self._sort_order = COL_IDX, Qt.AscendingOrder
         self._build_ui()
+        polish(self)
 
     # -- assemble per-song rows from the three models ----------------------- #
     def _title_of(self, k, sid) -> str:
@@ -848,7 +853,7 @@ class SongManager(QDialog):
                "are NOT created here.")
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#c98;")
+        note.setStyleSheet("color:palette(mid);")
         lay.addWidget(note)
         if self._t14:
             n14 = QLabel(tr("This game version only supports adding and removing "

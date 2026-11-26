@@ -29,6 +29,7 @@ class PathRow(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         self.edit = QLineEdit(text)
         self.edit.textChanged.connect(lambda *_: self.changed.emit())
+        self.setFocusProxy(self.edit)       # a label's Alt+letter lands in the field
         self.btn = QPushButton(tr("Browse…"))
         self.btn.setAutoDefault(False)
         self.btn.clicked.connect(self._browse)

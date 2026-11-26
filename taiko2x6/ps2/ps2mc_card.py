@@ -451,6 +451,8 @@ except Exception:  # pragma: no cover
 
 if _HAVE_QT:
     from taiko2x6.app import appconfig
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
 
     class _Worker(QThread):
         done = Signal(object)
@@ -472,20 +474,21 @@ if _HAVE_QT:
 
         def __init__(self, parent=None, default_img=""):
             super().__init__(parent)
-            self.setWindowTitle("PS2 Memory Card (MagicGate Arcade / COH)")
+            self.setWindowTitle(tr("PS2 Memory Card (MagicGate Arcade / COH)"))
             self.resize(640, 480)
             self.card: Ps2mcCard | None = None
             self.path = ""
             self._build_ui()
             if default_img and Path(default_img).exists():
                 self._open(default_img)
+            polish(self, primary=self.b_open)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)
             top = QHBoxLayout()
             self.lbl = QLabel("(no card open)")
-            b_open = QPushButton("Open card…"); b_open.clicked.connect(lambda: self._open())
-            top.addWidget(b_open); top.addWidget(self.lbl, 1)
+            self.b_open = QPushButton("Open card…"); self.b_open.clicked.connect(lambda: self._open())
+            top.addWidget(self.b_open); top.addWidget(self.lbl, 1)
             lay.addLayout(top)
 
             self.info = QLabel(""); self.info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")

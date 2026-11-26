@@ -26,7 +26,11 @@ TRANSLATED = ["taiko2x6/app/taiko256_explorer_gui6.py", "taiko2x6/songs/omnimix_
               "taiko2x6/bineditors/bineditor_fname.py",
               "taiko2x6/bineditors/bineditor_hdbdinfo.py",
               "taiko2x6/audio/audioplayer.py", "taiko2x6/graphics/flipbook_player.py",
-              "taiko2x6/graphics/imageview.py", "taiko2x6/charts/chart_preview.py"]
+              "taiko2x6/graphics/imageview.py", "taiko2x6/charts/chart_preview.py",
+              "taiko2x6/charts/sht_validator.py", "taiko2x6/graphics/songtex.py",
+              "taiko2x6/graphics/songtex_all.py", "taiko2x6/graphics/swg_editor.py",
+              "taiko2x6/ps2/ps2mc_card.py", "taiko2x6/audio/vagtool.py",
+              "taiko2x6/songs/song_manager.py"]
 
 
 def _tr_keys(path):

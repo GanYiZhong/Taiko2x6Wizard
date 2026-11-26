@@ -159,6 +159,7 @@ try:
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox, QWidget,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
     _HAVE_QT = True
@@ -182,15 +183,19 @@ class Editor(QDialog):
     if the user saved, else None. Unchanged edits round-trip to identical bytes.
     """
 
+    NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"lamp.bin Editor — {title}" if title else "lamp.bin Editor")
+        self.setWindowTitle(tr("{f} Editor — {t}").format(f="lamp.bin", t=title)
+            if title else tr("{f} Editor").format(f="lamp.bin"))
         remember_size(self, "lamp", (820, 600))
         self._orig = bytes(data)
         self.model = parse(data)
         self.result_bytes: bytes | None = None
 
         self._build_ui()
+        polish(self)
 
     # -- ui ----------------------------------------------------------------- #
     def _build_ui(self):

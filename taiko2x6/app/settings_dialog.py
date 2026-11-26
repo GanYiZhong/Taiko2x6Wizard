@@ -12,11 +12,13 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QGridLayout, QLabel,
                                QMessageBox, QPushButton, QVBoxLayout)
 
 from taiko2x6.app import appconfig
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 # key, label, what needs it, kind ("file" | "dir"), file filter, important?
 # (label / note are looked up with tr() at display time; zh-TW entries live in
@@ -89,8 +91,9 @@ class SettingsDialog(QDialog):
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         v.addLayout(grid)
+        mid = self.palette().color(QPalette.Mid).name()
         for r, (key, label, note, _kind, _filt, _imp) in enumerate(DEPS):
-            name = QLabel(f"<b>{tr(label)}</b><br><span style='color:#888'>"
+            name = QLabel(f"<b>{tr(label)}</b><br><span style='color:{mid}'>"
                           f"{tr(note)}</span>")
             name.setWordWrap(True)
             st = QLabel()
@@ -113,17 +116,20 @@ class SettingsDialog(QDialog):
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
         self.refresh()
+        polish(self)
 
     def refresh(self):
+        mid = self.palette().color(QPalette.Mid).name()
+        bad = self.palette().color(QPalette.BrightText).name()
         for d in status():
             lab = self._rows[d["key"]]
             if d["found"]:
-                lab.setText(f"<span style='color:#2a9d3a'>{tr('Found')}</span>"
+                lab.setText(f"{tr('Found')}"
                             f"<br>{d['path']}")
             elif d["important"]:
-                lab.setText(f"<span style='color:#c0392b'>{tr('Missing')}</span>")
+                lab.setText(f"<span style='color:{bad}'>{tr('Missing')}</span>")
             else:
-                lab.setText(f"<span style='color:#888'>{tr('Not set')}</span>")
+                lab.setText(f"<span style='color:{mid}'>{tr('Not set')}</span>")
 
     def _browse(self, key):
         _k, label, _n, kind, filt, _i = next(x for x in DEPS if x[0] == key)

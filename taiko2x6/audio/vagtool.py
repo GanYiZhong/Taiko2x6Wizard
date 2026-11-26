@@ -616,6 +616,8 @@ try:
         QFileDialog, QLineEdit, QDialogButtonBox, QProgressBar,
     )
     from PySide6.QtCore import Qt, QThread, Signal
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     _HAVE_QT = True
 except Exception:
     _HAVE_QT = False
@@ -661,7 +663,7 @@ if _HAVE_QT:
 
         def __init__(self, template_vag: bytes = None, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Import Audio -> Game VAG")
+            self.setWindowTitle(tr("Import Audio -> Game VAG"))
             self.result_bytes = None
             self._src_path = None
 
@@ -717,6 +719,7 @@ if _HAVE_QT:
             lay.addWidget(bb)
 
             self._worker = None
+            polish(self)
 
         def _browse(self):
             from taiko2x6.app import appconfig                       # last-used-path memory

@@ -576,19 +576,24 @@ try:
         QLineEdit, QWidget,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
 
     class Editor(QDialog):
         """Modal editor. After exec(), ``result_bytes`` holds new bytes if saved."""
 
+        NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
         def __init__(self, data: bytes, title: str = "", parent=None):
             super().__init__(parent)
-            self.setWindowTitle(f"tuning.bin Editor — {title}" if title else "tuning.bin Editor")
+            self.setWindowTitle(tr("{f} Editor — {t}").format(f="tuning.bin", t=title)
+                if title else tr("{f} Editor").format(f="tuning.bin"))
             remember_size(self, "tuning", (1180, 720))
             self.model = parse(data)
             self.result_bytes: bytes | None = None
             self._build_ui()
+            polish(self)
 
         # -- ui ------------------------------------------------------------- #
         def _build_ui(self):
@@ -605,7 +610,7 @@ try:
             if not m.structured:
                 warn = QLabel("⚠ " + (m.warning or "unrecognized layout"))
                 warn.setWordWrap(True)
-                warn.setStyleSheet("color:#c33;")
+                warn.setStyleSheet("color:palette(bright-text);")
                 lay.addWidget(warn)
                 # read-only string pool view only
                 self.tbl_str = QTableWidget(len(m.strings), 2)

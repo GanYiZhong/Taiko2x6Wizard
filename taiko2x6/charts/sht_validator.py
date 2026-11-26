@@ -19,6 +19,8 @@ import struct
 from dataclasses import dataclass
 
 from taiko2x6.charts import tja2sht
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 logger = logging.getLogger("taiko.shtvalidator")
 
@@ -247,12 +249,12 @@ try:
     class ShtValidatorDialog(QDialog):
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("SHT Validator — check official format")
+            self.setWindowTitle(tr("SHT Validator — check official format"))
             self.resize(720, 560)
             lay = QVBoxLayout(self)
             row = QHBoxLayout()
-            b_open = QPushButton("Open .sht…"); b_open.clicked.connect(self._open)
-            row.addWidget(b_open)
+            self.b_open = QPushButton("Open .sht…"); self.b_open.clicked.connect(self._open)
+            row.addWidget(self.b_open)
             row.addWidget(QLabel("difficulty:"))
             self.cb = QComboBox(); self.cb.addItems(["(auto/none)", "easy", "normal", "hard", "oni"])
             row.addWidget(self.cb)
@@ -262,6 +264,7 @@ try:
             lay.addWidget(self.out, 1)
             b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
             lay.addWidget(b_close)
+            polish(self, primary=self.b_open)
 
         def _open(self):
             from taiko2x6.app import appconfig                       # last-used-path memory

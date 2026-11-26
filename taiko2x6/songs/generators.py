@@ -27,6 +27,7 @@ from taiko2x6.app import appconfig
 from taiko2x6.audio import vagtool
 from taiko2x6.app import jobs
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 logger = logging.getLogger("taiko.generators")
 
@@ -65,13 +66,14 @@ class VagGeneratorDialog(QDialog):
 
     def __init__(self, parent=None, default_audio="", default_out=""):
         super().__init__(parent)
-        self.setWindowTitle("VAG Generator — audio → VAG")
+        self.setWindowTitle(tr("VAG Generator — audio → VAG"))
         self.resize(640, 420)
         self._build_ui()
         if default_audio:
             self.ed_audio.setText(default_audio)
         if default_out:
             self.ed_out.setText(default_out)
+        polish(self, primary=self.b_go)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)

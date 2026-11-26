@@ -413,6 +413,7 @@ try:
                                    QMessageBox, QProgressBar, QGroupBox,
                                    QFormLayout)
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.app.errors import friendly_error
     from taiko2x6.ps2 import dialog_kit as kit
     from taiko2x6.ps2.hdd_browser import human_size
@@ -562,6 +563,7 @@ if QDialog is not None:
             self._timer.timeout.connect(self._path_settled)
             self.row_img.changed.connect(self._on_path_changed)
             self._path_settled()
+            polish(self, primary=self.btn_scan)
 
         # -- helpers -----------------------------------------------------------
         def _img(self):

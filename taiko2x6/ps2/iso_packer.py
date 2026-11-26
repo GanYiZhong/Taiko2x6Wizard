@@ -467,6 +467,7 @@ try:
         QLabel, QProgressBar, QMessageBox, QGroupBox,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.app.errors import friendly_error
     from taiko2x6.ps2 import dialog_kit as kit
     from taiko2x6.ps2.hdd_browser import human_size
@@ -551,6 +552,7 @@ try:
             for r in (self.row_orig, self.row_data, self.row_list, self.row_out):
                 r.changed.connect(self._validate)
             self._validate()
+            polish(self)
 
         def _paths(self):
             return (self.row_orig.text(), self.row_data.text(),

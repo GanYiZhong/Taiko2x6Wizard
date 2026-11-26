@@ -21,6 +21,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from taiko2x6.graphics import tim2
 from taiko2x6.app import apppaths
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 WIDTH, HEIGHT = 640, 160
 
@@ -174,12 +176,13 @@ try:
         def __init__(self, template_nut: bytes, title: str = "", lyricist: str = "",
                      composer: str = "", copyright: str = "", parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Song-name texture generator")
+            self.setWindowTitle(tr("Song-name texture generator"))
             self.resize(700, 420)
             self._template = template_nut
             self.result_bytes: bytes | None = None
             self._build_ui(title, lyricist, composer, copyright)
             self._refresh()
+            polish(self, primary=self.b_save)
 
         def _build_ui(self, title, lyricist, composer, copyright):
             lay = QVBoxLayout(self)
@@ -209,9 +212,9 @@ try:
             lay.addWidget(self.preview, 1)
 
             btns = QHBoxLayout(); btns.addStretch(1)
-            b_save = QPushButton("Use this texture"); b_save.clicked.connect(self._save)
+            self.b_save = QPushButton("Use this texture"); self.b_save.clicked.connect(self._save)
             b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
-            btns.addWidget(b_save); btns.addWidget(b_cancel)
+            btns.addWidget(self.b_save); btns.addWidget(b_cancel)
             lay.addLayout(btns)
 
         def _gen(self) -> bytes:

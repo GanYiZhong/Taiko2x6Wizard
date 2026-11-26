@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from taiko2x6.graphics import swg as S
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 
 class SwgCanvas(QWidget):
@@ -107,9 +109,11 @@ class SwgCanvas(QWidget):
 class SwgEditor(QDialog):
     """Modal editor. After exec(), .result_bytes holds new SWG bytes if saved."""
 
+    NO_DEFAULT_REASON = 'canvas editor: Enter must not save and close'
+
     def __init__(self, swg_bytes: bytes, textures: list, title: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"SWG Editor — {title}")
+        self.setWindowTitle(tr("SWG Editor — {t}").format(t=title))
         self.resize(1080, 680)
         self.swg = S.SwgFile.parse(swg_bytes)
         self.result_bytes: bytes | None = None
@@ -125,6 +129,7 @@ class SwgEditor(QDialog):
 
         self._build_ui(textures)
         self._refresh_canvas()
+        polish(self)
 
     # -- ui -------------------------------------------------------------------
     def _build_ui(self, textures):
