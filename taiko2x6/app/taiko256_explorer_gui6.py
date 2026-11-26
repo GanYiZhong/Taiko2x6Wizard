@@ -1051,7 +1051,7 @@ class MainWindow(QMainWindow):
                "already read as zero, so the emulator still reads identical "
                "bytes.") + close_first)
         act("act_backups", tr("Backups & undo…"), self.open_backups,
-            QStyle.SP_BrowserReload,
+            "log",
             tr("List the undo journals an image kept and roll it back to before "
                "any of them, or restore a DATA.000 / list.bin .bak pair.")
             + close_first)
