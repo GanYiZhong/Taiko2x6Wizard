@@ -78,6 +78,9 @@ SEC0_RECSZ_T14 = 104     # 26 x i32
 SEC0_NCOLS_T14 = 26
 
 
+_P3 = struct.Struct("<3I").pack
+
+
 # --------------------------------------------------------------------------- #
 #  Model
 # --------------------------------------------------------------------------- #
@@ -184,10 +187,9 @@ def _parse_strict(raw: bytes) -> Model:
     p = HEADER_SIZE
     if c0 * SEC0_RECSZ != o0 - HEADER_SIZE:
         raise ValueError("SEC0 size does not match o0")
-    for _ in range(c0):
-        rec = list(struct.unpack_from("<%di" % SEC0_NCOLS, raw, p))
-        sec0.append(rec)
-        p += SEC0_RECSZ
+    sec0 = [list(t) for t in struct.iter_unpack(
+        "<%di" % SEC0_NCOLS, raw[p:p + c0 * SEC0_RECSZ])]
+    p += c0 * SEC0_RECSZ
     # p now equals o0 (asserted by the size check above)
 
     def _check_multiple(length, elem, label):
@@ -292,10 +294,8 @@ def _parse_strict_t14(raw: bytes) -> Model:
 
     # SEC0 : 104-byte records (26 i32)
     sec0 = []
-    p = sec0_start
-    for _ in range(c0):
-        sec0.append(list(struct.unpack_from("<%di" % SEC0_NCOLS_T14, raw, p)))
-        p += SEC0_RECSZ_T14
+    sec0 = [list(t) for t in struct.iter_unpack(
+        "<%di" % SEC0_NCOLS_T14, raw[sec0_start:sec0_start + c0 * SEC0_RECSZ_T14])]
     # SEC1 : u32 index table
     _check_multiple(o1 - o0, 4, "SEC1")
     sec1 = list(struct.unpack_from("<%dI" % ((o1 - o0) // 4), raw, o0)) if o1 > o0 else []
@@ -435,28 +435,29 @@ def serialize(model: Model) -> bytes:
     ncols = m.sec0_ncols          # 21 (t8) / 26 (t14)
 
     # SEC0
-    for rec in m.sec0:
-        body += struct.pack("<%di" % ncols, *rec)
+    pk = struct.Struct("<%di" % ncols).pack
+    body += b"".join([pk(*rec) for rec in m.sec0])
     body += g.get("sec0", b"")
     # SEC1
     if m.sec1:
         body += struct.pack("<%dI" % len(m.sec1), *m.sec1)
     body += g.get("sec1", b"")
     # SEC2
-    for a, b in m.sec2:
-        body += struct.pack("<2I", a, b)
+    if m.sec2:
+        p2 = struct.Struct("<2I").pack
+        body += b"".join([p2(a, b) for a, b in m.sec2])
     body += g.get("sec2", b"")
     # SEC3
     if sec3_ptrs:
         body += struct.pack("<%dI" % len(sec3_ptrs), *sec3_ptrs)
     body += g.get("sec3", b"")
     # SEC4
-    for ptr, a, b in sec4:
-        body += struct.pack("<3I", ptr, a, b)
+    if sec4:
+        body += b"".join([_P3(ptr, a, b) for ptr, a, b in sec4])
     body += g.get("sec4", b"")
     # SEC5
-    for ptr, a, b in sec5:
-        body += struct.pack("<3I", ptr, a, b)
+    if sec5:
+        body += b"".join([_P3(ptr, a, b) for ptr, a, b in sec5])
     body += g.get("sec5", b"")
 
     if m.variant == "t14":
