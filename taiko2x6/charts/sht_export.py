@@ -25,6 +25,35 @@ Gen2 stores a branch threshold as diverge POINTS (20 per don/ka, 30 per balloon
 or kusudama) rather than a percentage. The TJA percentage is recovered from the
 normal route's points since the previous branch point, so it is approximate; a
 section with no such points is written as a drumroll (r) condition.
+
+Round-trip fidelity (measured by tests/test_chart_roundtrip.py on seeded
+synthetic charts)
+-------------------------------------------------------------------
+sht -> Gen3 -> sht is exact: note types, 1/48 positions, roll lengths (whole
+ms), balloon counts, track times (float32), bpm, gogo, bar line, bunkis and the
+three route speeds all come back identical. What cannot come back, and why:
+
+  * scrollSpeeds[3:6]. Gen3 stores one speed per route (3), Gen2 six; the
+    second three are unused copies, rebuilt as copies of the first three.
+  * a roll with length <= 0 (Gen2 -1) is written with duration 0 and reads
+    back as 0; a balloon with count -1 reads back 0. Neither occurs in charts
+    from tja2sht or the game.
+  * notes at 1/48 slot >= 48 (outside the grid) are clamped to 47.
+
+sht -> TJA -> sht keeps types (don/ka and big/two-hand), positions, roll
+lengths (exact to the ms), balloon counts, bpm/gogo/bar line/scroll, and the
+bunkis of any chart whose thresholds are reachable from the notes in the
+file. It loses:
+
+  * Gen3 syllable variants (types 2, 3 -> don, 5 -> ka): TJA has no such
+    notes.
+  * thresholds above the diverge points the normal route offered since the
+    previous branch point (written as 100%), and the per-route pairs when they
+    do not follow one percentage (TJA has one condition per branch point;
+    tja2sht expands it per route). sht does not record #SECTION positions.
+  * two notes in one 1/48 slot (sht can hold them, TJA cannot: tja2sht nudges
+    the second to a free neighbour, which can move the notes after it by one
+    slot).
 """
 from __future__ import annotations
 
@@ -46,9 +75,12 @@ _NONE = [-1] * 6
 # end is placed on a grid 8x finer so long rolls keep their length.
 _SUB = 8
 # Finer grids tried, per measure, until every roll end in it lands within
-# _TOL_MS of its true time (a longer line only where a roll ends).
+# _TOL_MS of its true time (a longer line only where a roll ends). tja2sht
+# rounds a roll's length to whole ms, so an end that is off by up to 0.5 ms
+# can still come back 1 ms long or short; staying under 0.3 ms makes every
+# whole-ms length round-trip exactly (0.5 gave 35 of 7553 rolls 1 ms off).
 _SUBS = (8, 16, 32, 64, 128)
-_TOL_MS = 0.5
+_TOL_MS = 0.3
 # An end this close before a track's time belongs to that track (cell 0).
 _SNAP_MS = 0.5
 
