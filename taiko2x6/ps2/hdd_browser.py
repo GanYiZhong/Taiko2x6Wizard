@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from taiko2x6.app import appconfig
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 from taiko2x6.ps2 import ps2hdd
 
 
@@ -78,6 +79,7 @@ class HddBrowserDialog(QDialog):
         default_img = default_img or appconfig.last_existing("hddimg")
         if default_img and Path(default_img).exists():
             self._open(default_img)
+        polish(self, primary=self.b_extract)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)

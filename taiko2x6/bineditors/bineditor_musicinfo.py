@@ -510,6 +510,7 @@ try:
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox, QWidget,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
     _HAVE_QT = True
@@ -547,14 +548,18 @@ _SEC0_TIPS = {
 class Editor(QDialog):
     """Modal editor. After exec(), result_bytes holds new bytes if saved."""
 
+    NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"musicinfo.bin — {title}" if title else "musicinfo.bin")
+        self.setWindowTitle(tr("{f} Editor — {t}").format(f="musicinfo.bin", t=title)
+            if title else tr("{f} Editor").format(f="musicinfo.bin"))
         remember_size(self, "musicinfo", (1100, 680))
         self.model = parse(data)
         self._orig = bytes(data)
         self.result_bytes: bytes | None = None
         self._build_ui()
+        polish(self)
 
     # -- UI ------------------------------------------------------------------
     def _build_ui(self):

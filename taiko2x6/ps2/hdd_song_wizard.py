@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from taiko2x6.app import appconfig
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 from taiko2x6.ps2 import ps2hdd
 from taiko2x6.ps2.hdd_browser import friendly_error, human_size
 from taiko2x6.songs import song_builder
@@ -97,6 +98,7 @@ class HddSongWizard(QDialog):
         if default_img and Path(default_img).exists():
             self._set_img(default_img)
         self._refresh_state()
+        polish(self, primary=self.b_run)
 
     # -- ui -------------------------------------------------------------------
     def _build_ui(self):

@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from taiko2x6.app import appconfig
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 from taiko2x6.songs import omnimix_maker as OM
 
 # musicinfo genre -> folder name, for the build summary
@@ -171,6 +172,7 @@ class OmnimixDialog(QDialog):
         if default_img:
             self.ed_timg.setText(default_img)
         self.ed_timg.textChanged.connect(self._target_edited)
+        polish(self, primary=self.b_prev)
 
     # -- ui -------------------------------------------------------------------
     def _build_ui(self):
@@ -201,7 +203,7 @@ class OmnimixDialog(QDialog):
         # --- sources ---
         gs = self.gb_sources = QGroupBox(tr("Sources (harvest FROM these — first one wins on ties)"))
         sv = QVBoxLayout(gs)
-        self.lst = QListWidget(); self.lst.setMinimumHeight(100)
+        self.lst = QListWidget(); self.lst.setMinimumHeight(70)
         self.lst.setToolTip(tr("Order matters: the first source wins when two have the same song."))
         sv.addWidget(self.lst)
         sb = QHBoxLayout()
@@ -280,7 +282,7 @@ class OmnimixDialog(QDialog):
 
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setFont(QFont("Consolas", 9))
-        self.log.setMinimumHeight(180)
+        self.log.setMinimumHeight(110)
         self.log.setMaximumBlockCount(20000)
         self.log.setLineWrapMode(QPlainTextEdit.NoWrap)
         lay.addWidget(QLabel(tr("log:"))); lay.addWidget(self.log, 1)

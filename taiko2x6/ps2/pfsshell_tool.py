@@ -417,6 +417,7 @@ if _HAVE_QT:
     from taiko2x6.app import appconfig
     from taiko2x6.app.errors import friendly_error
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.ps2 import dialog_kit as kit
     from taiko2x6.ps2.hdd_browser import human_size
 
@@ -466,6 +467,7 @@ if _HAVE_QT:
             # gone.
             if default_img:
                 self._open(default_img)
+            polish(self, primary=self.b_open)
 
         def _build_ui(self, img):
             lay = QVBoxLayout(self)

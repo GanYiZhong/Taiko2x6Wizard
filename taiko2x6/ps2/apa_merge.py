@@ -296,6 +296,7 @@ try:
                                    QTreeWidget, QTreeWidgetItem, QMessageBox,
                                    QProgressBar, QAbstractItemView)
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.app.errors import friendly_error
     from taiko2x6.ps2 import dialog_kit as kit
     from taiko2x6.ps2.hdd_browser import human_size
@@ -412,6 +413,7 @@ if QDialog is not None:
             lay.addLayout(row3)
             self.row_out.changed.connect(self._validate)
             self._replan()
+            polish(self)
 
         def _say(self, s):
             kit.log_line(self.log, s)

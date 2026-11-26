@@ -37,6 +37,8 @@ import sys
 from taiko2x6.bineditors import bineditor_musicinfo as MI
 from taiko2x6.bineditors import bineditor_tuning as TU
 from taiko2x6.bineditors import bineditor_streaminfo as SI
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -577,9 +579,11 @@ class SongManager(QDialog):
     if cancelled or nothing changed.
     """
 
+    NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
     def __init__(self, mi_bytes: bytes, tu_bytes: bytes, si_bytes: bytes, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Taiko Song Manager (cross-bin)")
+        self.setWindowTitle(tr("Taiko Song Manager (cross-bin)"))
         self.resize(1120, 700)
 
         self._mi_in = bytes(mi_bytes)
@@ -609,6 +613,7 @@ class SongManager(QDialog):
             for s in self._songs
         }
         self._build_ui()
+        polish(self)
 
     # -- assemble per-song rows from the three models ----------------------- #
     def _assemble(self):
@@ -668,7 +673,7 @@ class SongManager(QDialog):
             "NOT created here."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#c98;")
+        note.setStyleSheet("color:palette(mid);")
         lay.addWidget(note)
 
         # filter box

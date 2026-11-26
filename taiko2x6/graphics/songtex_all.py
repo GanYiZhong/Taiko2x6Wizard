@@ -43,6 +43,8 @@ from taiko2x6.graphics import tim2
 #  Constants
 # --------------------------------------------------------------------------- #
 from taiko2x6.app import apppaths
+from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 _HERE = Path(__file__).resolve().parent
 FONT_PATH = str(apppaths.resource_dir() / "Font.ttf")   # MANDATORY 勘亭流 brush font
 
@@ -807,7 +809,7 @@ try:
                      lyricist: str = "", composer: str = "",
                      copyright: str = "", parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Per-song texture-set generator")
+            self.setWindowTitle(tr("Per-song texture-set generator"))
             self.resize(820, 640)
             if not templates:
                 templates = load_test_templates("anp")
@@ -816,6 +818,7 @@ try:
             self._previews: dict[str, _NutPreview] = {}
             self._build_ui(title, lyricist, composer, copyright)
             self._refresh()
+            polish(self, primary=self.b_save)
 
         def _build_ui(self, title, lyricist, composer, copyright):
             lay = QVBoxLayout(self)
@@ -859,11 +862,11 @@ try:
 
             btns = QHBoxLayout()
             btns.addStretch(1)
-            b_save = QPushButton("Use these textures")
-            b_save.clicked.connect(self._save)
+            self.b_save = QPushButton("Use these textures")
+            self.b_save.clicked.connect(self._save)
             b_cancel = QPushButton("Cancel")
             b_cancel.clicked.connect(self.reject)
-            btns.addWidget(b_save)
+            btns.addWidget(self.b_save)
             btns.addWidget(b_cancel)
             lay.addLayout(btns)
 

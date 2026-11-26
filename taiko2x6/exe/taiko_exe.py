@@ -1108,6 +1108,7 @@ except ImportError:                     # CLI-only environment
 else:
     from taiko2x6.app import appconfig
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
 
     class _Worker(QThread):
         done = Signal(object)
@@ -1136,6 +1137,7 @@ else:
             default_img = default_img or appconfig.last_existing('hddimg')
             if default_img:
                 self.ed_img.setText(default_img)
+            polish(self, primary=self.b_patch)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)
@@ -1164,7 +1166,8 @@ else:
             row.addWidget(self.sp)
             self.lbl_range = QLabel(f'(stock {BASE_SONGS}, safe {MAX_SONGS}, '
                                     f'experimental max {MAX_SONGS_BIG})')
-            row.addWidget(self.lbl_range)
+            self.lbl_range.setWordWrap(True)
+            row.addWidget(self.lbl_range, 1)
             row.addStretch(1)
             self.b_check = QPushButton(tr('Check')); self.b_check.clicked.connect(self._check)
             self.b_backup = QPushButton(tr('Back up taiko…')); self.b_backup.clicked.connect(self._backup)
@@ -1191,7 +1194,7 @@ else:
             if n > MAX_SONGS:
                 self.lbl_range.setText(
                     f'⚠ experimental (> {MAX_SONGS}); relocates arrayA, max {MAX_SONGS_BIG}')
-                self.lbl_range.setStyleSheet('color:#c80;')
+                self.lbl_range.setStyleSheet('color:palette(bright-text);')
             else:
                 self.lbl_range.setText(f'(stock {BASE_SONGS}, safe {MAX_SONGS}, '
                                        f'experimental max {MAX_SONGS_BIG})')
@@ -1351,6 +1354,7 @@ else:
             default_img = default_img or appconfig.last_existing('hddimg')
             if default_img:
                 self.ed_img.setText(default_img)
+            polish(self, primary=self.b_patch)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)
@@ -1543,6 +1547,7 @@ else:
             if default_img:
                 self.ed_img.setText(default_img)
                 self._check()
+            polish(self, primary=self.b_patch)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)

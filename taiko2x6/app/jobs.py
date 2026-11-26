@@ -22,6 +22,7 @@ from pathlib import Path
 
 from taiko2x6.app import apppaths
 from taiko2x6.app.i18n import tr
+from taiko2x6.app.dialog_polish import polish
 
 LOG_NAME = "taiko.log"
 
@@ -135,6 +136,7 @@ def _dialog_class():
             row.addStretch(1)
             row.addWidget(b_close)
             lay.addLayout(row)
+            polish(self)
 
         def _copy(self):
             QApplication.clipboard().setText(self.details)

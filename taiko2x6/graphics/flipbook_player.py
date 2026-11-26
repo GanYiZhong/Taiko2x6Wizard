@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from taiko2x6.app.i18n import tr
+
+from taiko2x6.app.dialog_polish import polish
 from taiko2x6.graphics.imageview import ImageViewer
 
 
@@ -39,6 +41,8 @@ def detect_clips(frames: list) -> list:
 
 
 class FlipbookPlayer(QDialog):
+    NO_DEFAULT_REASON = 'player: Space plays and pauses, Esc closes'
+
     def __init__(self, frames: list, title: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Frame Player - {t}").format(t=title))
@@ -62,6 +66,7 @@ class FlipbookPlayer(QDialog):
                 w.setEnabled(False)
         else:
             self._show_frame(0)
+        polish(self)
 
     # -- ui -------------------------------------------------------------------
     def _build_ui(self):

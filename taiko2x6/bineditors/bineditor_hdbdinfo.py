@@ -225,6 +225,7 @@ try:
         QPushButton, QLabel, QTabWidget, QHeaderView, QMessageBox, QLineEdit,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
     _HAVE_QT = True
@@ -259,16 +260,19 @@ if _HAVE_QT:
             ("f15", 15),
         ]
 
+        NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
         def __init__(self, data: bytes, title: str = "", parent=None):
             super().__init__(parent)
-            self.setWindowTitle(f"hdbdinfo.bin Editor — {title}" if title
-                                else "hdbdinfo.bin Editor")
+            self.setWindowTitle(tr("{f} Editor — {t}").format(f="hdbdinfo.bin", t=title)
+                                if title else tr("{f} Editor").format(f="hdbdinfo.bin"))
             remember_size(self, "hdbdinfo", (1100, 680))
             self.model = parse(data)
             self.result_bytes: bytes | None = None
             # map record -> its PoolString (by name_ptr) for editing names
             self._str_by_rel = {s.rel: s for s in self.model.strings}
             self._build_ui()
+            polish(self)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)

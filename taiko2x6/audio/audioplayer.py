@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from taiko2x6.app.i18n import tr
 
+from taiko2x6.app.dialog_polish import polish
+
 
 def is_vag(data: bytes) -> bool:
     """Heuristic: the game's interleaved-VAG container header.
@@ -271,6 +273,8 @@ from PySide6.QtWidgets import QDialog, QListWidget, QLabel as _QLabel
 class SoundBankDialog(QDialog):
     """List + play every waveform in a Sony HD/BD sound-effect bank."""
 
+    NO_DEFAULT_REASON = 'list player: Enter plays the selected sound, Esc closes'
+
     def __init__(self, hd: bytes, bd: bytes, title: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Sound Bank — {t}").format(t=title) if title else tr("Sound Bank"))
@@ -293,6 +297,7 @@ class SoundBankDialog(QDialog):
         self._loaded_row = -1
         if self.sounds:
             self.lst.setCurrentRow(0)
+        polish(self)
 
     def _load(self, row: int):
         if 0 <= row < len(self.sounds):

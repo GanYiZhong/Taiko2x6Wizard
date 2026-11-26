@@ -99,6 +99,7 @@ try:
         QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
     _HAVE_QT = True
@@ -110,14 +111,18 @@ except Exception:  # pragma: no cover - Qt optional for headless import
 class Editor(QDialog):
     """Modal grid editor. After exec(), ``result_bytes`` holds new bytes if saved."""
 
+    NO_DEFAULT_REASON = 'table editor: Enter edits cells and the filter box, so Save is an explicit click'
+
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"rank.bin Editor — {title}" if title else "rank.bin Editor")
+        self.setWindowTitle(tr("{f} Editor — {t}").format(f="rank.bin", t=title)
+            if title else tr("{f} Editor").format(f="rank.bin"))
         remember_size(self, "rank", (680, 560))
         self._orig = bytes(data)
         self.model = parse(data)
         self.result_bytes: bytes | None = None
         self._build_ui()
+        polish(self)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)

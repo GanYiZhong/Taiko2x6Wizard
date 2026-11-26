@@ -305,6 +305,7 @@ except ImportError:                                            # headless / CLI
 
 if QDialog is not None:
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.app import jobs
 
     class _ConvertWorker(QThread):
@@ -453,7 +454,7 @@ if QDialog is not None:
             row.addWidget(close)
             v.addLayout(row)
 
-            self._drop_style = "QListWidget { border: 2px dashed #3b82f6; }"
+            self._drop_style = "QListWidget { border: 2px dashed palette(highlight); }"
             self._load_settings()
             self.lst.model().rowsInserted.connect(self._sync)
             self.lst.model().rowsRemoved.connect(self._sync)
@@ -462,6 +463,7 @@ if QDialog is not None:
             for c in self.ck.values():
                 c.toggled.connect(self._sync)
             self._sync()
+            polish(self)
 
         # -- settings -------------------------------------------------------
         def _load_settings(self):

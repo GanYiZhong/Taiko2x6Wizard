@@ -812,6 +812,7 @@ try:
         QWidget, QProgressDialog, QSpinBox, QDialogButtonBox, QGroupBox,
     )
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app.dialog_polish import polish
     from taiko2x6.songs import song_dialog_ui as UI
 
     class StarsDialog(QDialog):
@@ -847,6 +848,7 @@ try:
             bb.accepted.connect(self.accept)
             bb.rejected.connect(self.reject)
             v.addWidget(bb)
+            polish(self)
 
         def stars(self):
             return [sp.value() for sp in self._spins]
@@ -879,6 +881,7 @@ try:
             self._ids = []
             self._worker = None
             self._build_ui()
+            polish(self, primary=self.b_build)
 
         def _log(self, text):
             UI.log_append(self.log, text)

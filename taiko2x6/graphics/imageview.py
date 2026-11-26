@@ -112,7 +112,7 @@ class ImageViewer(QWidget):
         self.b_out.setToolTip(tr("Zoom out (mouse wheel)"))
         self.b_in.setToolTip(tr("Zoom in (mouse wheel)"))
         for b in (self.b_fit, self.b_one, self.b_out, self.b_in):
-            b.setFixedWidth(44)
+            b.setMinimumWidth(44)         # grows with the (translated) text
             bar.addWidget(b)
         self.b_fit.clicked.connect(self.fit)
         self.b_one.clicked.connect(self.actual_size)
