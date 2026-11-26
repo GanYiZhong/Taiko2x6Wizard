@@ -1096,6 +1096,10 @@ class MainWindow(QMainWindow):
         act("act_shtval", tr("SHT Validator (check format)…"), self.open_sht_validator, "chart",
             tip=tr("Validate a .sht chart against the official on-disc format"))
 
+        act("act_compare", tr("Compare archives…"), self.open_archive_compare, "archive",
+            tip=tr("Compare two archives (stock vs Omnimix, before vs after a save): "
+                   "added, removed and changed files, songs, CSV report. Read-only."))
+
         # Archive | Edit | Songs | Tools
         groups = ((self.act_open, self.act_extract_all, self.act_extract_sel),
                   (self.act_replace, self.act_save, self.act_discard),
@@ -1131,6 +1135,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_quit)
 
         tools = self.menuBar().addMenu(tr("&Tools"))
+        tools.addAction(self.act_compare)
         for title, acts in (
                 (tr("Songs"), (self.act_songmgr, self.act_songreplace,
                                self.act_songbuild, None, self.act_omnimix)),
@@ -1896,6 +1901,10 @@ class MainWindow(QMainWindow):
     def open_vag_generator(self):
         from taiko2x6.songs import generators
         generators.VagGeneratorDialog(self).exec()
+
+    def open_archive_compare(self):
+        from taiko2x6.app import archive_compare
+        archive_compare.ArchiveCompareDialog(self, current=self.archive).exec()
 
     def open_sht_validator(self):
         from taiko2x6.charts import sht_validator
