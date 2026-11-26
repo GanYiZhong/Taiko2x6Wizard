@@ -238,67 +238,340 @@ def verdict(issues: list[Issue]) -> str:
 
 
 # ===========================================================================
+# Presentation helpers (display only — they never change what is validated)
+# ===========================================================================
+import re as _re
+
+_TRACK_RE = _re.compile(r"\btrack (\d+)")
+
+
+def issue_measure(issue: Issue) -> int | None:
+    """0-based measure an issue points at, when its text names one."""
+    m = _TRACK_RE.search(issue.detail)
+    return int(m.group(1)) if m else None
+
+
+def suggestion_for(issue: Issue) -> str:
+    """A short, translated hint on what to do about the issue."""
+    r = issue.rule
+    if issue.severity == INFO:
+        return ""
+    if r.startswith("header"):
+        return tr("The file is damaged or not a Gen2 .sht. Convert it again from the TJA.")
+    if r == "parse":
+        return tr("The file cannot be read as a chart. Convert it again from the TJA.")
+    if r in ("track.bpm", "track.time", "track.scroll"):
+        return tr("Fix the #BPMCHANGE / #SCROLL / #DELAY command near this measure in the TJA.")
+    if r == "track.firstTime":
+        return tr("Check OFFSET and the first #DELAY in the TJA.")
+    if r == "track.timeOrder":
+        return tr("Look for a negative #DELAY or a branch that rewinds the time.")
+    if r.startswith("subtrack"):
+        if r == "subtrack.pointGainCountdown":
+            return tr("Usually harmless; the game tolerates it.")
+        return tr("Rebuild the chart with the converter instead of editing the file by hand.")
+    if r.startswith("note"):
+        return tr("Check the notes in this measure; positions should stay on the normal 1/48 grid.")
+    if r == "difficulty.limit":
+        return tr("Remove notes (or branch less) until the chart fits the buffer.")
+    return tr("Compare with an official chart of the same difficulty.")
+
+
+def note_limit_info(data: bytes, difficulty: str | None):
+    """(count, limit, busiest route index, branched) or None."""
+    if not difficulty:
+        return None
+    limit = tja2sht.DIFFICULTY_NOTE_LIMIT.get(difficulty.lower())
+    if limit is None:
+        return None
+    try:
+        m = tja2sht.parse_sht(data)
+    except Exception:
+        return None
+    trk = m["tracks"]
+    n = tja2sht.limit_note_count(m)
+    per = [sum(t["subtracks"][b]["noteCount"] for t in trk) for b in range(3)]
+    branched = (any(list(t["bunkis"]) != [-1] * 6 for t in trk) or
+                any(t["subtracks"][s]["noteCount"] for t in trk for s in (1, 2)))
+    route = max(range(3), key=lambda b: per[b]) if branched else 0
+    return n, limit, route, branched
+
+
+def verdict_text(issues: list[Issue]) -> str:
+    if any(i.severity == ERROR for i in issues):
+        return tr("INVALID (would crash/freeze)")
+    if any(i.severity == WARN for i in issues):
+        return tr("VALID with warnings")
+    return tr("VALID — matches official format")
+
+
+_SUFFIX_DIFF = (("_e", "easy"), ("_n", "normal"), ("_h", "hard"), ("_m", "oni"))
+
+
+def charts_from_path(path) -> list[tuple[str, str | None, bytes]]:
+    """Read-only: [(label, difficulty guess, sht bytes)] for an .sht / .bin /
+    .tja file. TJA and Gen3 .bin are converted in memory only for checking."""
+    from pathlib import Path
+    from taiko2x6.charts import chart_convert
+    p = Path(path)
+    kind = chart_convert.detect(p)
+    if kind is None or kind == "audio":
+        raise ValueError(tr("{f}: not a TJA, sht or Gen3 fumen").format(f=p.name))
+    if kind == "sht":
+        nm = p.parent.name + p.name
+        diff = next((c for suf, c in _SUFFIX_DIFF if suf in nm), None)
+        return [(p.name, diff, p.read_bytes())]
+    piece = chart_convert.load(p)
+    return [(f"{p.name} [{c}]", c, b) for c, b in piece["charts"].items()]
+
+
+# ===========================================================================
 # GUI
 # ===========================================================================
 try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QBrush
     from PySide6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QLabel,
-        QPlainTextEdit, QComboBox, QWidget,
+        QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox,
+        QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
+        QSplitter,
     )
+    from taiko2x6.charts.chart_timeline import (ChartTimelineView, SEV_COLOURS,
+                                                fmt_time, lane_names)
+
+    _SEV_RANK = {ERROR: 0, WARN: 1, INFO: 2}
+    _SEV_GLYPH = {ERROR: "✖", WARN: "⚠", INFO: "ℹ"}
+
+    class _SortItem(QTableWidgetItem):
+        """Sorts by a numeric key kept in UserRole instead of the text."""
+        def __lt__(self, other):
+            a, b = self.data(Qt.UserRole), other.data(Qt.UserRole)
+            if a is not None and b is not None:
+                return a < b
+            return super().__lt__(other)
 
     class ShtValidatorDialog(QDialog):
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setWindowTitle(tr("SHT Validator — check official format"))
-            self.resize(720, 560)
+            self.resize(860, 680)
+            self.setAcceptDrops(True)
+            self._results: list[dict] = []
+            self._load_errors: list[str] = []
             lay = QVBoxLayout(self)
             row = QHBoxLayout()
-            self.b_open = QPushButton("Open .sht…"); self.b_open.clicked.connect(self._open)
+            self.b_open = QPushButton(tr("Open chart…"))
+            self.b_open.clicked.connect(self._open)
             row.addWidget(self.b_open)
-            row.addWidget(QLabel("difficulty:"))
-            self.cb = QComboBox(); self.cb.addItems(["(auto/none)", "easy", "normal", "hard", "oni"])
+            row.addWidget(QLabel(tr("difficulty:")))
+            self.cb = QComboBox()
+            self.cb.addItems([tr("(auto/none)"), "easy", "normal", "hard", "oni"])
+            self.cb.currentIndexChanged.connect(self._recheck)
             row.addWidget(self.cb)
-            self.lbl = QLabel(""); row.addWidget(self.lbl, 1)
+            row.addWidget(QLabel(tr("show:")))
+            self.cb_sev = QComboBox()
+            self.cb_sev.addItems([tr("all"), tr("errors"), tr("errors + warnings")])
+            self.cb_sev.currentIndexChanged.connect(self._fill)
+            row.addWidget(self.cb_sev)
+            self.lbl = QLabel("")
+            row.addWidget(self.lbl, 1)
             lay.addLayout(row)
-            self.out = QPlainTextEdit(readOnly=True)
-            lay.addWidget(self.out, 1)
-            b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
+
+            self.cb_file = QComboBox()
+            self.cb_file.currentIndexChanged.connect(self._fill)
+            self.cb_file.setVisible(False)
+            lay.addWidget(self.cb_file)
+            self.lbl_verdict = QLabel(tr("Drop .sht / .bin / .tja files here, or press Open."))
+            self.lbl_verdict.setWordWrap(True)
+            lay.addWidget(self.lbl_verdict)
+            self.lbl_limit = QLabel("")
+            lay.addWidget(self.lbl_limit)
+
+            split = QSplitter(Qt.Vertical)
+            self.table = QTableWidget(0, 5)
+            self.table.setHorizontalHeaderLabels(
+                [tr("Severity"), tr("Measure"), tr("Time"), tr("Problem"), tr("Suggestion")])
+            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.table.verticalHeader().setVisible(False)
+            self.table.setWordWrap(True)
+            self.table.setSortingEnabled(True)
+            hh = self.table.horizontalHeader()
+            hh.setSectionResizeMode(3, QHeaderView.Stretch)
+            hh.setSectionResizeMode(4, QHeaderView.Stretch)
+            self.table.cellDoubleClicked.connect(self._jump)
+            self.table.itemSelectionChanged.connect(self._jump_selected)
+            split.addWidget(self.table)
+            self.view = ChartTimelineView()
+            self.view.measureClicked.connect(self._select_measure)
+            split.addWidget(self.view)
+            split.setStretchFactor(0, 3)
+            split.setStretchFactor(1, 2)
+            lay.addWidget(split, 1)
+            b_close = QPushButton(tr("Close"))
+            b_close.clicked.connect(self.accept)
             lay.addWidget(b_close)
             polish(self, primary=self.b_open)
 
+        # -------------------------------------------------- drag and drop
+        def dragEnterEvent(self, e):
+            if e.mimeData().hasUrls():
+                e.acceptProposedAction()
+
+        def dropEvent(self, e):
+            paths = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
+            if paths:
+                self.load_paths(paths)
+                e.acceptProposedAction()
+
+        # ----------------------------------------------------- loading
         def _open(self):
             from taiko2x6.app import appconfig                       # last-used-path memory
-            paths = appconfig.pick_open_many(self, "sht", "SHT file(s)",
-                                             "SHT (*.sht sht);;All (*)")
-            if not paths:
-                return
-            self.out.clear()
-            diff = self.cb.currentText()
-            diff = None if diff.startswith("(") else diff
-            worst = OK
+            paths = appconfig.pick_open_many(
+                self, "sht", tr("Chart file(s)"),
+                tr("Charts (*.sht sht *.bin *.tja);;All (*)"))
+            if paths:
+                self.load_paths(paths)
+
+        def _chosen_difficulty(self):
+            return None if self.cb.currentIndex() == 0 else self.cb.currentText()
+
+        def load_paths(self, paths):
+            """Check files (read-only; TJA / Gen3 are converted in memory)."""
+            self._results = []
+            self._load_errors = []
             for p in paths:
-                from pathlib import Path
-                data = Path(p).read_bytes()
-                # infer difficulty from the folder/file name if not chosen
-                d = diff
-                if d is None:
-                    nm = Path(p).parent.name + Path(p).name
-                    for suf, c in (("_e", "easy"), ("_n", "normal"), ("_h", "hard"), ("_m", "oni")):
-                        if suf in nm:
-                            d = c; break
-                issues = validate_sht(data, d)
-                v = verdict(issues)
-                self.out.appendPlainText(f"=== {Path(p).name}  ({Path(p).parent.name})  diff={d or '?'} ===")
-                self.out.appendPlainText("VERDICT: " + v)
-                for it in issues:
-                    self.out.appendPlainText("  " + str(it))
-                self.out.appendPlainText("")
+                try:
+                    for label, guess, data in charts_from_path(p):
+                        self._results.append({"label": label, "guess": guess,
+                                              "data": data})
+                except Exception as exc:
+                    self._load_errors.append(f"{p}: {exc}")
+            for r in self._results:
+                self._check(r)
+            self.cb_file.blockSignals(True)
+            self.cb_file.clear()
+            self.cb_file.addItems([r["label"] for r in self._results])
+            self.cb_file.blockSignals(False)
+            self.cb_file.setVisible(len(self._results) > 1)
+            self._fill()
+
+        def _check(self, r):
+            diff = self._chosen_difficulty() or r["guess"]
+            r["diff"] = diff
+            r["issues"] = validate_sht(r["data"], diff)
+            try:
+                r["model"] = tja2sht.parse_sht(r["data"])
+            except Exception:
+                r["model"] = None
+
+        def _recheck(self):
+            for r in self._results:
+                self._check(r)
+            self._fill()
+
+        # ------------------------------------------------------ display
+        def _current(self):
+            i = self.cb_file.currentIndex()
+            return self._results[i] if 0 <= i < len(self._results) else None
+
+        def _summary_label(self):
+            if not self._results:
+                return ""
+            worst = OK
+            for r in self._results:
+                v = verdict(r["issues"])
                 if "INVALID" in v:
                     worst = ERROR
-                elif "warnings" in v and worst != ERROR:
+                    break
+                if "warnings" in v:
                     worst = WARN
-            self.lbl.setText({OK: "✓ all valid", WARN: "⚠ warnings",
-                              ERROR: "✗ invalid"}.get(worst, ""))
+            return {OK: tr("✓ all valid"), WARN: tr("⚠ warnings"),
+                    ERROR: tr("✗ invalid")}[worst]
+
+        def _fill(self, *_):
+            r = self._current()
+            self.table.setSortingEnabled(False)
+            self.table.setRowCount(0)
+            self.lbl.setText(self._summary_label())
+            if r is None:
+                if self._load_errors:
+                    self.lbl_verdict.setText("\n".join(self._load_errors))
+                self.lbl_limit.setText("")
+                self.view.set_model(None)
+                self.table.setSortingEnabled(True)
+                return
+            self.lbl_verdict.setText(
+                tr("{f}   diff={d}   VERDICT: {v}").format(
+                    f=r["label"], d=r["diff"] or "?", v=verdict_text(r["issues"])))
+            info = note_limit_info(r["data"], r["diff"])
+            if info is None:
+                self.lbl_limit.setText(tr("Note limit: choose a difficulty to check it."))
+            else:
+                n, limit, route, branched = info
+                txt = tr("Note limit: {n} / {limit}").format(n=n, limit=limit)
+                if branched:
+                    txt += "  " + tr("(busiest route: {r})").format(
+                        r=lane_names(True)[route])
+                self.lbl_limit.setText(txt)
+            model = r["model"]
+            self.view.set_model(model)
+            keep = {0: {ERROR, WARN, INFO}, 1: {ERROR},
+                    2: {ERROR, WARN}}[self.cb_sev.currentIndex()]
+            marks: dict[int, str] = {}
+            rows = [it for it in r["issues"] if it.severity in keep]
+            self.table.setRowCount(len(rows))
+            for row, it in enumerate(rows):
+                meas = issue_measure(it)
+                if model is not None and meas is not None and not 0 <= meas < len(model["tracks"]):
+                    meas = None
+                if model is None:
+                    meas = None
+                if meas is not None and (meas not in marks
+                                         or _SEV_RANK[it.severity] < _SEV_RANK[marks[meas]]):
+                    marks[meas] = it.severity
+                sev = _SortItem(f"{_SEV_GLYPH.get(it.severity, '')} {it.severity}")
+                sev.setData(Qt.UserRole, _SEV_RANK.get(it.severity, 9))
+                if it.severity in SEV_COLOURS:
+                    sev.setForeground(QBrush(SEV_COLOURS[it.severity]))
+                m_item = _SortItem(str(meas + 1) if meas is not None else "—")
+                m_item.setData(Qt.UserRole, meas if meas is not None else -1)
+                m_item.setData(Qt.UserRole + 1, meas)
+                ms = model["tracks"][meas]["time"] if meas is not None else None
+                t_item = _SortItem(fmt_time(ms) if ms is not None else "—")
+                t_item.setData(Qt.UserRole, ms if ms is not None else -1.0)
+                cells = [sev, m_item, t_item,
+                         QTableWidgetItem(f"{it.rule}: {it.detail}"),
+                         QTableWidgetItem(suggestion_for(it))]
+                for c, item in enumerate(cells):
+                    self.table.setItem(row, c, item)
+            self.view.set_markers(marks)
+            self.table.setSortingEnabled(True)
+            self.table.sortByColumn(0, Qt.AscendingOrder)
+            self.table.resizeRowsToContents()
+
+        # ------------------------------------------------- navigation
+        def _row_measure(self, row):
+            it = self.table.item(row, 1)
+            return it.data(Qt.UserRole + 1) if it is not None else None
+
+        def _jump(self, row, _col=0):
+            m = self._row_measure(row)
+            if m is not None:
+                self.view.show_measure(m)
+
+        def _jump_selected(self):
+            rows = self.table.selectionModel().selectedRows()
+            if rows:
+                self._jump(rows[0].row())
+
+        def _select_measure(self, i):
+            """Clicking a measure selects the first issue that names it."""
+            for row in range(self.table.rowCount()):
+                if self._row_measure(row) == i:
+                    self.table.selectRow(row)
+                    return
 
 except ImportError:
     ShtValidatorDialog = None  # type: ignore

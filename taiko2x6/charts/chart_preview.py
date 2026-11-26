@@ -23,6 +23,12 @@ def _mmss(ms: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def parse_chart(data: bytes):
+    """Parsed model for the timeline view (read-only)."""
+    from taiko2x6.charts import tja2sht
+    return tja2sht.parse_sht(data)
+
+
 def summarize_sht(name: str, data: bytes) -> str:
     """Multi-line summary text; raises ValueError for unparsable data."""
     from taiko2x6.charts import tja2sht, sht_export
