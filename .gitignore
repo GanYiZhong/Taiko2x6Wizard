@@ -58,3 +58,6 @@ TEAGAME*
 Thumbs.db
 .idea/
 .vscode/
+
+# Written by the release workflow
+taiko2x6/_build_info.py

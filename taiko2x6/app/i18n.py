@@ -1418,3 +1418,27 @@ _IMGIMPORT_ZH = {
     'Replace': '取代',
 }
 ZH_TW.update(_IMGIMPORT_ZH)
+
+_ABOUT_ZH = {
+    'About Taiko2x6Wizard': '關於 Taiko2x6Wizard',
+    'About': '關於',
+    'Toolkit for Taiko no Tatsujin SYSTEM256 data.': '太鼓之達人 SYSTEM256 資料工具箱。',
+    'Version': '版本',
+    'License': '授權',
+    'Repository': '程式庫',
+    'Report an issue': '回報問題',
+    'Releases': '發行版本',
+    'Copy info': '複製資訊',
+    'Check for updates': '檢查更新',
+    'Check for updates...': '檢查更新...',
+    'Checking for updates...': '正在檢查更新...',
+    'Open release page': '開啟發行頁面',
+    'You are up to date.': '目前已是最新版本。',
+    'A new build is available: {what}': '有新版本可用：{what}',
+    'Latest release: {what}': '最新發行版本：{what}',
+    'This build cannot be compared with it.': '此版本無法與其比對。',
+    'Could not reach GitHub. Check your connection.': '無法連線到 GitHub，請檢查網路。',
+    'GitHub is limiting requests right now. Try again later.': 'GitHub 目前限制請求，請稍後再試。',
+    'Unexpected reply from GitHub.': 'GitHub 回應內容無法辨識。',
+}
+ZH_TW.update(_ABOUT_ZH)
