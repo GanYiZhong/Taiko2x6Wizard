@@ -925,6 +925,12 @@ try:
                 self.ck_new, self.cb_song))
             f_target.addRow(tr("new song id:"), self.ed_newid)
             f_target.addRow(tr("target / template (id):"), self.cb_song)
+            self.b_batch = QPushButton(tr("Batch add songs…"))
+            self.b_batch.setToolTip(tr(
+                "Add many songs at once: pick a folder of TJAs / Gen3 song folders, "
+                "untick what you do not want, and build them all as new songs."))
+            self.b_batch.clicked.connect(self._open_batch)
+            f_target.addRow(self.b_batch)
             lay.addWidget(g_target)
 
             # ---- Source ------------------------------------------------------
@@ -1043,6 +1049,17 @@ try:
 
         def _row(self, edit, btn):
             return UI.path_row(edit, btn)
+
+        def _open_batch(self):
+            from taiko2x6.songs import batch_add
+            dlg = batch_add.BatchAddDialog(self.archive, self)
+            dlg.exec()
+            built = dlg.new_archive
+            dlg.deleteLater()
+            if built:
+                # same hand-over as a single new song: the main window writes it
+                self.new_archive = built
+                self.accept()
 
         def _is_gen3(self):
             return self.cb_mode.currentIndex() == 1
