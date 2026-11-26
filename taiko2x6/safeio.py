@@ -26,6 +26,8 @@ CLI::
 from __future__ import annotations
 
 import gc
+import secrets
+from glob import escape as glob_escape
 import json
 import os
 import shutil
@@ -75,13 +77,28 @@ def _replace(src, dst, attempts: int = 8):
             time.sleep(0.25)
 
 
-def _write_temp(path: Path, data) -> Path:
-    """``data`` is a bytes-like object or a callable ``writer(fileobj)`` that
-    streams the content (so a multi-GB file never has to sit in memory)."""
+def _alloc_temp(path: Path) -> Path:
+    """Reserve a unique ``<name>.XXXX.tmp`` sibling (created empty)."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
                                suffix=".tmp")
+    os.close(fd)
+    return Path(tmp)
+
+
+def _plan_temp(path: Path) -> Path:
+    """Pick a unique temp name WITHOUT creating the file, so the journal can
+    record it before it exists on disk."""
+    while True:
+        tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+        if not tmp.exists():
+            return tmp
+
+
+def _fill_temp(tmp: Path, data) -> Path:
+    """Write ``data`` into the reserved temp file and fsync it. On error the
+    temp file is removed."""
     try:
-        with os.fdopen(fd, "wb") as f:
+        with open(tmp, "wb") as f:
             if callable(data):
                 data(f)
             else:
@@ -95,6 +112,12 @@ def _write_temp(path: Path, data) -> Path:
             pass
         raise
     return Path(tmp)
+
+
+def _write_temp(path: Path, data) -> Path:
+    """``data`` is a bytes-like object or a callable ``writer(fileobj)`` that
+    streams the content (so a multi-GB file never has to sit in memory)."""
+    return _fill_temp(_alloc_temp(path), data)
 
 
 # --------------------------------------------------------------------------- #
@@ -129,7 +152,18 @@ def make_backup(path) -> Path | None:
     while bak.exists():
         n += 1
         bak = path.with_name(path.name + f".bak.{n}")
-    shutil.copy2(str(path), str(bak))
+    # copy to a temp name first: a crash mid-copy must not leave a truncated
+    # "<file>.bak" that later passes for the known-good original
+    tmp = _alloc_temp(bak)
+    try:
+        shutil.copy2(str(path), str(tmp))
+        os.replace(str(tmp), str(bak))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return bak
 
 
@@ -176,13 +210,19 @@ def write_pair(files, backup: bool = True, log=None) -> list[Path]:
 
     entries = []
     try:
-        for p, data in files:
-            tmp = _write_temp(p, data)
+        # Pick every temp name and record the plan in the journal BEFORE any
+        # temp file exists, so a crash while the (large) temp files are being
+        # filled leaves a journal that names them and recover_pair can delete
+        # them; a crash before the journal exists leaves no temp at all.
+        for p, _data in files:
+            tmp = _plan_temp(p)
             old = p.with_name(p.name + ".txn-old")
             entries.append({"target": str(p), "tmp": str(tmp), "old": str(old),
                             "had_old": p.exists()})
         atomic_write(journal, json.dumps({"version": 1, "files": entries},
                                          indent=1).encode())
+        for e, (_p, data) in zip(entries, files):
+            _fill_temp(Path(e["tmp"]), data)
         for e in entries:
             if e["had_old"]:
                 _replace(e["target"], e["old"])
@@ -196,21 +236,32 @@ def write_pair(files, backup: bool = True, log=None) -> list[Path]:
             pass
         raise
 
-    # committed: drop the parked originals, then the journal
+    # committed: drop the parked originals, then the journal. If an original
+    # cannot be deleted right now (antivirus/indexer lock) the journal is KEPT:
+    # the next recover_pair sees a committed transaction and retries, instead
+    # of the parked file being orphaned for good.
+    clean = True
     for e in entries:
         try:
             os.unlink(e["old"])
+        except FileNotFoundError:
+            pass
+        except OSError:
+            clean = False
+    if clean:
+        try:
+            journal.unlink()
         except OSError:
             pass
-    try:
-        journal.unlink()
-    except OSError:
-        pass
     _fsync_dir(files[0][0].parent)
     return backups
 
 
 def _rollback_entries(entries):
+    # Pass 1 restores the originals, pass 2 deletes the temps. Temps are the
+    # "not committed yet" marker recover_pair looks at, so they must outlive
+    # every restore: a crash during rollback then re-runs the rollback instead
+    # of being mistaken for a finished commit.
     for e in entries:
         tgt, tmp, old = Path(e["target"]), Path(e["tmp"]), Path(e["old"])
         if old.exists():
@@ -222,8 +273,9 @@ def _rollback_entries(entries):
                 tgt.unlink()
             except OSError:
                 pass
+    for e in entries:
         try:
-            tmp.unlink()
+            Path(e["tmp"]).unlink()
         except OSError:
             pass
 
@@ -236,6 +288,14 @@ def recover_pair(journal, log=None) -> str | None:
     Otherwise the originals are put back ("rolled back"). Returns None when
     there is no journal."""
     journal = Path(journal)
+    # Debris of a crash before any journal existed: the journal's own temp
+    # (atomic_write) and a half-copied rolling backup (make_backup).
+    for pat in (glob_escape(journal.name) + ".*.tmp", "*.bak*.tmp"):
+        for stray in journal.parent.glob(pat):
+            try:
+                stray.unlink()
+            except OSError:
+                pass
     if not journal.exists():
         return None
     try:
@@ -251,8 +311,10 @@ def recover_pair(journal, log=None) -> str | None:
         for e in entries:
             try:
                 os.unlink(e["old"])
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError:
+                return "committed"       # keep the journal; retry next time
         state = "committed"
     else:
         _rollback_entries(entries)
@@ -301,11 +363,15 @@ class UndoJournal:
         self.block = block
         self.orig_size = os.path.getsize(self.target)
         self._saved: set[int] = set()
-        self._f = open(self.path, "xb")
-        self._f.write(_HDR.pack(_MAGIC, 1, self.orig_size))
-        self._f.flush()
-        os.fsync(self._f.fileno())
         self.bytes_saved = 0
+        self._f = open(self.path, "xb")
+        try:
+            self._f.write(_HDR.pack(_MAGIC, 1, self.orig_size))
+            self._f.flush()
+            os.fsync(self._f.fileno())
+        except BaseException:               # e.g. disk full: leave no stub behind
+            self.discard()
+            raise
 
     def save(self, f, offset: int, length: int):
         """Record the current contents of ``[offset, offset+length)`` of the
