@@ -168,7 +168,7 @@ class Editor(QDialog):
                 self.tbl.setItem(r, c, QTableWidgetItem(str(v)))
         self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         bl.addWidget(self.tbl)
-        lay.insertWidget(0, ToolBar(self._tools_for_bar(), tr("Filter by row or value...")))
+        lay.insertWidget(0, ToolBar(self._tools_for_bar(), tr("Filter by row or value…")))
         lay.addWidget(body, 1)
 
         # --- buttons ---

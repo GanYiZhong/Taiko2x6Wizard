@@ -223,7 +223,7 @@ class UpdateDialog(QDialog):
         self._urlopen = urlopen
         self.result: UpdateResult | None = None
         lay = QVBoxLayout(self)
-        self.lbl = QLabel(tr("Checking for updates..."))
+        self.lbl = QLabel(tr("Checking for updates…"))
         self.lbl.setWordWrap(True)
         self.lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl)

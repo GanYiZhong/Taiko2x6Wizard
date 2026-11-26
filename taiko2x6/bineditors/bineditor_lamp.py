@@ -263,7 +263,7 @@ class Editor(QDialog):
         self._tools = [TableTools(self.tbl_str, int_cols=(1,), int_range=u32),
                        TableTools(self.tbl_grp, int_range=u32),
                        TableTools(self.tbl_unit, int_range=u32)]
-        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by name or value...")))
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by name or value…")))
         self._build_buttons(lay)
 
     def _build_buttons(self, lay):

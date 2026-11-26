@@ -194,7 +194,7 @@ class Editor(QDialog):
             self.tbl.setItem(r, 1, QTableWidgetItem(slot.name))
         lay.addWidget(self.tbl, 1)
         self._tools = [TableTools(self.tbl, int_cols=(), max_len={1: SLOT_CHARS})]
-        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by number or name...")))
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by number or name…")))
 
         btns = QHBoxLayout()
         b_save = QPushButton(tr("Save"))

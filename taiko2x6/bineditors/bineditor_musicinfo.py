@@ -648,7 +648,7 @@ class Editor(QDialog):
             TableTools(self.tbl_grp, int_cols=(2, 3)),
         ]
         self._bar_slot.addWidget(ToolBar(
-            self._tools, tr("Filter by song id, string or any value...")))
+            self._tools, tr("Filter by song id, string or any value…")))
 
         # buttons
         btns = QHBoxLayout()

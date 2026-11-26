@@ -435,7 +435,7 @@ class Editor(QDialog):
 
         self._tools = [TableTools(t) for t in self._sec_tables]
         self._tools.append(TableTools(self.tbl_str, int_cols=()))
-        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by row or value...")))
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by row or value…")))
 
         # ---- buttons ----
         btns = QHBoxLayout()

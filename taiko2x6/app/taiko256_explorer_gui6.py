@@ -1207,7 +1207,7 @@ class MainWindow(QMainWindow):
         self.act_open_log.triggered.connect(jobs.open_log_folder)
         help_menu.addAction(self.act_open_log)
         help_menu.addSeparator()
-        self.act_update = QAction(tr("Check for updates..."), self)
+        self.act_update = QAction(tr("Check for updates…"), self)
         self.act_update.triggered.connect(self.open_update_check)
         help_menu.addAction(self.act_update)
         self.act_about = QAction(tr("About"), self)
