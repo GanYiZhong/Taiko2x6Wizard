@@ -429,6 +429,10 @@ try:
         QFileDialog, QLabel, QProgressBar, QMessageBox, QWidget,
     )
 
+    from taiko2x6.app import jobs
+    from taiko2x6.app.i18n import tr
+    import time as _time
+
     class _PackWorker(QThread):
         prog = Signal(int, int, str)
         done = Signal(object)
@@ -503,6 +507,7 @@ try:
                 QMessageBox.warning(self, "Pack to ISO", "Choose an output ISO path.")
                 return
             self.b_go.setEnabled(False)
+            self._t0 = _time.monotonic()
             self._worker = _PackWorker(self.ed_orig.text(), self.ed_data.text(),
                                        self.ed_list.text(), self.ed_out.text())
             self._worker.prog.connect(self._on_prog)
@@ -511,14 +516,20 @@ try:
 
         def _on_prog(self, done, total, msg):
             self.bar.setMaximum(total); self.bar.setValue(done)
-            self.lbl.setText(f"writing {msg}… {done/1e6:.0f}/{total/1e6:.0f} MB")
+            self.lbl.setText(
+                f"writing {msg}… {done/1e6:.0f}/{total/1e6:.0f} MB  "
+                + tr("Elapsed {t}").format(
+                    t=jobs.fmt_elapsed(_time.monotonic() - self._t0)))
 
         def _on_done(self, r):
             self.b_go.setEnabled(True)
             if isinstance(r, tuple) and r and r[0] == "ERROR":
                 QMessageBox.critical(self, "Pack failed", str(r[1]))
                 return
-            self.lbl.setText(f"done: {r['size']/1e6:.0f} MB, {r['total_sectors']} sectors")
+            self.lbl.setText(
+                f"done: {r['size']/1e6:.0f} MB, {r['total_sectors']} sectors  "
+                + tr("Elapsed {t}").format(
+                    t=jobs.fmt_elapsed(_time.monotonic() - self._t0)))
             QMessageBox.information(
                 self, "ISO built",
                 f"Wrote {r['out']}\n{r['size']/1e6:.1f} MB ({r['total_sectors']} sectors)\n"

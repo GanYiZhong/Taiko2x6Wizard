@@ -252,6 +252,9 @@ def verify(sources, out_path, log=print):
 # --------------------------------------------------------------------------- #
 try:
     from PySide6.QtCore import Qt, QThread, Signal, QObject
+    import time as _time
+    from taiko2x6.app import jobs
+    from taiko2x6.app.i18n import tr
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                                    QLabel, QPlainTextEdit, QFileDialog, QCheckBox,
                                    QTreeWidget, QTreeWidgetItem, QMessageBox,
@@ -445,6 +448,7 @@ class ApaMergeDialog(QDialog):
         self.btn_merge.setEnabled(False)
         self.bar.setVisible(True)
         self.bar.setValue(0)
+        self._t0 = _time.monotonic()
         # Hold refs: a worker whose QThread outlives the local scope gets
         # destroyed mid-run ("QThread: Destroyed while thread is running").
         self._thread = QThread(self)
@@ -461,7 +465,8 @@ class ApaMergeDialog(QDialog):
 
     def _on_progress(self, pct, text):
         self.bar.setValue(pct)
-        self.bar.setFormat("%s  (%%p%%)" % text)
+        self.bar.setFormat("%s  (%%p%%)  %s" % (text, tr("Elapsed {t}").format(
+            t=jobs.fmt_elapsed(_time.monotonic() - self._t0))))
 
     def _on_done(self, ok):
         self.bar.setVisible(False)
