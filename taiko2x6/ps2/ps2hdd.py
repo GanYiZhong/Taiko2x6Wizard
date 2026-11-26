@@ -222,18 +222,26 @@ class BlockDevice:
 
     # --- sector-level ---
     def read_sectors(self, lba, count):
-        out = bytearray()
-        for i in range(count):
-            s = lba + i
-            if self._ov is not None and s in self._ov:
-                out += self._ov[s]
+        if count <= 0:
+            return b""
+        self.f.seek(lba * SECTOR)
+        n = count * SECTOR
+        d = self.f.read(n)
+        if len(d) < n:
+            d = d + b"\x00" * (n - len(d))
+        ov = self._ov
+        if ov:
+            if len(ov) < count:
+                hits = [s for s in ov if lba <= s < lba + count]
             else:
-                self.f.seek(s * SECTOR)
-                d = self.f.read(SECTOR)
-                if len(d) < SECTOR:
-                    d = d + b"\x00" * (SECTOR - len(d))
-                out += d
-        return bytes(out)
+                hits = [s for s in range(lba, lba + count) if s in ov]
+            if hits:
+                d = bytearray(d)
+                for s in hits:
+                    o = (s - lba) * SECTOR
+                    d[o:o + SECTOR] = ov[s]
+                d = bytes(d)
+        return d
 
     def write_sectors(self, lba, data):
         assert len(data) % SECTOR == 0, "write must be sector-aligned"
@@ -273,6 +281,9 @@ class BlockDevice:
     def write_bytes(self, byte_off, data):
         """Read-modify-write so sub-sector writes preserve neighbours."""
         length = len(data)
+        if byte_off % SECTOR == 0 and length % SECTOR == 0:
+            self.write_sectors(byte_off // SECTOR, data)   # no RMW needed
+            return
         first = byte_off // SECTOR
         last = (byte_off + length - 1) // SECTOR
         nsec = last - first + 1
@@ -918,17 +929,20 @@ class Ps2Hdd:
         1KB descriptor) -- but in PFS the data[] extents are *separate* data
         zones, so we simply read them in order."""
         extents = self._walk_extents(part, scale, root_inode)
-        buf = bytearray()
         remaining = root_inode.size
+        parts = []
+        got = 0
         for (sub, zone, count) in extents:
-            nbytes = count * zone_size
             lba = self._zone_to_lba(part, scale, sub, zone)
-            nsec = nbytes // SECTOR
-            chunk = self.dev.read_sectors(lba, nsec)
-            buf += chunk
-            if len(buf) >= remaining:
+            chunk = self.dev.read_sectors(lba, (count * zone_size) // SECTOR)
+            parts.append(chunk)
+            got += len(chunk)
+            if got >= remaining:
                 break
-        return bytes(buf[:remaining]), extents
+        data = b"".join(parts)
+        if len(data) > remaining:
+            data = data[:remaining]
+        return data, extents
 
     # ---- directory parsing ----
     def _parse_dir(self, part, scale, dir_inode, zone_size):
@@ -1562,20 +1576,42 @@ class Ps2Hdd:
             self._update_root_inode(part, scale, root_bi, len(data))
         return len(data)
 
+    _WRITE_RUN_MAX = 8 * 1024 * 1024
+
     def _write_payload(self, part, scale, zs, extents, data, capacity):
-        """Write `data` (zero-padded to `capacity`) across `extents` in order."""
-        payload = data + b"\x00" * (capacity - len(data))
+        """Write `data` (zero-padded to `capacity`) across `extents` in order.
+
+        Physically adjacent extents are merged into runs of up to 8 MiB so each
+        run is one seek/write and one undo-journal save (one fsync).  Bytes
+        written are identical to the per-extent version."""
+        mv = memoryview(data)
+        dlen = len(data)
+        total = capacity if capacity > dlen else dlen
+        # (lba, nbytes) runs in payload order
+        runs = []
         pos = 0
         for (sub, zone, count) in extents:
             nbytes = count * zs
             lba = self._zone_to_lba(part, scale, sub, zone)
-            chunk = payload[pos:pos + nbytes]
-            if len(chunk) < nbytes:
-                chunk = chunk + b"\x00" * (nbytes - len(chunk))
-            self.dev.write_bytes(lba * SECTOR, chunk)
+            if (runs and runs[-1][0] + runs[-1][1] // SECTOR == lba
+                    and runs[-1][1] + nbytes <= self._WRITE_RUN_MAX):
+                runs[-1][1] += nbytes
+            else:
+                runs.append([lba, nbytes])
             pos += nbytes
-            if pos >= len(payload):
+            if pos >= total:
                 break
+        pos = 0
+        for lba, nbytes in runs:
+            end = pos + nbytes
+            if end <= dlen:
+                chunk = mv[pos:end]
+            else:
+                chunk = bytearray(nbytes)          # zero tail padding
+                if pos < dlen:
+                    chunk[:dlen - pos] = mv[pos:dlen]
+            self.dev.write_bytes(lba * SECTOR, chunk)
+            pos = end
 
     def _update_root_inode(self, part, scale, root_bi, new_size):
         """Update the SEGD root inode's size + timestamps + checksum and write
