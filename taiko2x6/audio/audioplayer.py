@@ -16,11 +16,14 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QSlider, QLabel, QStyle,
-    QComboBox,
+    QComboBox, QCheckBox,
 )
+
+from taiko2x6.app.i18n import tr
 
 
 def is_vag(data: bytes) -> bool:
@@ -80,13 +83,17 @@ class AudioPlayer(QWidget):
         style = self.style()
         row = QHBoxLayout()
         self.b_play = QPushButton(style.standardIcon(QStyle.SP_MediaPlay), "")
+        self.b_play.setToolTip(tr("Play / pause (Space)"))
         self.b_play.clicked.connect(self._toggle)
         self.b_stop = QPushButton(style.standardIcon(QStyle.SP_MediaStop), "")
+        self.b_stop.setToolTip(tr("Stop"))
         self.b_stop.clicked.connect(self.player.stop)
         self.slider = QSlider(Qt.Horizontal)
+        self.slider.setToolTip(tr("Seek (Left / Right arrow: 5 s)"))
         self.slider.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
         self.slider.sliderReleased.connect(self._seek_release)
         self.lbl = QLabel("0:00 / 0:00")
+        self.lbl.setMinimumWidth(self.lbl.fontMetrics().horizontalAdvance("00:00 / 00:00") + 6)
         row.addWidget(self.b_play)
         row.addWidget(self.b_stop)
         row.addWidget(self.slider, 1)
@@ -94,16 +101,24 @@ class AudioPlayer(QWidget):
         lay.addLayout(row)
 
         vol = QHBoxLayout()
-        vol.addWidget(QLabel("vol"))
+        vol.addWidget(QLabel(tr("Volume")))
         self.vol = QSlider(Qt.Horizontal)
         self.vol.setRange(0, 100)
         self.vol.setValue(90)
         self.vol.setFixedWidth(120)
         self.vol.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         vol.addWidget(self.vol)
-        self.b_wav = QPushButton("Export WAV…"); self.b_wav.clicked.connect(self._export_wav)
+        self.lbl_vol = QLabel("90%")
+        self.lbl_vol.setMinimumWidth(self.lbl_vol.fontMetrics().horizontalAdvance("100%") + 4)
+        self.vol.valueChanged.connect(lambda v: self.lbl_vol.setText(f"{v}%"))
+        vol.addWidget(self.lbl_vol)
+        self.chk_loop = QCheckBox(tr("Loop"))
+        self.chk_loop.setToolTip(tr("Repeat the sound when it ends"))
+        self.chk_loop.toggled.connect(self._set_loop)
+        vol.addWidget(self.chk_loop)
+        self.b_wav = QPushButton(tr("Export WAV…")); self.b_wav.clicked.connect(self._export_wav)
         self.b_wav.setEnabled(False)
-        self.b_vag = QPushButton("Export VAG…"); self.b_vag.clicked.connect(self._export_vag)
+        self.b_vag = QPushButton(tr("Export VAG…")); self.b_vag.clicked.connect(self._export_vag)
         self.b_vag.setEnabled(False)
         vol.addWidget(self.b_wav); vol.addWidget(self.b_vag)
         self.info = QLabel("")
@@ -112,6 +127,26 @@ class AudioPlayer(QWidget):
         lay.addLayout(vol)
         self._src_vag = None
         self._name = "audio"
+        self.setFocusPolicy(Qt.ClickFocus)
+        # Space toggles play/pause while focus is anywhere inside the player.
+        self._sc_space = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self._sc_space.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sc_space.activated.connect(self._toggle)
+
+    def keyPressEvent(self, ev):
+        if ev.key() in (Qt.Key_Left, Qt.Key_Right):
+            self.seek_relative(-5000 if ev.key() == Qt.Key_Left else 5000)
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+    def seek_relative(self, delta_ms: int):
+        dur = self.player.duration()
+        if dur > 0:
+            self.player.setPosition(max(0, min(dur, self.player.position() + delta_ms)))
+
+    def _set_loop(self, on: bool):
+        self.player.setLoops(QMediaPlayer.Infinite if on else 1)
 
     # -- loading --------------------------------------------------------------
     def load_pcm(self, pcm: np.ndarray, rate: int, channels: int = 2,
@@ -146,29 +181,31 @@ class AudioPlayer(QWidget):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         import shutil
         from taiko2x6.app import appconfig                           # last-used-path memory
-        dest = appconfig.pick_save(self, "wav_export", "Export WAV",
+        dest = appconfig.pick_save(self, "wav_export", tr("Export WAV"),
                                    self._name + ".wav", "WAV (*.wav)")
         if dest:
             try:
                 shutil.copyfile(self._tmp, dest)
             except Exception as exc:
-                QMessageBox.critical(self, "Export failed", str(exc))
+                QMessageBox.critical(self, tr("Export failed"), str(exc))
 
     def _export_vag(self):
         if not self._src_vag:
             return
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         from taiko2x6.app import appconfig
-        dest = appconfig.pick_save(self, "vag_export", "Export VAG",
+        dest = appconfig.pick_save(self, "vag_export", tr("Export VAG"),
                                    self._name + ".vag", "VAG (*.vag);;All (*)")
         if dest:
             try:
                 Path(dest).write_bytes(self._src_vag)
             except Exception as exc:
-                QMessageBox.critical(self, "Export failed", str(exc))
+                QMessageBox.critical(self, tr("Export failed"), str(exc))
 
     def stop(self):
         self.player.stop()
+        self.slider.setValue(0)
+        self.lbl.setText(f"0:00 / {_fmt_time(self.player.duration())}")
 
     # -- transport ------------------------------------------------------------
     def _toggle(self):
@@ -188,6 +225,7 @@ class AudioPlayer(QWidget):
 
     def _on_dur(self, ms):
         self.slider.setRange(0, ms)
+        self.lbl.setText(f"{_fmt_time(self.player.position())} / {_fmt_time(ms)}")
 
     def _seek_release(self):
         self._seeking = False
@@ -235,13 +273,13 @@ class SoundBankDialog(QDialog):
 
     def __init__(self, hd: bytes, bd: bytes, title: str = "", parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Sound Bank — {title}" if title else "Sound Bank")
+        self.setWindowTitle(tr("Sound Bank — {t}").format(t=title) if title else tr("Sound Bank"))
         self.resize(460, 420)
         from taiko2x6.audio import hdbd
         self.sounds = hdbd.list_bank(hd, bd)      # [{index,name,sample_rate,seconds,pcm}]
 
         lay = QVBoxLayout(self)
-        lay.addWidget(_QLabel(f"{len(self.sounds)} waveforms — double-click or press ▶ to play"))
+        lay.addWidget(_QLabel(tr("{n} waveforms — double-click or press ▶ to play").format(n=len(self.sounds))))
         self.lst = QListWidget()
         for s in self.sounds:
             nm = s.get("name") or f"wave {s['index']:03d}"

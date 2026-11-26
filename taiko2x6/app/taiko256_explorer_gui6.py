@@ -218,8 +218,9 @@ class PreviewPane(QTabWidget):
         self.hex.setFont(theme.mono_font())
         self.text = QPlainTextEdit(readOnly=True)
         self.text.setFont(theme.mono_font())
-        self.image_label = QLabel(tr("(no image)"), alignment=Qt.AlignCenter)
-        self.image_label.setMinimumSize(QSize(64, 64))
+        from taiko2x6.graphics import imageview
+        self.image_view = imageview.ImageViewer()
+        self.image_view.set_message(tr("(no image)"))
 
         from taiko2x6.audio import audioplayer
         self.audio = audioplayer.AudioPlayer()
@@ -233,8 +234,16 @@ class PreviewPane(QTabWidget):
         self.addTab(self.info, tr("Info"))
         self.addTab(self.hex, tr("Hex"))
         self.addTab(self.text, tr("Text"))
-        self.addTab(self.image_label, tr("Image"))
+        self.addTab(self.image_view, tr("Image"))
         self.addTab(self._audio_holder, tr("Audio"))
+        # Space = play/pause while the Audio tab is showing (e.g. tab bar focused)
+        self._sc_space = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self._sc_space.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sc_space.activated.connect(self._space_pressed)
+
+    def _space_pressed(self):
+        if self.currentWidget() is self._audio_holder:
+            self.audio._toggle()
 
     def show_file(self, name: str, group_name: str, entry: dict, data: bytes,
                   modified: bool):
@@ -258,27 +267,43 @@ class PreviewPane(QTabWidget):
                 continue
         self.text.setPlainText(txt if txt is not None else "(not decodable as UTF-8 / Shift-JIS)")
 
-        # image tab — decode TIM2 (.nut), else fall back to Qt's loaders
+        # chart summary (read-only parse of .sht files)
+        from taiko2x6.charts import chart_preview
+        if chart_preview.is_chart_name(name):
+            try:
+                info += "\n" + chart_preview.summarize_sht(name, data) + "\n"
+            except Exception as exc:
+                info += "\n" + tr("(chart not readable: {e})").format(e=exc) + "\n"
+
+        # image tab: decode TIM2 (.nut), else fall back to Qt's loaders.
+        # The viewer zooms/pans, so the full-size pixmap is kept.
         pix = None
+        fmt = ""
         if tim2.is_tim2(data):
             try:
                 info += "\n" + tim2.tim2_summary(data) + "\n"
                 pix = _tim2_to_pixmap(data)
+                fmt = "TIM2"
             except Exception as exc:
-                self.image_label.setText(f"(TIM2 decode failed: {exc})")
-        if pix is None and not tim2.is_tim2(data):
+                self.image_view.set_message(tr("(TIM2 decode failed: {e})").format(e=exc))
+        else:
             qimg = QImage.fromData(data)
             if not qimg.isNull():
                 pix = QPixmap.fromImage(qimg)
+                from PySide6.QtCore import QBuffer, QByteArray
+                from PySide6.QtGui import QImageReader
+                ba = QByteArray(data)          # keep ba/buf/reader alive together
+                buf = QBuffer(ba)
+                buf.open(QBuffer.ReadOnly)
+                reader = QImageReader(buf)
+                fmt = bytes(reader.format()).decode("ascii", "ignore").upper()
+                del reader
+                buf.close()
+            else:
+                self.image_view.set_message(tr("(not a recognized image format)"))
         if pix is not None:
-            # scale down only oversized images, keep small ones crisp
-            if pix.width() > 768 or pix.height() > 768:
-                pix = pix.scaled(768, 768, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.image_label.setPixmap(pix)
-            self.image_label.setText("")
-        elif not tim2.is_tim2(data):
-            self.image_label.setPixmap(QPixmap())
-            self.image_label.setText("(not a recognized image format)")
+            self.image_view.set_pixmap(
+                pix, tr("{w} x {h} px  {fmt}").format(w=pix.width(), h=pix.height(), fmt=fmt))
 
         # audio tab — decode VAG streams (file 'vag' / interleaved-VAG header).
         # Decoding a whole song is slow, so it runs on a worker thread; the UI
@@ -289,8 +314,8 @@ class PreviewPane(QTabWidget):
             self.audio.stop()
             gen = self._vag_gen
             nm = group_name.split(".")[-1] or name
-            self._audio_msg.setText(f"VAG audio — {name}  (decoding…)")
-            info += "\nVAG stream — decoding for the Audio tab…\n"
+            self._audio_msg.setText(tr("VAG audio — {n}  (decoding…)").format(n=name))
+            info += "\n" + tr("VAG stream — decoding for the Audio tab…") + "\n"
             self.setCurrentWidget(self._audio_holder)
             log.info("preview VAG %s/%s (%d bytes) — decoding on worker",
                      group_name, name, len(data))
@@ -303,7 +328,7 @@ class PreviewPane(QTabWidget):
             w.start()
         else:
             self.audio.stop()
-            self._audio_msg.setText("(no audio for this file)")
+            self._audio_msg.setText(tr("(no audio for this file)"))
 
         self.info.setPlainText(info)
 
@@ -315,14 +340,14 @@ class PreviewPane(QTabWidget):
             return
         if "error" in r:
             self.audio.stop()
-            self._audio_msg.setText(f"(VAG decode failed: {r['error']})")
+            self._audio_msg.setText(tr("(VAG decode failed: {e})").format(e=r["error"]))
             return
         pcm, rate, ch = r["pcm"], r["rate"], r["ch"]
         self.audio._src_vag = src           # enable Export VAG for this stream
         self.audio.load_pcm(
             pcm, rate, ch, autoplay=False, name=nm,
             info=f"VAG · {rate} Hz · {ch}ch · {pcm.shape[0] / rate:.1f}s")
-        self._audio_msg.setText(f"VAG audio — {name}  (press ▶ to play)")
+        self._audio_msg.setText(tr("VAG audio — {n}  (press ▶ to play, Space toggles)").format(n=name))
 
 
 def _tim2_to_pixmap(data: bytes) -> QPixmap:
