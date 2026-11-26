@@ -591,6 +591,12 @@ class OmnimixDialog(QDialog):
                               "label": label or Path(p).stem})
         self._refresh_sources()
 
+    def add_source_iso(self, path, label=""):
+        """Add a game ISO as a source without asking (used by drag and drop)."""
+        self._sources.append({"kind": "iso", "iso": str(path),
+                              "label": label or Path(path).stem})
+        self._refresh_sources()
+
     def _add_folder(self):
         d = QFileDialog.getExistingDirectory(self, tr("Source folder (DATA.000 + list.bin)"))
         if not d:
