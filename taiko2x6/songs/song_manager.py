@@ -30,6 +30,7 @@ Run the self-test:
 from __future__ import annotations
 
 import os
+import re
 import struct
 import sys
 
@@ -38,11 +39,17 @@ from taiko2x6.bineditors import bineditor_musicinfo as MI
 from taiko2x6.bineditors import bineditor_tuning as TU
 from taiko2x6.bineditors import bineditor_streaminfo as SI
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QByteArray
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QHeaderView, QMessageBox, QLineEdit, QAbstractItemView,
+    QComboBox, QCheckBox, QSpinBox, QStyledItemDelegate, QInputDialog,
+    QDialogButtonBox,
 )
+
+from taiko2x6.app import appconfig
+from taiko2x6.app.i18n import tr
 
 
 # --------------------------------------------------------------------------- #
@@ -59,11 +66,17 @@ SCORE_COL = 7             # sec0[k][7] == base score (== col17 == col19)
 SCORE3_COL = 18           # base + 3000
 SCORE5_COL = 20           # base + 5000
 
-COLS = ["idx", "id", "genre", "easy*", "normal*", "hard*", "oni*",
-        "score", "score+3k", "score+5k", "stream"]
-COL_IDX, COL_ID, COL_GENRE = 0, 1, 2
-COL_EASY, COL_NORMAL, COL_HARD, COL_ONI = 3, 4, 5, 6
-COL_SCORE, COL_SCORE3, COL_SCORE5, COL_STREAM = 7, 8, 9, 10
+COLS = ["idx", "id", "title", "genre", "easy*", "normal*", "hard*", "oni*",
+        "score", "score3k", "score5k", "stream"]
+COL_IDX, COL_ID, COL_TITLE, COL_GENRE = 0, 1, 2, 3
+COL_EASY, COL_NORMAL, COL_HARD, COL_ONI = 4, 5, 6, 7
+COL_SCORE, COL_SCORE3, COL_SCORE5, COL_STREAM = 8, 9, 10, 11
+
+
+def _headers() -> list:
+    return [tr("#"), tr("id"), tr("title"), tr("genre"), tr("easy stars"),
+            tr("normal stars"), tr("hard stars"), tr("oni stars"), tr("score"),
+            tr("score +3k"), tr("score +5k"), tr("stream")]
 
 
 # --------------------------------------------------------------------------- #
@@ -548,7 +561,7 @@ class _Song:
     # new song lives exclusively in ``_template_k``, and the new song's stable
     # identity (its rebuild token) lives in ``_token``.
     __slots__ = ("k", "id", "genre", "stars", "score", "score3", "score5",
-                 "stream", "stream_rec", "_template_k", "_is_new", "_token")
+                 "stream", "stream_rec", "_template_k", "_is_new", "_token", "title")
 
     def __init__(self, k, sid, genre, stars, score, score3, score5,
                  stream, stream_rec):
@@ -564,11 +577,149 @@ class _Song:
         self._template_k = None
         self._is_new = False
         self._token = None              # rebuild token ("+N") for new songs
+        self.title = ""                 # display title (musicinfo pool), read-only
 
 
 # --------------------------------------------------------------------------- #
 # the dialog
 # --------------------------------------------------------------------------- #
+# musicinfo genre folder -> display name (the game's own folder names, like the
+# Omnimix summary). 7 and 9..15 are folder-header rows, never a song genre.
+GENRE_NAMES = {0: "J-POP", 1: "アニメ", 2: "バラエティ", 3: "クラシック",
+               4: "ナムコオリジナル", 5: "どうよう", 6: "ゲームミュージック",
+               8: "C-POP"}
+STAR_MIN, STAR_MAX = 1, 10
+SORT_ROLE = Qt.UserRole + 1          # value the sort compares (int or str)
+GENRE_ROLE = Qt.UserRole + 2         # the genre number behind a genre cell
+_CHANGED_BG = QColor(255, 226, 140)
+_NEW_BG = QColor(200, 235, 200)
+_INK = QColor(0, 0, 0)
+_PREF_SECTION = "song_manager"
+
+
+def genre_name(g: int) -> str:
+    """Display name of a musicinfo genre number."""
+    return GENRE_NAMES.get(g) or tr("genre {g}").format(g=g)
+
+
+def parse_genre(text) -> int:
+    """A genre from a number, a folder name or 'genre N'. ValueError if neither."""
+    s = str(text).strip()
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    low = s.lower()
+    for g, name in GENRE_NAMES.items():
+        if low == name.lower():
+            return g
+    m = re.fullmatch(r"(?:genre|類別)\s*(-?\d+)", low)
+    if m:
+        return int(m.group(1))
+    raise ValueError(tr("Unknown genre: {v}").format(v=s))
+
+
+def parse_stars(text) -> int:
+    """A star rating 1..10. ValueError otherwise."""
+    try:
+        v = int(str(text).strip())
+    except ValueError:
+        raise ValueError(tr("Stars must be a whole number from 1 to 10."))
+    if not STAR_MIN <= v <= STAR_MAX:
+        raise ValueError(tr("Stars must be a whole number from 1 to 10."))
+    return v
+
+
+def _decode_title(raw: bytes) -> str:
+    for enc in ("utf-8", "cp932"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin1")
+
+
+class _Cell(QTableWidgetItem):
+    """A cell that sorts by SORT_ROLE (numbers as numbers, text case-blind)."""
+
+    def __lt__(self, other):
+        a, b = self.data(SORT_ROLE), other.data(SORT_ROLE)
+        if a is not None and b is not None:
+            try:
+                return a < b
+            except TypeError:
+                pass
+        return super().__lt__(other)
+
+
+class _GenreDelegate(QStyledItemDelegate):
+    """Genre cells edit through a drop-down of the named genre folders."""
+
+    def createEditor(self, parent, option, index):
+        box = QComboBox(parent)
+        for g, name in GENRE_NAMES.items():
+            box.addItem(name, g)
+        cur = index.data(GENRE_ROLE)
+        if isinstance(cur, int) and cur not in GENRE_NAMES:
+            box.addItem(genre_name(cur), cur)
+        return box
+
+    def setEditorData(self, editor, index):
+        i = editor.findData(index.data(GENRE_ROLE))
+        if i >= 0:
+            editor.setCurrentIndex(i)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, str(editor.currentData()), Qt.EditRole)
+
+
+class _StarDelegate(QStyledItemDelegate):
+    """Star cells edit through a 1..10 spin box."""
+
+    def createEditor(self, parent, option, index):
+        box = QSpinBox(parent)
+        box.setRange(STAR_MIN, STAR_MAX)
+        return box
+
+    def setEditorData(self, editor, index):
+        try:
+            editor.setValue(int(index.data(Qt.EditRole)))
+        except (TypeError, ValueError):
+            pass
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, str(editor.value()), Qt.EditRole)
+
+
+class _StarsDialog(QDialog):
+    """Pick which difficulties to set and to what, for the selected songs."""
+
+    def __init__(self, parent, n: int):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Set stars"))
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(tr("Set the stars of {n} selected songs. Tick the "
+                                "difficulties to change.").format(n=n)))
+        self._rows = []
+        for nm in (tr("Easy"), tr("Normal"), tr("Hard"), tr("Oni")):
+            row = QHBoxLayout()
+            cb = QCheckBox(nm)
+            sp = QSpinBox()
+            sp.setRange(STAR_MIN, STAR_MAX)
+            sp.setValue(5)
+            row.addWidget(cb, 1)
+            row.addWidget(sp)
+            lay.addLayout(row)
+            self._rows.append((cb, sp))
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def values(self) -> dict:
+        return {i: sp.value() for i, (cb, sp) in enumerate(self._rows) if cb.isChecked()}
+
+
 class SongManager(QDialog):
     """Cross-bin song manager.
 
@@ -579,8 +730,10 @@ class SongManager(QDialog):
 
     def __init__(self, mi_bytes: bytes, tu_bytes: bytes, si_bytes: bytes, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Taiko Song Manager (cross-bin)")
-        self.resize(1120, 700)
+        self.setWindowTitle(tr("Taiko Song Manager (cross-bin)"))
+        self.setSizeGripEnabled(True)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.resize(1180, 720)
 
         self._mi_in = bytes(mi_bytes)
         self._tu_in = bytes(tu_bytes)
@@ -608,9 +761,33 @@ class SongManager(QDialog):
                        s.score5, s.stream, s.stream_rec)
             for s in self._songs
         }
+        # T14 value edits are not mapped back (see _serialize_*), so those
+        # columns are read-only there instead of silently doing nothing.
+        self._t14 = getattr(self.mi, "variant", "") == "t14"
+        self._busy = False
+        self._uid_songs = {}      # row key -> _Song (rows move when sorted)
+        self._uid_of = {}         # id(_Song) -> row key
+        self._next_uid = 0
+        self._sort_col, self._sort_order = COL_IDX, Qt.AscendingOrder
         self._build_ui()
 
     # -- assemble per-song rows from the three models ----------------------- #
+    def _title_of(self, k, sid) -> str:
+        """The song's display title from the musicinfo pool ('' if unreadable)."""
+        try:
+            if getattr(self.mi, "variant", "") == "t14":
+                k = _mi_row_by_id(self.mi, sid)
+            if k is None or not 0 <= k < len(self.mi.sec0):
+                return ""
+            off = self.mi.sec0[k][1]
+            pool = self.mi.pool
+            if not 0 <= off < len(pool):
+                return ""
+            e = pool.find(b"\x00", off)
+            return _decode_title(bytes(pool[off:(e if e >= 0 else len(pool))]))
+        except Exception:
+            return ""
+
     def _assemble(self):
         ids = _music_ids_from_tuning(self.tu)
         # stream lookup by name == music_<id>
@@ -649,6 +826,7 @@ class SongManager(QDialog):
                 stream=srec.name if srec else "",
                 stream_rec=srec,
             ))
+            songs[-1].title = self._title_of(k, sid)
         return songs
 
     # -- ui ----------------------------------------------------------------- #
@@ -656,121 +834,401 @@ class SongManager(QDialog):
         lay = QVBoxLayout(self)
 
         info = QLabel(
-            f"{len(self._songs)} songs · musicinfo sec0={len(self.mi.sec0)} · "
-            f"tuning blocks={len(self.tu.blocks)} · streaminfo records={self.si.count}"
+            tr("{n} songs · musicinfo sec0={a} · tuning blocks={b} · "
+               "streaminfo records={c}").format(
+                n=len(self._songs), a=len(self.mi.sec0),
+                b=len(self.tu.blocks), c=self.si.count)
         )
         info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")
         lay.addWidget(info)
 
         note = QLabel(
-            "Add duplicates only the DATABASE entry (musicinfo + tuning + "
-            "streaminfo). Chart (fumen) / audio / textures are separate and are "
-            "NOT created here."
+            tr("Add duplicates only the DATABASE entry (musicinfo + tuning + "
+               "streaminfo). Chart (fumen) / audio / textures are separate and "
+               "are NOT created here.")
         )
         note.setWordWrap(True)
         note.setStyleSheet("color:#c98;")
         lay.addWidget(note)
+        if self._t14:
+            n14 = QLabel(tr("This game version only supports adding and removing "
+                            "songs here; genre, stars and scores of existing "
+                            "songs are read-only."))
+            n14.setWordWrap(True)
+            lay.addWidget(n14)
 
-        # filter box
+        # search / filters
         top = QHBoxLayout()
-        top.addWidget(QLabel("filter id:"))
+        top.addWidget(QLabel(tr("Search:")))
         self.ed_filter = QLineEdit()
-        self.ed_filter.setPlaceholderText("type a song id…")
+        self.ed_filter.setPlaceholderText(tr("id, title, stream or genre (Ctrl+F, Esc to clear)"))
+        self.ed_filter.setClearButtonEnabled(True)
         self.ed_filter.textChanged.connect(self._apply_filter)
         top.addWidget(self.ed_filter, 1)
+        self.cb_genre = QComboBox()
+        self.cb_genre.addItem(tr("All genres"), None)
+        for g, name in GENRE_NAMES.items():
+            self.cb_genre.addItem(name, g)
+        self.cb_genre.currentIndexChanged.connect(self._apply_filter)
+        top.addWidget(self.cb_genre)
+        self.chk_changed = QCheckBox(tr("Edited only"))
+        self.chk_changed.toggled.connect(self._apply_filter)
+        top.addWidget(self.chk_changed)
+        self.lbl_shown = QLabel("")
+        top.addWidget(self.lbl_shown)
         lay.addLayout(top)
 
-        self.tbl = QTableWidget(len(self._songs), len(COLS))
-        self.tbl.setHorizontalHeaderLabels(COLS)
+        self.tbl = QTableWidget(0, len(COLS))
+        self.tbl.setHorizontalHeaderLabels(_headers())
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tbl.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked
+            | QAbstractItemView.EditKeyPressed
         )
+        self.tbl.setSortingEnabled(False)        # sorted on header click only
+        self.tbl.setItemDelegateForColumn(COL_GENRE, _GenreDelegate(self.tbl))
+        for c in (COL_EASY, COL_NORMAL, COL_HARD, COL_ONI):
+            self.tbl.setItemDelegateForColumn(c, _StarDelegate(self.tbl))
+        self.tbl.setRowCount(len(self._songs))
+        self._busy = True
         for r, song in enumerate(self._songs):
             self._fill_row(r, song)
-        self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.tbl.horizontalHeader().setSectionResizeMode(COL_STREAM, QHeaderView.Stretch)
+        self._busy = False
+        hdr = self.tbl.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.Interactive)
+        hdr.setStretchLastSection(True)
+        hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
+        hdr.setSortIndicator(COL_IDX, Qt.AscendingOrder)
+        self.tbl.resizeColumnsToContents()
+        self.tbl.setColumnWidth(COL_TITLE, max(self.tbl.columnWidth(COL_TITLE), 180))
+        hdr.sectionClicked.connect(self._on_header_clicked)
+        self.tbl.itemChanged.connect(self._on_item_changed)
+        self.tbl.itemSelectionChanged.connect(self._update_buttons)
         lay.addWidget(self.tbl, 1)
 
+        self.lbl_status = QLabel("")
+        self.lbl_status.setWordWrap(True)
+        lay.addWidget(self.lbl_status)
+        self.lbl_changes = QLabel("")
+        lay.addWidget(self.lbl_changes)
+
+        bulk = QHBoxLayout()
+        self.b_bulk_genre = QPushButton(tr("Set genre of selected…"))
+        self.b_bulk_genre.clicked.connect(self._on_bulk_genre)
+        self.b_bulk_stars = QPushButton(tr("Set stars of selected…"))
+        self.b_bulk_stars.clicked.connect(self._on_bulk_stars)
+        self.b_revert_sel = QPushButton(tr("Revert selected"))
+        self.b_revert_sel.setToolTip(tr("Put the selected songs back to the values they were opened with."))
+        self.b_revert_sel.clicked.connect(self.revert_selected)
+        self.b_revert_all = QPushButton(tr("Revert all edits"))
+        self.b_revert_all.clicked.connect(self._on_revert_all)
+        for b in (self.b_bulk_genre, self.b_bulk_stars, self.b_revert_sel, self.b_revert_all):
+            bulk.addWidget(b)
+        bulk.addStretch(1)
+        lay.addLayout(bulk)
+
         btns = QHBoxLayout()
-        b_add = QPushButton("Add (duplicate selected)")
-        b_add.setToolTip("Duplicate the selected song's DATABASE entry only "
-                         "(no chart/audio/textures).")
+        b_add = QPushButton(tr("Add (duplicate selected)"))
+        b_add.setToolTip(tr("Duplicate the selected song's DATABASE entry only "
+                            "(no chart/audio/textures)."))
         b_add.clicked.connect(self._on_add)
-        b_rem = QPushButton("Remove selected")
+        b_rem = QPushButton(tr("Remove selected"))
         b_rem.clicked.connect(self._on_remove)
         btns.addWidget(b_add)
         btns.addWidget(b_rem)
         btns.addStretch(1)
-        b_save = QPushButton("Save")
+        b_save = QPushButton(tr("Save"))
         b_save.clicked.connect(self._on_save)
-        b_cancel = QPushButton("Cancel")
+        b_cancel = QPushButton(tr("Cancel"))
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_save)
         btns.addWidget(b_cancel)
         lay.addLayout(btns)
 
-    def _fill_row(self, r, song: _Song):
-        def item(text, editable=True):
-            it = QTableWidgetItem(str(text))
-            if not editable:
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-            return it
+        QShortcut(QKeySequence.Find, self, activated=self._focus_search)
+        QShortcut(QKeySequence(Qt.Key_Escape), self.ed_filter,
+                  activated=self._escape_in_search, context=Qt.WidgetShortcut)
+        self.setTabOrder(self.ed_filter, self.cb_genre)
+        self.setTabOrder(self.cb_genre, self.tbl)
+        self._restore_prefs()
+        self._apply_filter()
+        self._update_buttons()
+        self._update_summary()
 
-        idx_text = "+" if (getattr(song, "_is_new", False) or song.k is None) else song.k
-        self.tbl.setItem(r, COL_IDX, item(idx_text, editable=False))
-        self.tbl.setItem(r, COL_ID, item(song.id))
-        self.tbl.setItem(r, COL_GENRE, item(song.genre))
-        self.tbl.setItem(r, COL_EASY, item(song.stars[0]))
-        self.tbl.setItem(r, COL_NORMAL, item(song.stars[1]))
-        self.tbl.setItem(r, COL_HARD, item(song.stars[2]))
-        self.tbl.setItem(r, COL_ONI, item(song.stars[3]))
-        self.tbl.setItem(r, COL_SCORE, item(song.score))
-        self.tbl.setItem(r, COL_SCORE3, item(song.score3))
-        self.tbl.setItem(r, COL_SCORE5, item(song.score5))
-        self.tbl.setItem(r, COL_STREAM, item(song.stream))
+    def _focus_search(self):
+        self.ed_filter.setFocus()
+        self.ed_filter.selectAll()
 
-    def _apply_filter(self, text):
-        text = text.strip().lower()
+    def _escape_in_search(self):
+        if self.ed_filter.text():
+            self.ed_filter.clear()
+        else:
+            self.tbl.setFocus()
+
+    # -- rows --------------------------------------------------------------- #
+    def _uid_for(self, song) -> int:
+        uid = self._uid_of.get(id(song))
+        if uid is None:
+            uid = self._next_uid
+            self._next_uid += 1
+            self._uid_of[id(song)] = uid
+            self._uid_songs[uid] = song
+        return uid
+
+    def _song_for_row(self, r):
+        it = self.tbl.item(r, COL_IDX)
+        if it is None:
+            return None
+        return self._uid_songs.get(it.data(Qt.UserRole))
+
+    def _row_of(self, song):
+        uid = self._uid_of.get(id(song))
         for r in range(self.tbl.rowCount()):
-            it = self.tbl.item(r, COL_ID)
-            hay = it.text().lower() if it else ""
-            self.tbl.setRowHidden(r, bool(text) and text not in hay)
+            it = self.tbl.item(r, COL_IDX)
+            if it is not None and it.data(Qt.UserRole) == uid:
+                return r
+        return None
+
+    def _is_new(self, song) -> bool:
+        return bool(getattr(song, "_is_new", False)) or song.k is None
+
+    def _cell_editable(self, song, col) -> bool:
+        if col in (COL_IDX, COL_TITLE):
+            return False
+        new = self._is_new(song)
+        if col == COL_ID:
+            return new
+        if col == COL_STREAM:
+            return True
+        if self._t14:
+            return new and col in (COL_EASY, COL_NORMAL, COL_HARD, COL_ONI)
+        return True
+
+    def _cell_value(self, song, col):
+        """(display text, sort key) of one cell."""
+        if col == COL_IDX:
+            return ("+", 10 ** 9) if self._is_new(song) else (str(song.k), song.k)
+        if col == COL_ID:
+            return song.id, song.id.lower()
+        if col == COL_TITLE:
+            t = getattr(song, "title", "") or ""
+            return t, t.lower()
+        if col == COL_GENRE:
+            return genre_name(song.genre), song.genre
+        if COL_EASY <= col <= COL_ONI:
+            v = song.stars[col - COL_EASY]
+            return str(v), v
+        if col == COL_SCORE:
+            return str(song.score), song.score
+        if col == COL_SCORE3:
+            return str(song.score3), song.score3
+        if col == COL_SCORE5:
+            return str(song.score5), song.score5
+        return song.stream, song.stream.lower()
+
+    def _fill_row(self, r, song: _Song):
+        uid = self._uid_for(song)
+        for col in range(len(COLS)):
+            it = _Cell()
+            if not self._cell_editable(song, col):
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            if col == COL_IDX:
+                it.setData(Qt.UserRole, uid)
+            self.tbl.setItem(r, col, it)
+        self._refresh_row(r, song)
+
+    def _refresh_row(self, r, song):
+        """Rewrite one row's cells in place from ``song`` and mark edits."""
+        was = self._busy
+        self._busy = True
+        try:
+            changed = self._changed_cols(song)
+            new = self._is_new(song)
+            for col in range(len(COLS)):
+                it = self.tbl.item(r, col)
+                if it is None:
+                    continue
+                text, key = self._cell_value(song, col)
+                it.setText(text)
+                it.setData(SORT_ROLE, key)
+                if col == COL_GENRE:
+                    it.setData(GENRE_ROLE, song.genre)
+                if new:
+                    it.setData(Qt.BackgroundRole, _NEW_BG)
+                    it.setData(Qt.ForegroundRole, _INK)
+                elif col in changed:
+                    it.setData(Qt.BackgroundRole, _CHANGED_BG)
+                    it.setData(Qt.ForegroundRole, _INK)
+                else:
+                    it.setData(Qt.BackgroundRole, None)
+                    it.setData(Qt.ForegroundRole, None)
+        finally:
+            self._busy = was
+
+    def _changed_cols(self, song) -> set:
+        """Columns whose value differs from what the song was opened with."""
+        if self._is_new(song):
+            return set()
+        o = self._orig_songs.get(song.k)
+        if o is None:
+            return set()
+        out = set()
+        if song.genre != o.genre:
+            out.add(COL_GENRE)
+        for i in range(4):
+            if song.stars[i] != o.stars[i]:
+                out.add(COL_EASY + i)
+        if song.score != o.score:
+            out.add(COL_SCORE)
+        if song.score3 != o.score3:
+            out.add(COL_SCORE3)
+        if song.score5 != o.score5:
+            out.add(COL_SCORE5)
+        if song.stream != o.stream:
+            out.add(COL_STREAM)
+        if song.id != o.id:
+            out.add(COL_ID)
+        return out
+
+    def _is_edited(self, song) -> bool:
+        return self._is_new(song) or bool(self._changed_cols(song))
+
+    # -- search / filter ---------------------------------------------------- #
+    def _row_visible(self, song, text, genre, edited_only) -> bool:
+        if genre is not None and song.genre != genre:
+            return False
+        if edited_only and not self._is_edited(song):
+            return False
+        if text:
+            hay = " ".join((song.id, getattr(song, "title", "") or "", song.stream,
+                            genre_name(song.genre))).lower()
+            if text not in hay:
+                return False
+        return True
+
+    def _apply_filter(self, *_):
+        text = self.ed_filter.text().strip().lower()
+        genre = self.cb_genre.currentData()
+        edited_only = self.chk_changed.isChecked()
+        shown = 0
+        for r in range(self.tbl.rowCount()):
+            song = self._song_for_row(r)
+            vis = song is None or self._row_visible(song, text, genre, edited_only)
+            self.tbl.setRowHidden(r, not vis)
+            shown += bool(vis)
+        self.lbl_shown.setText(tr("{shown} of {total} shown").format(
+            shown=shown, total=self.tbl.rowCount()))
+
+    # -- sorting ------------------------------------------------------------ #
+    def _on_header_clicked(self, col):
+        if col == self._sort_col:
+            order = (Qt.DescendingOrder if self._sort_order == Qt.AscendingOrder
+                     else Qt.AscendingOrder)
+        else:
+            order = Qt.AscendingOrder
+        self.sort_by(col, order)
+
+    def sort_by(self, col, order=Qt.AscendingOrder):
+        self._sort_col, self._sort_order = col, order
+        self.tbl.horizontalHeader().setSortIndicator(col, order)
+        self.tbl.sortItems(col, order)
+        self._apply_filter()                    # row-hidden flags do not follow items
+
+    # -- validation / write-through ---------------------------------------- #
+    def _set_status(self, text, error=False):
+        self.lbl_status.setStyleSheet("color:#d44;" if error else "")
+        self.lbl_status.setText(text)
+
+    def _apply_cell(self, song, col, text):
+        """Validate ``text`` for one cell and store it on ``song``. ValueError if bad."""
+        if col == COL_ID:
+            sid = text.strip()
+            if not sid:
+                raise ValueError(tr("Song id must not be empty."))
+            if any(s is not song and s.id == sid for s in self._songs):
+                raise ValueError(tr("Another song already uses the id {id}.").format(id=sid))
+            song.id = sid
+        elif col == COL_GENRE:
+            song.genre = parse_genre(text)
+        elif COL_EASY <= col <= COL_ONI:
+            song.stars[col - COL_EASY] = parse_stars(text)
+        elif col in (COL_SCORE, COL_SCORE3, COL_SCORE5):
+            try:
+                v = int(str(text).strip())
+            except ValueError:
+                raise ValueError(tr("Not a whole number: {v}").format(v=text))
+            setattr(song, {COL_SCORE: "score", COL_SCORE3: "score3",
+                           COL_SCORE5: "score5"}[col], v)
+        elif col == COL_STREAM:
+            song.stream = text.strip()
+
+    def _on_item_changed(self, it):
+        if self._busy:
+            return
+        r, col = it.row(), it.column()
+        song = self._song_for_row(r)
+        if song is None or col in (COL_IDX, COL_TITLE):
+            return
+        try:
+            self._apply_cell(song, col, it.text())
+        except ValueError as exc:
+            self._set_status(str(exc), error=True)
+        else:
+            self._set_status("")
+        self._refresh_row(r, song)             # canonical text; bad input snaps back
+        self._after_edit()
+
+    def _after_edit(self):
+        self._update_summary()
+        if self.chk_changed.isChecked():
+            self._apply_filter()
+
+    def _update_summary(self):
+        edited = sum(1 for s in self._songs
+                     if not self._is_new(s) and self._changed_cols(s))
+        added = sum(1 for s in self._songs if self._is_new(s))
+        kept = {s.k for s in self._songs if not self._is_new(s)}
+        removed = sum(1 for k in self._orig_songs if k not in kept)
+        self.lbl_changes.setText(
+            tr("Edited: {e} · added: {a} · removed: {r}").format(e=edited, a=added, r=removed))
+        self.b_revert_all.setEnabled(edited > 0)
 
     # -- read the table back into _songs ------------------------------------ #
     def _harvest_table(self):
         """Pull current cell values into the _songs list. Raises on bad ints."""
         for r in range(self.tbl.rowCount()):
-            song = self._songs[r]
-            song.id = self.tbl.item(r, COL_ID).text().strip()
-            song.genre = int(self.tbl.item(r, COL_GENRE).text())
-            song.stars = [
-                int(self.tbl.item(r, COL_EASY).text()),
-                int(self.tbl.item(r, COL_NORMAL).text()),
-                int(self.tbl.item(r, COL_HARD).text()),
-                int(self.tbl.item(r, COL_ONI).text()),
-            ]
-            song.score = int(self.tbl.item(r, COL_SCORE).text())
-            song.score3 = int(self.tbl.item(r, COL_SCORE3).text())
-            song.score5 = int(self.tbl.item(r, COL_SCORE5).text())
-            song.stream = self.tbl.item(r, COL_STREAM).text().strip()
+            song = self._song_for_row(r)
+            if song is None:
+                continue
+            txt = lambda c: self.tbl.item(r, c).text()
+            song.id = txt(COL_ID).strip()
+            song.genre = parse_genre(txt(COL_GENRE))
+            song.stars = [int(txt(c)) for c in (COL_EASY, COL_NORMAL, COL_HARD, COL_ONI)]
+            song.score = int(txt(COL_SCORE))
+            song.score3 = int(txt(COL_SCORE3))
+            song.score5 = int(txt(COL_SCORE5))
+            song.stream = txt(COL_STREAM).strip()
 
         # re-validate ids: post-hoc table edits bypass the add-time uniqueness /
         # non-empty checks, and a blank/duplicate id silently corrupts the
         # music_<id> pool entries and tuning stems on a structural save.
         seen = {}
         for r in range(self.tbl.rowCount()):
-            sid = self._songs[r].id
+            song = self._song_for_row(r)
+            if song is None:
+                continue
+            sid = song.id
             if not sid:
-                raise ValueError(f"row {r}: song id must not be empty")
+                raise ValueError(tr("row {r}: song id must not be empty").format(r=r))
             if sid in seen:
-                raise ValueError(
-                    f"row {r}: duplicate song id {sid!r} (also row {seen[sid]})"
-                )
+                raise ValueError(tr("row {r}: duplicate song id {sid} (also row {o})")
+                                 .format(r=r, sid=repr(sid), o=seen[sid]))
             seen[sid] = r
 
-    # -- add / remove ------------------------------------------------------- #
+    # -- selection ----------------------------------------------------------- #
     def _selected_row(self):
         rows = self.tbl.selectionModel().selectedRows()
         if not rows:
@@ -778,17 +1236,175 @@ class SongManager(QDialog):
             return sel if sel >= 0 else None
         return rows[0].row()
 
+    def _selected_songs(self) -> list:
+        out = []
+        for ix in self.tbl.selectionModel().selectedRows():
+            if self.tbl.isRowHidden(ix.row()):
+                continue
+            s = self._song_for_row(ix.row())
+            if s is not None:
+                out.append(s)
+        return out
+
+    def _update_buttons(self):
+        n = len(self._selected_songs())
+        self.b_bulk_genre.setEnabled(n > 0 and not self._t14)
+        self.b_bulk_stars.setEnabled(n > 0)
+        self.b_revert_sel.setEnabled(n > 0)
+
+    # -- bulk edits / revert ------------------------------------------------- #
+    def bulk_set_genre(self, songs, genre: int) -> int:
+        """Set the genre of ``songs``; returns how many changed."""
+        n = 0
+        for s in songs:
+            if not self._cell_editable(s, COL_GENRE) or s.genre == genre:
+                continue
+            s.genre = genre
+            n += 1
+        self._refresh_all()
+        return n
+
+    def bulk_set_stars(self, songs, values: dict) -> int:
+        """Set stars ({difficulty index: 1..10}) on ``songs``; returns songs changed."""
+        vals = {di: parse_stars(v) for di, v in values.items() if 0 <= di < 4}
+        n = 0
+        for s in songs:
+            hit = False
+            for di, v in vals.items():
+                if self._cell_editable(s, COL_EASY + di) and s.stars[di] != v:
+                    s.stars[di] = v
+                    hit = True
+            n += hit
+        self._refresh_all()
+        return n
+
+    def revert_songs(self, songs) -> int:
+        """Put songs back to their opened values (added songs are left alone)."""
+        n = 0
+        for s in songs:
+            o = None if self._is_new(s) else self._orig_songs.get(s.k)
+            if o is None or not self._changed_cols(s):
+                continue
+            s.id, s.genre, s.stars = o.id, o.genre, list(o.stars)
+            s.score, s.score3, s.score5, s.stream = o.score, o.score3, o.score5, o.stream
+            n += 1
+        self._refresh_all()
+        return n
+
+    def revert_selected(self):
+        n = self.revert_songs(self._selected_songs())
+        self._set_status(tr("Reverted {n} songs.").format(n=n))
+
+    def _on_revert_all(self):
+        edited = [s for s in self._songs if not self._is_new(s) and self._changed_cols(s)]
+        if not edited:
+            return
+        if QMessageBox.question(
+                self, tr("Revert all edits"),
+                tr("Put {n} edited songs back to the values they were opened "
+                   "with? Added and removed songs are not affected.").format(n=len(edited))
+        ) != QMessageBox.Yes:
+            return
+        self._set_status(tr("Reverted {n} songs.").format(n=self.revert_songs(edited)))
+
+    def _refresh_all(self):
+        for r in range(self.tbl.rowCount()):
+            s = self._song_for_row(r)
+            if s is not None:
+                self._refresh_row(r, s)
+        self._update_summary()
+        if self.chk_changed.isChecked():
+            self._apply_filter()
+
+    def _on_bulk_genre(self):
+        songs = self._selected_songs()
+        if not songs:
+            return
+        names = list(GENRE_NAMES.values())
+        name, ok = QInputDialog.getItem(
+            self, tr("Set genre"),
+            tr("Genre for {n} selected songs:").format(n=len(songs)), names, 0, False)
+        if not ok:
+            return
+        genre = next(g for g, nm in GENRE_NAMES.items() if nm == name)
+        if QMessageBox.question(
+                self, tr("Set genre"),
+                tr("Set the genre of {n} songs to {g}?").format(n=len(songs), g=name)
+        ) != QMessageBox.Yes:
+            return
+        n = self.bulk_set_genre(songs, genre)
+        self._set_status(tr("Changed the genre of {n} songs.").format(n=n))
+
+    def _on_bulk_stars(self):
+        songs = self._selected_songs()
+        if not songs:
+            return
+        dlg = _StarsDialog(self, len(songs))
+        ok = dlg.exec()
+        vals = dlg.values()
+        dlg.deleteLater()
+        if not ok or not vals:
+            return
+        if QMessageBox.question(
+                self, tr("Set stars"),
+                tr("Change the stars of {n} songs?").format(n=len(songs))
+        ) != QMessageBox.Yes:
+            return
+        n = self.bulk_set_stars(songs, vals)
+        self._set_status(tr("Changed the stars of {n} songs.").format(n=n))
+
+    # -- remembered layout ---------------------------------------------------- #
+    def _restore_prefs(self):
+        try:
+            raw = appconfig.get(_PREF_SECTION, "header", "")
+            if raw:
+                hdr = self.tbl.horizontalHeader()
+                hdr.restoreState(QByteArray.fromBase64(raw.encode("ascii")))
+                hdr.setStretchLastSection(True)
+                col = hdr.sortIndicatorSection()
+                if 0 <= col < len(COLS):
+                    order = hdr.sortIndicatorOrder()
+                    if (col, order) != (COL_IDX, Qt.AscendingOrder):
+                        self._sort_col, self._sort_order = col, order
+                        self.tbl.sortItems(col, order)
+        except Exception:
+            pass                                 # a bad saved layout is just ignored
+
+    def _save_prefs(self):
+        try:
+            state = bytes(self.tbl.horizontalHeader().saveState().toBase64()).decode("ascii")
+            appconfig.set_value(_PREF_SECTION, "header", state)
+        except Exception:
+            pass
+
+    def done(self, code):
+        self._save_prefs()
+        super().done(code)
+
+    def reject(self):
+        if self.isVisible():
+            kept = {s.k for s in self._songs if not self._is_new(s)}
+            n = sum(1 for s in self._songs if self._is_edited(s))
+            n += sum(1 for k in self._orig_songs if k not in kept)
+            if n and QMessageBox.question(
+                    self, tr("Discard changes"),
+                    tr("Close without saving? Your edits to the song list "
+                       "will be lost.")) != QMessageBox.Yes:
+                return
+        super().reject()
+
+    # -- add / remove ------------------------------------------------------- #
     def _on_add(self):
         try:
             self._harvest_table()
         except Exception as exc:
-            QMessageBox.critical(self, "Edit error", str(exc))
+            QMessageBox.critical(self, tr("Edit error"), str(exc))
             return
         r = self._selected_row()
-        if r is None:
-            QMessageBox.information(self, "Add", "Select a song to duplicate.")
+        src = self._song_for_row(r) if r is not None else None
+        if src is None:
+            QMessageBox.information(self, tr("Add"), tr("Select a song to duplicate."))
             return
-        src = self._songs[r]
 
         # unique id
         existing = {s.id for s in self._songs}
@@ -829,6 +1445,7 @@ class SongManager(QDialog):
             stream=(f"music_{new_id}" if src.stream_rec is not None else ""),
             stream_rec=src.stream_rec,   # template for fields; name overridden
         )
+        new_song.title = getattr(src, "title", "")
         # tag the source musicinfo/stream template index for save-time cloning
         new_song._template_k = tmpl_k         # type: ignore[attr-defined]
         new_song._is_new = True               # type: ignore[attr-defined]
@@ -836,26 +1453,17 @@ class SongManager(QDialog):
         self._songs.append(new_song)
 
         r2 = self.tbl.rowCount()
+        self._busy = True
         self.tbl.insertRow(r2)
-        self._fill_row(r2, new_song)
-        # idx column shows "+" for new (non-original) songs
-        self.tbl.item(r2, COL_IDX).setText("+")
+        self._fill_row(r2, new_song)          # idx column shows "+" for new songs
+        self._busy = False
+        self._apply_filter()
+        self.tbl.scrollToItem(self.tbl.item(r2, COL_ID))
+        self._update_summary()
+        self._set_status(tr("Added {id}. Its id and stars can be edited.").format(id=new_id))
 
-    def _on_remove(self):
-        try:
-            self._harvest_table()
-        except Exception as exc:
-            QMessageBox.critical(self, "Edit error", str(exc))
-            return
-        r = self._selected_row()
-        if r is None:
-            QMessageBox.information(self, "Remove", "Select a song to remove.")
-            return
-        if len(self._songs) <= 1:
-            QMessageBox.warning(self, "Remove", "Cannot remove the last song.")
-            return
-
-        song = self._songs[r]
+    def _remove_one(self, song):
+        """Drop one song from the working order / song list (not the table)."""
         # update order list: remove the matching entry (token for new, k for orig)
         if getattr(song, "_is_new", False):
             # Each new song carries the exact rebuild token it was created with,
@@ -877,9 +1485,43 @@ class SongManager(QDialog):
             if song.k in self._order:
                 self._order.remove(song.k)
             self._removed_anything = True
+        for i, s in enumerate(self._songs):
+            if s is song:
+                del self._songs[i]
+                break
+        uid = self._uid_of.pop(id(song), None)
+        self._uid_songs.pop(uid, None)
 
-        del self._songs[r]
-        self.tbl.removeRow(r)
+    def _on_remove(self):
+        try:
+            self._harvest_table()
+        except Exception as exc:
+            QMessageBox.critical(self, tr("Edit error"), str(exc))
+            return
+        victims = self._selected_songs()
+        if not victims:
+            r = self._selected_row()
+            s = self._song_for_row(r) if r is not None else None
+            victims = [s] if s is not None else []
+        if not victims:
+            QMessageBox.information(self, tr("Remove"), tr("Select a song to remove."))
+            return
+        if len(self._songs) <= len(victims):
+            QMessageBox.warning(self, tr("Remove"), tr("Cannot remove the last song."))
+            return
+        if len(victims) > 1 and QMessageBox.question(
+                self, tr("Remove"),
+                tr("Remove {n} songs from the database?").format(n=len(victims))
+        ) != QMessageBox.Yes:
+            return
+        for song in victims:
+            r = self._row_of(song)
+            self._remove_one(song)
+            if r is not None:
+                self.tbl.removeRow(r)
+        self._apply_filter()
+        self._update_summary()
+
 
     # -- save --------------------------------------------------------------- #
     def _on_save(self):

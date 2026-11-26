@@ -1393,7 +1393,7 @@ class MainWindow(QMainWindow):
             hit = self._find_archive_file(fn)
             if hit is None:
                 QMessageBox.warning(self, tr("Song Manager"),
-                                    f"Could not find {fn} in this archive.")
+                                    tr("Could not find {fn} in this archive.").format(fn=fn))
                 return
             located[fn] = hit
         try:
@@ -1404,10 +1404,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("Song Manager failed"),
                                  f"{exc}\n\n{traceback.format_exc()}")
             return
-        if not dlg.exec() or not getattr(dlg, "result", None):
+        accepted = dlg.exec()
+        result = getattr(dlg, "result", None)
+        dlg.deleteLater()
+        if not accepted or not result:
             return
         changed = 0
-        for fn, new_bytes in dlg.result.items():
+        for fn, new_bytes in result.items():
             if fn not in located or new_bytes == data[fn]:
                 continue
             g, e = located[fn]
@@ -1416,7 +1419,7 @@ class MainWindow(QMainWindow):
             self._mark_file_modified(g["index"], e["index"])
         if changed:
             self.statusBar().showMessage(
-                f"Song Manager edited {changed} file(s). Save to apply to DATA.000.")
+                tr("Song Manager edited {n} file(s). Save to apply to DATA.000.").format(n=changed))
             self._update_actions()
 
     def _recent_hdd_img(self) -> str:
