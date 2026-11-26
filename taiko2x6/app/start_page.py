@@ -9,11 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget)
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from taiko2x6.app import icons
 from taiko2x6.app.i18n import tr
@@ -80,6 +80,25 @@ class TaskCard(QPushButton):
         col.addStretch(1)
         lay.addLayout(col, 1)
         self.clicked.connect(lambda _=False: slot())
+        # equal-width columns, and a card fills its row's height
+        sp = QSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+
+    # QPushButton sizes itself from its own text, not from the child layout,
+    # so a wrapped title/description used to overflow the 64 px card. Size
+    # from the layout instead, so a narrow card grows tall enough.
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return max(64, self.layout().heightForWidth(w))
+
+    def sizeHint(self):
+        return QSize(200, self.heightForWidth(200))
+
+    def minimumSizeHint(self):
+        return QSize(120, 64)
 
     def refresh_icon(self):
         """(Re)draw the icon in the current palette's text colour."""

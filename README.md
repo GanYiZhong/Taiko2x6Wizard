@@ -15,6 +15,8 @@ one Explorer GUI.
 > [What you must supply](#what-you-must-supply)). Not affiliated with or
 > endorsed by Bandai Namco.
 
+![Archive Explorer with a chart preview](docs/screenshots/en/explorer.png)
+
 ---
 
 ## What it does
@@ -39,7 +41,8 @@ one Explorer GUI.
   (`ps2/ps2hdd`), memory-card read/write, ISO packing, multi-game HDD merge, and
   image slimming.
 - **Executable patching** — decrypt and patch the T14+ `taiko` ELF: raise the
-  song-count ceiling, change the song-select timer, skip the boot Notice screen.
+  song-count ceiling, freeze the song-select countdown, skip the boot Notice and
+  credits screens, show song select as category folders.
 - **USB keyboard patch (Taiko 14)** — play with a plain USB keyboard and no JVS
   I/O board ([KBD2EE](https://github.com/GanYiZhong/Taiko14-USB-Keyboard-Patch)),
   installed onto the HDD image (card untouched) or onto the dongle card image.
@@ -47,6 +50,16 @@ one Explorer GUI.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and
 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md) for the reverse-engineered
 formats.
+
+## Screenshots
+
+All screenshots use made-up demo data; no game content is shown.
+
+| Start page | Omnimix Maker |
+|---|---|
+| ![Start page: every tool as a card](docs/screenshots/en/start.png) | ![Omnimix Maker: target image, sources, options and game patches](docs/screenshots/en/omnimix.png) |
+| **Chart converter** | **Boot & select patches** |
+| ![Chart converter: TJA, sht and Gen3 fumen in any direction](docs/screenshots/en/chart_converter.png) | ![Boot & select patches: tick a switch, Apply](docs/screenshots/en/boot_patches.png) |
 
 ## Download (no Python needed)
 
@@ -112,7 +125,6 @@ from its menus. Several modules also run standalone with `python -m`, e.g.:
 
 ```bash
 python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # raise the song limit — CLI
-python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # song-select timer — CLI
 python -m taiko2x6.exe.taiko_exe --help                               # all exe-patch options
 python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB keyboard patch
 python -m taiko2x6.charts.gen3_convert --help    # Gen3 (Nijiiro) fumen -> SHT — CLI

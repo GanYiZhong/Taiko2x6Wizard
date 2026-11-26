@@ -12,6 +12,8 @@
 > 不包含遊戲程式碼、音訊、貼圖、字型或資料。你必須自行準備合法取得的檔案
 > （見[需要自備的檔案](#需要自備的檔案)）。本專案與 Bandai Namco 無關，也未獲其認可。
 
+![封存檔瀏覽器與譜面預覽](docs/screenshots/zh-TW/explorer.png)
+
 ---
 
 ## 功能
@@ -32,13 +34,23 @@
 - **PS2 儲存裝置**：自行實作的 APA 分割區 + PFS 檔案系統讀寫、記憶卡讀寫、ISO 打包、
   多款遊戲合併到同一顆硬碟、映像檔瘦身。
 - **執行檔修補**：解密並修補 T14 以後的 `taiko` ELF，例如提高歌曲數量上限、
-  調整選歌倒數、跳過開機的 Notice 畫面。
+  凍結選歌倒數、跳過開機的 Notice 與協力畫面、把選歌改成類別資料夾。
 - **USB 鍵盤 patch（Taiko 14）**：用一般 USB 鍵盤遊玩，不需要 JVS I/O 板
   （[KBD2EE](https://github.com/GanYiZhong/Taiko14-USB-Keyboard-Patch)）；
   可以裝進硬碟映像（不動加密狗卡），或裝到加密狗卡映像。
 
 模組說明見 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，
 逆向出來的檔案格式見 [`docs/FILE_FORMATS.md`](docs/FILE_FORMATS.md)（皆為英文）。
+
+## 截圖
+
+截圖裡用的都是自己編的示範資料，不含任何遊戲內容。
+
+| 開始頁 | Omnimix 建置 |
+|---|---|
+| ![開始頁：每個工具都是一張卡片](docs/screenshots/zh-TW/start.png) | ![Omnimix 建置：目標映像檔、來源、選項與遊戲修補](docs/screenshots/zh-TW/omnimix.png) |
+| **譜面轉換** | **開機與選歌修補** |
+| ![譜面轉換：TJA、sht 與虹版 fumen 任意互轉](docs/screenshots/zh-TW/chart_converter.png) | ![開機與選歌修補：勾選後套用](docs/screenshots/zh-TW/boot_patches.png) |
 
 ## 下載（不需要安裝 Python）
 
@@ -101,7 +113,6 @@ Explorer 是整個工具的中心，`.bin` 編輯器和大部分工具都從它�
 
 ```bash
 python -m taiko2x6.exe.taiko_exe TK14.img -n 214 --backup taiko.bak  # 提高歌曲上限（命令列）
-python -m taiko2x6.exe.taiko_exe TK14.img --select-timer 999          # 選歌倒數秒數（命令列）
 python -m taiko2x6.exe.taiko_exe --help                               # 所有執行檔修補選項
 python -m taiko2x6.exe.usb_keyboard install TK14.img --card NM00057.ps2  # USB 鍵盤 patch
 python -m taiko2x6.charts.gen3_convert --help      # 虹版譜面 → SHT（命令列）
