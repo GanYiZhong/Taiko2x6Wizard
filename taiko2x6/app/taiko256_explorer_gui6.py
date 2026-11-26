@@ -486,10 +486,8 @@ class MainWindow(QMainWindow):
         ll.addWidget(self.filter_box)
         ll.addWidget(self.tree)
 
-        # left: a start page until an archive is open, then the file tree
-        self.left_stack = QStackedWidget()
-        self.left_stack.addWidget(self._build_start_page())
-        self.left_stack.addWidget(browser)
+        # the start page is built here but shown full width (central stack)
+        start = self._build_start_page()
 
         # right: preview + (collapsible) extract / save options
         self.preview = PreviewPane()
@@ -590,11 +588,15 @@ class MainWindow(QMainWindow):
         rl.addWidget(self.opts_panel)
 
         self.split = QSplitter()
-        self.split.addWidget(self.left_stack)
+        self.split.addWidget(browser)
         self.split.addWidget(right)
         self.split.setStretchFactor(0, 3)
         self.split.setStretchFactor(1, 2)
-        self.setCentralWidget(self.split)
+        # page 0: start page over the whole area; page 1: the explorer
+        self.central_stack = QStackedWidget()
+        self.central_stack.addWidget(start)
+        self.central_stack.addWidget(self.split)
+        self.setCentralWidget(self.central_stack)
 
         self.setStatusBar(QStatusBar())
         self.dirty_label = QLabel()
@@ -959,7 +961,9 @@ class MainWindow(QMainWindow):
         tb.setObjectName("main_toolbar")
         tb.setIconSize(QSize(18, 18))
         # show what each button does next to its icon
-        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        # icon-only (full description in the tooltip); only the primary
+        # actions get a text label so nothing falls into the overflow menu
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.addToolBar(tb)
         self.setWindowIcon(icons.icon("app", color=QColor("#d94f3d")))
         self._icon_names: dict = {}
@@ -1085,7 +1089,14 @@ class MainWindow(QMainWindow):
             if i:
                 tb.addSeparator()
             for a in grp:
+                full = a.text().replace("&&", "&")
+                has_tip = a.toolTip() not in ("", a.text())
+                a.setToolTip(f"{full}\n{a.toolTip()}" if has_tip else full)
                 tb.addAction(a)
+                if a in (self.act_open, self.act_extract_all, self.act_save):
+                    w = tb.widgetForAction(a)
+                    if w is not None:
+                        w.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
         menu = self.menuBar().addMenu(tr("&File"))
         menu.addAction(self.act_open)
@@ -1239,7 +1250,7 @@ class MainWindow(QMainWindow):
             a.setEnabled(has)
         self.act_save.setEnabled(has and self.archive.dirty)
         self.act_discard.setEnabled(has and self.archive.dirty)
-        self.left_stack.setCurrentIndex(1 if has else 0)
+        self.central_stack.setCurrentIndex(1 if has else 0)
         self._refresh_pending()
         self._refresh_dirty_ui()
 
