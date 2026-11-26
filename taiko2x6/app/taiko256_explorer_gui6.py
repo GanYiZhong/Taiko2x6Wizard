@@ -1476,7 +1476,9 @@ class MainWindow(QMainWindow):
 
         prog_total = len(a.layout.groups) if full_rebuild else len(a.affected_groups())
         verb = "Rebuilding" if full_rebuild else "Patching"
-        prog = QProgressDialog(f"{verb}…", "Cancel", 0, prog_total, self)
+        # No Cancel: a half-written save is not safe to stop (safeio commits both
+        # files or neither, but the button was never checked anyway).
+        prog = QProgressDialog(f"{verb}…", None, 0, prog_total, self)
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
 
