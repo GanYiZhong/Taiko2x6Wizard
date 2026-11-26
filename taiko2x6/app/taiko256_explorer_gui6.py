@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QSplitter, QLineEdit, QLabel, QPushButton, QFileDialog, QMessageBox,
     QProgressDialog, QPlainTextEdit, QTabWidget, QStyle, QToolBar, QStatusBar,
     QHeaderView, QMenu, QCheckBox, QGroupBox, QFormLayout, QSpinBox,
-    QStackedWidget, QToolButton, QFrame,
+    QStackedWidget, QToolButton, QFrame, QListWidget, QListWidgetItem,
 )
 
 SECTOR_SIZE = core.SECTOR_SIZE
@@ -376,6 +376,44 @@ def hexdump(data: bytes, limit: int = 4096) -> str:
 # =============================================================================
 # Main window
 # =============================================================================
+class _DropTree(QTreeView):
+    """Tree that accepts one dropped file and reports the row it landed on."""
+    fileDropped = Signal(QModelIndex, str)
+
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _local_file(event) -> str:
+        md = event.mimeData()
+        if md.hasUrls():
+            for u in md.urls():
+                if u.isLocalFile() and Path(u.toLocalFile()).is_file():
+                    return u.toLocalFile()
+        return ""
+
+    def dragEnterEvent(self, event):
+        if self._local_file(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._local_file(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        path = self._local_file(event)
+        if not path:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.fileDropped.emit(self.indexAt(event.position().toPoint()), path)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -402,7 +440,8 @@ class MainWindow(QMainWindow):
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.proxy.setFilterKeyColumn(0)
 
-        self.tree = QTreeView()
+        self.tree = _DropTree()
+        self.tree.fileDropped.connect(self._on_file_dropped)
         self.tree.setModel(self.proxy)
         self.tree.setSortingEnabled(False)
         self.tree.setUniformRowHeights(True)
@@ -479,6 +518,13 @@ class MainWindow(QMainWindow):
         form.addRow(self.chk_full_rebuild)
         form.addRow(self.chk_relayout)
         form.addRow(self.chk_overwrite)
+        self.lbl_save_hint = QLabel()
+        self.lbl_save_hint.setWordWrap(True)
+        self.lbl_save_hint.setEnabled(False)       # greyed: a hint, not a control
+        form.addRow(self.lbl_save_hint)
+        self.chk_overwrite.toggled.connect(lambda _on: self._refresh_save_hint())
+        self.chk_full_rebuild.toggled.connect(lambda _on: self._refresh_save_hint())
+        self._refresh_save_hint()
         # in-group relayout is meaningless once full rebuild is on
         self.chk_full_rebuild.toggled.connect(
             lambda on: self.chk_relayout.setEnabled(not on))
@@ -502,6 +548,7 @@ class MainWindow(QMainWindow):
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 4, 4)
         rl.addWidget(self.preview, 1)
+        rl.addWidget(self._build_pending_box())
         rl.addWidget(self.btn_opts)
         rl.addWidget(self.opts_panel)
 
@@ -516,6 +563,145 @@ class MainWindow(QMainWindow):
         self.dirty_label = QLabel()
         self.statusBar().addPermanentWidget(self.dirty_label)
         self.statusBar().showMessage(tr("Open an archive folder (File ▸ Open) to begin."))
+
+    def _build_pending_box(self) -> QGroupBox:
+        box = QGroupBox(tr("Pending edits"))
+        v = QVBoxLayout(box)
+        v.setContentsMargins(6, 6, 6, 6)
+        self.pending_list = QListWidget()
+        self.pending_list.setMaximumHeight(110)
+        self.pending_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.pending_list.itemActivated.connect(self._pending_goto)
+        self.pending_list.itemClicked.connect(self._pending_goto)
+        v.addWidget(self.pending_list)
+        self.btn_pending_discard = QPushButton(tr("Discard selected edit(s)"))
+        self.btn_pending_discard.clicked.connect(self._discard_pending_selected)
+        v.addWidget(self.btn_pending_discard)
+        self.pending_box = box
+        box.setVisible(False)
+        return box
+
+    def _refresh_save_hint(self):
+        full = self.chk_full_rebuild.isChecked()
+        how = (tr("Full rebuild: any file size, unchanged groups keep their sectors.")
+               if full else tr("In-place patch: edited files must still fit."))
+        where = (tr("Originals are overwritten; a .bak backup is made first.")
+                 if self.chk_overwrite.isChecked()
+                 else tr("Nothing is overwritten; new files are written next to the originals as .new."))
+        self.lbl_save_hint.setText(f"{how}\n{where}")
+
+    def _refresh_pending(self):
+        a = self.archive
+        self.pending_list.clear()
+        if a is not None:
+            for (gi, fi), data in sorted(a.replacements.items()):
+                group = a.layout.groups[gi]
+                entry = a.layout.files[fi]
+                li = QListWidgetItem(tr("{grp} / {name}: {old:,} → {new:,} bytes").format(
+                    grp=group["name"], name=entry["name"],
+                    old=entry["size"], new=len(data)))
+                li.setData(Qt.UserRole, (gi, fi))
+                self.pending_list.addItem(li)
+        self.pending_box.setVisible(self.pending_list.count() > 0)
+
+    def _pending_goto(self, li: QListWidgetItem):
+        gi, fi = li.data(Qt.UserRole)
+        item = self._find_file_item(gi, fi)
+        if item is None:
+            return
+        idx = self.proxy.mapFromSource(item.index())
+        if idx.isValid():
+            self.tree.setCurrentIndex(idx)
+            self.tree.scrollTo(idx)
+
+    def _discard_pending_selected(self):
+        if not self.archive:
+            return
+        keys = [li.data(Qt.UserRole) for li in self.pending_list.selectedItems()]
+        if not keys and self.pending_list.count() == 1:
+            keys = [self.pending_list.item(0).data(Qt.UserRole)]
+        for gi, fi in keys:
+            self._unstage_file(gi, fi, update=False)
+        if keys:
+            self._update_actions()
+            self.statusBar().showMessage(
+                tr("Discarded {n} staged edit(s).").format(n=len(keys)))
+
+    def _find_file_item(self, gi: int, fi: int) -> QStandardItem | None:
+        stack = [self.model.item(r, 0) for r in range(self.model.rowCount())]
+        while stack:
+            it = stack.pop()
+            if it is None:
+                continue
+            if it.data(ROLE_KIND) == "file":
+                if it.data(ROLE_GROUP) == gi and it.data(ROLE_FILE) == fi:
+                    return it
+                continue
+            stack.extend(it.child(r, 0) for r in range(it.rowCount()))
+        return None
+
+    def _style_file_item(self, item: QStandardItem, staged_size: int | None):
+        """Bold red + new size when staged; plain + archive size otherwise."""
+        font = item.font()
+        font.setBold(staged_size is not None)
+        item.setFont(font)
+        entry = self.archive.layout.files[item.data(ROLE_FILE)]
+        if staged_size is not None:
+            item.setForeground(QColor("#c0392b"))
+            text = f"{staged_size:,}*"
+        else:
+            item.setData(None, Qt.ForegroundRole)
+            text = f"{entry['size']:,}"
+        parent = item.parent() or self.model.invisibleRootItem()
+        size_item = parent.child(item.index().row(), 1)
+        if size_item:
+            size_item.setText(text)
+
+    def _stage_file(self, item: QStandardItem, data: bytes):
+        gi, fi = item.data(ROLE_GROUP), item.data(ROLE_FILE)
+        entry = self.archive.layout.files[fi]
+        self.archive.stage_replace(gi, fi, data)
+        self._style_file_item(item, len(data))
+        self._preview_item(item)
+        self.statusBar().showMessage(
+            tr("Staged replacement: {name} ({n:,} bytes). Save to apply.").format(
+                name=entry["name"], n=len(data)))
+        self._update_actions()
+
+    def _unstage_file(self, gi: int, fi: int, update: bool = True):
+        if not self.archive.unstage(gi, fi):
+            return
+        item = self._find_file_item(gi, fi)
+        if item is not None:
+            self._style_file_item(item, None)
+        if update:
+            self._update_actions()
+            self.statusBar().showMessage(tr("Edit discarded."))
+
+    def _on_file_dropped(self, proxy_index: QModelIndex, path: str):
+        if self.archive is None:
+            return
+        item = self._item_from_proxy(proxy_index) if proxy_index.isValid() else None
+        if not item or item.data(ROLE_KIND) != "file":
+            self.statusBar().showMessage(
+                tr("Drop the file onto a file row in the tree to replace it."))
+            return
+        gi, fi = item.data(ROLE_GROUP), item.data(ROLE_FILE)
+        group = self.archive.layout.groups[gi]
+        entry = self.archive.layout.files[fi]
+        try:
+            data = Path(path).read_bytes()
+        except OSError as exc:
+            QMessageBox.critical(self, tr("Replace"), str(exc))
+            return
+        cur = len(self.archive.read_file(group, entry))
+        if QMessageBox.question(
+                self, tr("Replace"),
+                tr("Replace {name} ({grp}) with {src}?\n\nSize: {old:,} → {new:,} bytes").format(
+                    name=entry["name"], grp=group["name"], src=Path(path).name,
+                    old=cur, new=len(data))) != QMessageBox.Yes:
+            return
+        self._stage_file(item, data)
 
     def _toggle_options(self, on: bool):
         self.opts_panel.setVisible(on)
@@ -828,6 +1014,7 @@ class MainWindow(QMainWindow):
         self.act_save.setEnabled(has and self.archive.dirty)
         self.act_discard.setEnabled(has and self.archive.dirty)
         self.left_stack.setCurrentIndex(1 if has else 0)
+        self._refresh_pending()
         self._refresh_dirty_ui()
 
     def _restore_layout(self):
@@ -930,6 +1117,10 @@ class MainWindow(QMainWindow):
                 gnode.appendRow([name_item, size_item, type_item, off_item])
 
         self.tree.collapseAll()
+        for (gi, fi), data in self.archive.replacements.items():
+            it = self._find_file_item(gi, fi)
+            if it is not None:
+                self._style_file_item(it, len(data))
 
     # -- selection / preview --------------------------------------------------
     def _src_index(self, proxy_index: QModelIndex) -> QModelIndex:
@@ -1052,6 +1243,13 @@ class MainWindow(QMainWindow):
         if item and item.data(ROLE_KIND) == "file":
             menu.addSeparator()
             menu.addAction(self.act_replace)
+            gi0, fi0 = item.data(ROLE_GROUP), item.data(ROLE_FILE)
+            if (gi0, fi0) in self.archive.replacements:
+                act_disc = menu.addAction(tr("Discard edit"))
+                act_disc.triggered.connect(lambda: self._unstage_file(gi0, fi0))
+            act_copy = menu.addAction(tr("Copy name"))
+            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(
+                self.archive.layout.files[fi0]["name"]))
             act_export = menu.addAction("Export This File…")
             act_export.triggered.connect(lambda: self._export_one(item))
             entry = self.archive.layout.files[item.data(ROLE_FILE)]
@@ -1155,22 +1353,7 @@ class MainWindow(QMainWindow):
         src = appconfig.pick_open(self, "replace", f"Replace {entry['name']} with…")
         if not src:
             return
-        data = Path(src).read_bytes()
-        self.archive.stage_replace(gi, fi, data)
-        # mark item visually
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
-        item.setForeground(QColor("#c0392b"))
-        row = item.index().row()
-        parent = item.parent() or self.model.invisibleRootItem()
-        size_item = parent.child(row, 1)
-        if size_item:
-            size_item.setText(f"{len(data):,}*")
-        self._preview_item(item)
-        self.statusBar().showMessage(
-            f"Staged replacement: {entry['name']} ({len(data):,} bytes). Save to apply.")
-        self._update_actions()
+        self._stage_file(item, Path(src).read_bytes())
 
     def _current_file_item(self) -> QStandardItem | None:
         idxs = self.tree.selectionModel().selectedIndexes()
@@ -1189,7 +1372,7 @@ class MainWindow(QMainWindow):
         self.archive.discard_edits()
         self._populate_tree()
         self._update_actions()
-        self.statusBar().showMessage("Edits discarded.")
+        self.statusBar().showMessage(tr("Edits discarded."))
 
     # -- song manager ---------------------------------------------------------
     def _find_archive_file(self, filename: str):
@@ -1474,6 +1657,16 @@ class MainWindow(QMainWindow):
             out_list = a.list_path.with_suffix(a.list_path.suffix + ".new")
             out_data = a.data_path.with_suffix(a.data_path.suffix + ".new")
 
+        if QMessageBox.question(
+                self, tr("Save"),
+                tr("Save {files} edited file(s) in {groups} group(s)?").format(
+                    files=len(a.replacements), groups=len(a.affected_groups()))
+                + "\n\n" + self.lbl_save_hint.text()
+                + "\n\n" + f"{out_list}\n{out_data}") != QMessageBox.Yes:
+            return
+        cur = self._current_file_item()
+        keep_sel = (cur.data(ROLE_GROUP), cur.data(ROLE_FILE)) if cur else None
+
         prog_total = len(a.layout.groups) if full_rebuild else len(a.affected_groups())
         verb = "Rebuilding" if full_rebuild else "Patching"
         # No Cancel: a half-written save is not safe to stop (safeio commits both
@@ -1516,15 +1709,22 @@ class MainWindow(QMainWindow):
         log.info("%s complete: %d group(s), %d file(s) in %s",
                  "rebuild" if full_rebuild else "patch",
                  summary['changed_groups'], summary['files'], took)
-        extra = (f"\nDATA size: {summary['data_size']/1e6:.1f} MB" if full_rebuild else "")
-        QMessageBox.information(
-            self, tr("Saved"),
-            tr("Wrote {groups} group(s), {files} file(s) in {took}.").format(
-                groups=summary['changed_groups'], files=summary['files'], took=took)
-            + f"{extra}\n\n{out_list}\n{out_data}")
+        msg = tr("Wrote {groups} group(s), {files} file(s) in {took}.").format(
+            groups=summary['changed_groups'], files=summary['files'], took=took)
+        if full_rebuild:
+            msg += " " + tr("DATA size: {mb:.1f} MB").format(mb=summary['data_size'] / 1e6)
+        msg += f"  {out_data}"
         # reload from the written files so further edits start clean
         self._reload_after_save(out_list if not self.chk_overwrite.isChecked() else a.list_path,
                                 out_data if not self.chk_overwrite.isChecked() else a.data_path)
+        if self.archive is not None:
+            if keep_sel is not None:
+                it = self._find_file_item(*keep_sel)
+                if it is not None:
+                    idx = self.proxy.mapFromSource(it.index())
+                    self.tree.setCurrentIndex(idx)
+                    self.tree.scrollTo(idx)
+            self.statusBar().showMessage(msg)
 
     def _reload_after_save(self, list_path: Path, data_path: Path):
         try:
