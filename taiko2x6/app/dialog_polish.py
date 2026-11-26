@@ -16,6 +16,7 @@ that run a worker override reject() to refuse while it is busy.
 """
 from __future__ import annotations
 
+import base64
 import re
 
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QCheckBox,
@@ -39,6 +40,7 @@ def polish(dlg, primary: QPushButton | None = None) -> None:
     _filter_bars_first(dlg)
     _wrap_choices(dlg)
     _wrap_labels(dlg)
+    _remember_geometry(dlg)
 
 
 # ------------------------------------------------------------------ buddies
@@ -232,3 +234,134 @@ def _filter_bars_first(dlg) -> None:
     order = first + stops
     for a_, b_ in zip(order, order[1:]):
         QWidget.setTabOrder(a_, b_)
+
+
+# ------------------------------------------------------------ window geometry
+GEOM_SECTION = "dialog_geometry"
+
+
+def _geom_key(dlg) -> str:
+    c = type(dlg)
+    return "%s.%s" % (c.__module__.rsplit(".", 1)[-1], c.__name__)
+
+
+def fit_rect(x, y, w, h, screens, min_w=0, min_h=0):
+    """Pull the frame rectangle (x, y, w, h) onto the nearest of `screens`
+    (tuples x, y, w, h of available geometry); size is clamped to that screen
+    but never below the minimum. Returns (x, y, w, h)."""
+    def dist(s):
+        sx, sy, sw, sh = s
+        dx = max(sx - (x + w), x - (sx + sw), 0)
+        dy = max(sy - (y + h), y - (sy + sh), 0)
+        return dx * dx + dy * dy
+    sx, sy, sw, sh = min(screens, key=dist)
+    w = max(min(w, sw), min(min_w, sw))
+    h = max(min(h, sh), min(min_h, sh))
+    x = min(max(x, sx), sx + sw - w)
+    y = min(max(y, sy), sy + sh - h)
+    return x, y, w, h
+
+
+def _avail_screens():
+    from PySide6.QtGui import QGuiApplication
+    out = []
+    for s in QGuiApplication.screens():
+        g = s.availableGeometry()
+        out.append((g.x(), g.y(), g.width(), g.height()))
+    return out
+
+
+def _enc(b) -> str:
+    return base64.b64encode(bytes(b)).decode("ascii")
+
+
+def _remember_geometry(dlg) -> None:
+    from PySide6.QtCore import QObject, QEvent
+    class _Filter(QObject):
+        shown = False
+
+        def eventFilter(self, obj, ev):
+            t = ev.type()
+            try:
+                if t == QEvent.Show and not ev.spontaneous():
+                    if not self.shown:
+                        self.shown = True
+                        _restore(obj)
+                elif t == QEvent.Hide and self.shown and not ev.spontaneous():
+                    _save(obj)
+            except Exception:
+                pass                               # layout memory is a nicety
+            return False
+
+    if getattr(dlg, "_geom_filter", None) is None:
+        f = _Filter(dlg)
+        dlg._geom_filter = f
+        dlg.installEventFilter(f)
+
+
+def _states(dlg):
+    from PySide6.QtWidgets import QSplitter, QHeaderView
+    for i, sp in enumerate(dlg.findChildren(QSplitter)):
+        yield "split%d" % i, sp
+    for i, hv in enumerate(dlg.findChildren(QHeaderView)):
+        yield "header%d" % i, hv
+
+
+def _save(dlg) -> None:
+    from taiko2x6.app import appconfig
+    if dlg.isMaximized() or dlg.isMinimized() or dlg.isFullScreen():
+        return
+    fg = dlg.frameGeometry()
+    key = _geom_key(dlg)
+    appconfig.set_value(GEOM_SECTION, key, "%d,%d,%d,%d" % (
+        fg.x(), fg.y(), dlg.width(), dlg.height()))
+    for name, w in _states(dlg):
+        appconfig.set_value(GEOM_SECTION, "%s#%s" % (key, name), _enc(w.saveState()))
+
+
+def _restore(dlg) -> None:
+    from PySide6.QtCore import QByteArray
+    from taiko2x6.app import appconfig
+    key = _geom_key(dlg)
+    raw = appconfig.get(GEOM_SECTION, key)
+    screens = _avail_screens()
+    if not screens:
+        return
+    fixed = dlg.minimumSize() == dlg.maximumSize()
+    msz = dlg.minimumSizeHint().expandedTo(dlg.minimumSize())
+    frame_dx = max(dlg.frameGeometry().width() - dlg.width(), 0)
+    frame_dy = max(dlg.frameGeometry().height() - dlg.height(), 0)
+    try:
+        x, y, w, h = [int(v) for v in raw.split(",")]
+    except ValueError:
+        x = None
+    if x is None:                                  # first open: centre on parent
+        par = dlg.parentWidget()
+        if par is None:
+            return
+        pg = par.window().frameGeometry()
+        w, h = max(dlg.width(), msz.width()), max(dlg.height(), msz.height())
+        x, y = pg.center().x() - w // 2, pg.center().y() - h // 2
+        x, y, w, h = fit_rect(x, y, w + frame_dx, h + frame_dy, screens)
+        dlg.move(x, y)
+    else:
+        if fixed:
+            w, h = dlg.width(), dlg.height()
+        x, y, w, h = fit_rect(x, y, w + frame_dx, h + frame_dy, screens,
+                              msz.width() + frame_dx, msz.height() + frame_dy)
+        if not fixed:
+            dlg.resize(w - frame_dx, h - frame_dy)
+        dlg.move(x, y)
+    for name, wd in _states(dlg):
+        st = appconfig.get(GEOM_SECTION, "%s#%s" % (key, name))
+        if st:
+            try:
+                wd.restoreState(QByteArray(base64.b64decode(st)))
+            except Exception:
+                pass
+
+
+def reset_layouts() -> None:
+    """Forget every saved dialog size / position / splitter / column state."""
+    from taiko2x6.app import appconfig
+    appconfig.clear_section(GEOM_SECTION)

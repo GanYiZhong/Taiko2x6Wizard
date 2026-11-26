@@ -100,6 +100,18 @@ def clear_paths() -> None:
             pass
 
 
+def clear_section(section: str) -> None:
+    """Drop one whole [section] of config.ini; the others are kept."""
+    cp = _load()
+    if cp.has_section(section):
+        cp.remove_section(section)
+        try:
+            with open(INI_PATH, "w", encoding="utf-8") as f:
+                cp.write(f)
+        except OSError:
+            pass
+
+
 def last_existing(key: str) -> str:
     """The last path for `key` only if it still exists on disk ('' otherwise).
     Use to pre-fill line edits without resurrecting deleted files."""

@@ -968,6 +968,14 @@ class MainWindow(QMainWindow):
         self.setup_box.setVisible(bool(missing))
         self.btn_setup.setVisible(bool(missing))
 
+    def reset_window_layouts(self):
+        from taiko2x6.app import dialog_polish
+        if QMessageBox.question(
+                self, tr("Settings"),
+                tr("Forget the saved size and position of every dialog? "
+                   "They will open at their default layout next time."))                 == QMessageBox.Yes:
+            dialog_polish.reset_layouts()
+
     def open_settings(self):
         from taiko2x6.app import settings_dialog
         settings_dialog.SettingsDialog(self).exec()
@@ -1161,6 +1169,9 @@ class MainWindow(QMainWindow):
         self._icon_names[self.act_settings] = "settings"
         self.act_settings.triggered.connect(self.open_settings)
         settings.addAction(self.act_settings)
+        self.act_reset_layouts = QAction(tr("Reset window layouts"), self)
+        self.act_reset_layouts.triggered.connect(self.reset_window_layouts)
+        settings.addAction(self.act_reset_layouts)
         lang_menu = settings.addMenu(tr("Language"))
         group = QActionGroup(self)
         group.setExclusive(True)

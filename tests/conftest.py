@@ -122,6 +122,15 @@ def _close_leftover_windows():
 
 
 @pytest.fixture(autouse=True)
+def _isolated_appconfig(tmp_path, monkeypatch):
+    """Never let a test write the real config.ini (dialog geometry is saved
+    there every time a dialog is hidden)."""
+    from taiko2x6.app import appconfig
+    monkeypatch.setattr(appconfig, "INI_PATH", tmp_path / "config_auto.ini")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_qsettings(tmp_path, monkeypatch):
     """Point every taiko2x6 module's QSettings at a throwaway INI file.
 
