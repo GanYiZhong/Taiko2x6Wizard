@@ -210,6 +210,8 @@ class _VagDecodeWorker(QThread):
 
 
 class PreviewPane(QTabWidget):
+    replace_image_requested = Signal()
+
     def __init__(self):
         super().__init__()
         self._vag_gen = 0                   # bumped per selection; stale decodes dropped
@@ -223,6 +225,19 @@ class PreviewPane(QTabWidget):
         from taiko2x6.graphics import imageview
         self.image_view = imageview.ImageViewer()
         self.image_view.set_message(tr("(no image)"))
+        self.btn_replace_img = QPushButton(tr("Replace image from file…"))
+        self.btn_replace_img.setToolTip(
+            tr("Stage a PNG / JPG as the new texture; Save applies it."))
+        self.btn_replace_img.setEnabled(False)
+        self.btn_replace_img.clicked.connect(self.replace_image_requested)
+        self._image_tab = QWidget()
+        _il = QVBoxLayout(self._image_tab)
+        _il.setContentsMargins(0, 0, 0, 0)
+        _il.addWidget(self.image_view, 1)
+        _row = QHBoxLayout()
+        _row.addWidget(self.btn_replace_img)
+        _row.addStretch(1)
+        _il.addLayout(_row)
 
         # The player (numpy + QtMultimedia) is built on first use, not at startup.
         self._audio = None
@@ -238,7 +253,7 @@ class PreviewPane(QTabWidget):
         self.addTab(self.chart_view, tr("Chart"))
         self.addTab(self.hex, tr("Hex"))
         self.addTab(self.text, tr("Text"))
-        self.addTab(self.image_view, tr("Image"))
+        self.addTab(self._image_tab, tr("Image"))
         self.addTab(self._audio_holder, tr("Audio"))
         # Space = play/pause while the Audio tab is showing (e.g. tab bar focused)
         self._sc_space = QShortcut(QKeySequence(Qt.Key_Space), self)
@@ -297,6 +312,7 @@ class PreviewPane(QTabWidget):
         # The viewer zooms/pans, so the full-size pixmap is kept.
         pix = None
         fmt = ""
+        self.btn_replace_img.setEnabled(tim2.is_tim2(data))
         if tim2.is_tim2(data):
             try:
                 info += "\n" + tim2.tim2_summary(data) + "\n"
@@ -493,6 +509,7 @@ class MainWindow(QMainWindow):
 
         # right: preview + (collapsible) extract / save options
         self.preview = PreviewPane()
+        self.preview.replace_image_requested.connect(self._replace_image)
 
         extract_box = QGroupBox(tr("Extract options"))
         eform = QFormLayout(extract_box)
@@ -1479,6 +1496,9 @@ class MainWindow(QMainWindow):
             if (gi0, fi0) in self.archive.replacements:
                 act_disc = menu.addAction(tr("Discard edit"))
                 act_disc.triggered.connect(lambda: self._unstage_file(gi0, fi0))
+            if self.archive.layout.files[fi0]["name"].lower().endswith(".nut"):
+                act_img = menu.addAction(tr("Replace image from file…"))
+                act_img.triggered.connect(lambda: self._replace_image(item))
             act_copy = menu.addAction(tr("Copy name"))
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(
                 self.archive.layout.files[fi0]["name"]))
@@ -1586,6 +1606,31 @@ class MainWindow(QMainWindow):
         if not src:
             return
         self._stage_file(item, Path(src).read_bytes())
+
+    def _replace_image(self, item: QStandardItem | None = None):
+        """Replace a TIM2 texture with a PNG/JPG; only stages the result."""
+        from taiko2x6.graphics import image_import
+        item = item or self._current_file_item()
+        if item is None or self.archive is None:
+            return
+        gi, fi = item.data(ROLE_GROUP), item.data(ROLE_FILE)
+        group = self.archive.layout.groups[gi]
+        entry = self.archive.layout.files[fi]
+        try:
+            template = self.archive.read_file(group, entry)
+        except Exception as exc:
+            QMessageBox.critical(self, tr("Read failed"), str(exc))
+            return
+        if not tim2.is_tim2(template):
+            QMessageBox.information(self, tr("Replace image from file"),
+                                    tr("This file is not a TIM2 texture."))
+            return
+        dlg = image_import.ImageReplaceDialog(template, entry["name"], self)
+        ok = dlg.exec() and dlg.result_bytes is not None
+        data = dlg.result_bytes
+        dlg.deleteLater()
+        if ok:
+            self._stage_file(item, data)
 
     def _current_file_item(self) -> QStandardItem | None:
         idxs = self.tree.selectionModel().selectedIndexes()
