@@ -458,6 +458,22 @@ def musicinfo_previews(raw: bytes) -> dict:
     return out
 
 
+def _apply_previews(m, previews: dict, sids=None) -> None:
+    """Write preview starts into the parsed T14 rows (in place)."""
+    pool = m.pool
+    for k, rec in enumerate(m.sec0):
+        if sids is None:
+            o = rec[0]
+            sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
+        else:
+            sid = sids[k]
+        st = previews.get(sid)
+        if st is None or st <= 0:
+            continue
+        rec[_PREVIEW_COL_T14] = st
+        rec[_PREVIEW_TAIL_T14:_PREVIEW_TAIL_T14 + 4] = [st, st + 3000, st, st + 5000]
+
+
 def set_musicinfo_previews(raw: bytes, previews: dict) -> bytes:
     """TK14 musicinfo.bin with {song id: preview start ms} written the way
     TK14's own rows hold it (column 12 and [s, s+3000, s, s+5000])."""
@@ -465,15 +481,7 @@ def set_musicinfo_previews(raw: bytes, previews: dict) -> bytes:
     if not previews:
         return raw
     m = MI.parse(raw)
-    pool = m.pool
-    for rec in m.sec0:
-        o = rec[0]
-        sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
-        st = previews.get(sid)
-        if st is None or st <= 0:
-            continue
-        rec[_PREVIEW_COL_T14] = st
-        rec[_PREVIEW_TAIL_T14:_PREVIEW_TAIL_T14 + 4] = [st, st + 3000, st, st + 5000]
+    _apply_previews(m, previews)
     return MI.serialize(m)
 
 
@@ -1398,13 +1406,12 @@ def precompute_db(target, plan, template_id=None) -> dict:
     # by genre and repoints the folder jump table (T14 only; no-op otherwise).
     from taiko2x6.songs.song_manager import MUSICINFO
     mi = res.get(MUSICINFO) or song_builder._read_named(target, "musicinfo.bin")
-    out = set_musicinfo_genres(mi, getattr(plan, "genre_fixes", None) or {},
-                               getattr(plan, "order", None) or {})
     # Added rows were cloned from the template, preview start included, so
     # every added song previewed from the template song's position.
     prev = dict(getattr(plan, "preview_fixes", None) or {})
     prev.update({it.sid: it.preview for it in plan.items if getattr(it, "preview", None)})
-    out = set_musicinfo_previews(out, prev)
+    out = set_musicinfo_fixes(mi, getattr(plan, "genre_fixes", None) or {},
+                              getattr(plan, "order", None) or {}, prev)
     if out != mi:
         res[MUSICINFO] = out
     star_fixes = getattr(plan, "star_fixes", None) or {}
@@ -1428,17 +1435,36 @@ def precompute_db(target, plan, template_id=None) -> dict:
     return res
 
 
+def _row_sids(m) -> list:
+    pool = m.pool
+    find = pool.find
+    return [pool[r[0]:find(b"\0", r[0])].decode("ascii", "replace")
+            for r in m.sec0]
+
+
 def set_musicinfo_genres(raw: bytes, genres: dict, order: dict = None) -> bytes:
     """Set column 2 (genre) of the musicinfo rows whose id is in `genres`."""
+    return set_musicinfo_fixes(raw, genres, order, None)
+
+
+def set_musicinfo_fixes(raw: bytes, genres: dict, order: dict = None,
+                        previews: dict = None) -> bytes:
+    """set_musicinfo_genres followed by set_musicinfo_previews, byte-identical
+    to chaining them, but parsed and serialized once (the preview columns are
+    independent of the regrouping, which only moves whole rows)."""
     from taiko2x6.bineditors import bineditor_musicinfo as MI
     m = MI.parse(raw)
-    pool = m.pool
-    for rec in m.sec0:
-        o = rec[0]
-        sid = pool[o:pool.find(b"\0", o)].decode("ascii", "replace")
-        if sid in genres:
-            rec[2] = int(genres[sid])
-    group_rows_by_genre(m, order)
+    if m.sec0 and (genres or previews or order):
+        sids = _row_sids(m)
+        if genres:
+            for rec, sid in zip(m.sec0, sids):
+                if sid in genres:
+                    rec[2] = int(genres[sid])
+        if previews:
+            _apply_previews(m, previews, sids)
+        group_rows_by_genre(m, order, sids)
+    else:
+        group_rows_by_genre(m, order)
     fix_genre_jumps(m)
     return MI.serialize(m)
 
@@ -1448,7 +1474,7 @@ SONG_GENRES = (0, 1, 2, 3, 4, 5, 6, CPOP)
 HEADER_GENRE = {7: 4, 9: 0, 10: 6, 11: 3, 12: 2, 13: 1, 14: 5, CPOP_HEADER: CPOP}
 
 
-def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
+def group_rows_by_genre(m, order_by_sid: dict = None, _sids=None) -> None:
     """Reorder T14 musicinfo rows so every genre is one contiguous block.
 
     After a folder is picked, song select walks the rows in file order (only
@@ -1467,23 +1493,28 @@ def group_rows_by_genre(m, order_by_sid: dict = None) -> None:
     if getattr(m, "variant", "") != "t14" or not m.sec0:
         return
     rows = m.sec0
-    headers = [i for i, r in enumerate(rows) if r[2] not in SONG_GENRES]
+    headers = []
     order = []
-    for r in rows:
+    members = {}                      # genre -> row indices in file order
+    for i, r in enumerate(rows):
         g = r[2]
-        if g in SONG_GENRES and g not in order:
-            order.append(g)
+        if g in SONG_GENRES:
+            if g not in members:
+                members[g] = []
+                order.append(g)
+            members[g].append(i)
+        else:
+            headers.append(i)
     key = {}
     if order_by_sid:
-        pool = m.pool
+        sids = _sids if _sids is not None else _row_sids(m)
         last = (1 << 30,)
-        for i, r in enumerate(rows):
-            sid = pool[r[0]:pool.find(bytes(1), r[0])].decode("ascii", "replace")
+        for i, sid in enumerate(sids):
             key[i] = order_by_sid.get(sid, last) + (i,)
 
     def block(g):
-        return sorted((i for i, r in enumerate(rows) if r[2] == g),
-                      key=lambda i: key.get(i, (i,)))
+        # genres absent from the rows (a header with no songs) are empty
+        return sorted(members.get(g, ()), key=lambda i: key.get(i, (i,)))
 
     # each folder header opens its own block (a divider card in the song
     # list), blocks in the headers' order; headers of unknown kind go first
@@ -1542,15 +1573,18 @@ def fix_genre_jumps(m) -> None:
     if not sec6:
         return
     rows = m.sec0
+    first = {}
+    for i, r in enumerate(rows):
+        first.setdefault(r[2], i)
     for genre, slot in GENRE_JUMP_SLOT.items():
         if slot >= len(sec6):
             continue
         cur = sec6[slot]
         if 0 <= cur < len(rows) and rows[cur][2] == genre:
             continue
-        first = next((i for i, r in enumerate(rows) if r[2] == genre), None)
-        if first is not None:
-            sec6[slot] = first
+        f = first.get(genre)
+        if f is not None:
+            sec6[slot] = f
 
 
 # Bump when resample_vag / resample_sinc / encode_vag output could change, so
