@@ -1391,3 +1391,30 @@ _SYNC_PREVIEW_ZH = {
     'Nudge applied: {v:g} ms': '已套用微調：{v:g} 毫秒',
 }
 ZH_TW.update(_SYNC_PREVIEW_ZH)
+_IMGIMPORT_ZH = {
+    'Replace image from file': '用檔案取代圖片',
+    'Replace image from file…': '用檔案取代圖片…',
+    'Stage a PNG / JPG as the new texture; Save applies it.': '把 PNG / JPG 暫存為新貼圖；按「儲存」才會套用。',
+    'This file is not a TIM2 texture.': '這個檔案不是 TIM2 貼圖。',
+    'Not a readable TIM2 texture ({e}).': '無法讀取的 TIM2 貼圖（{e}）。',
+    "This texture's palette is not 32-bit; it cannot be re-encoded.": '這張貼圖的調色盤不是 32 位元，無法重新編碼。',
+    '8-bit (256 colour) textures are not supported yet; only 4-bit (16 colour) textures can be replaced.': '尚不支援 8 位元（256 色）貼圖；只能取代 4 位元（16 色）貼圖。',
+    'This texture format (type {n}) is not supported; only 4-bit (16 colour) textures can be replaced.': '不支援這種貼圖格式（類型 {n}）；只能取代 4 位元（16 色）貼圖。',
+    'Target: {name} - {w} x {h} px, {bits}-bit, up to {c} colours (PS2 alpha).': '目標：{name} - {w} x {h} px，{bits} 位元，最多 {c} 色（PS2 透明度）。',
+    'PNG / JPG file (or drop one here)': 'PNG / JPG 檔案（或拖放到此）',
+    'Image file:': '圖片檔案：',
+    'Fit mode:': '縮放方式：',
+    'Stretch to the texture size': '拉伸到貼圖大小',
+    'Fit, pad with transparency': '等比縮放，空白補透明',
+    'Crop to fill': '裁切填滿',
+    'Dither': '抖色',
+    'Scatter the colour error; helps gradients and photos.': '分散色彩誤差；對漸層與照片有幫助。',
+    'Original': '原圖',
+    'Converted (what the game shows)': '轉換結果（遊戲中的樣子）',
+    'Choose an image': '選擇圖片',
+    'Cannot read this image: {e}': '無法讀取這張圖片：{e}',
+    'Conversion failed: {e}': '轉換失敗：{e}',
+    'Result: {w} x {h} px, {n} of {c} colours used, {b:,} bytes.': '結果：{w} x {h} px，使用 {n} / {c} 色，{b:,} 位元組。',
+    'Replace': '取代',
+}
+ZH_TW.update(_IMGIMPORT_ZH)
