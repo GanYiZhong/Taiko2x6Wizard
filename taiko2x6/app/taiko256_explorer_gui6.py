@@ -223,14 +223,13 @@ class PreviewPane(QTabWidget):
         self.image_view = imageview.ImageViewer()
         self.image_view.set_message(tr("(no image)"))
 
-        from taiko2x6.audio import audioplayer
-        self.audio = audioplayer.AudioPlayer()
+        # The player (numpy + QtMultimedia) is built on first use, not at startup.
+        self._audio = None
         self._audio_holder = QWidget()
-        _ah = QVBoxLayout(self._audio_holder)
+        self._audio_layout = QVBoxLayout(self._audio_holder)
         self._audio_msg = QLabel(tr("(no audio)"), alignment=Qt.AlignCenter)
-        _ah.addWidget(self._audio_msg)
-        _ah.addWidget(self.audio)
-        _ah.addStretch(1)
+        self._audio_layout.addWidget(self._audio_msg)
+        self._audio_layout.addStretch(1)
 
         self.addTab(self.info, tr("Info"))
         self.addTab(self.hex, tr("Hex"))
@@ -242,9 +241,21 @@ class PreviewPane(QTabWidget):
         self._sc_space.setContext(Qt.WidgetWithChildrenShortcut)
         self._sc_space.activated.connect(self._space_pressed)
 
+    @property
+    def audio(self):
+        if self._audio is None:
+            from taiko2x6.audio import audioplayer
+            self._audio = audioplayer.AudioPlayer()
+            self._audio_layout.insertWidget(1, self._audio)
+        return self._audio
+
+    def _audio_stop(self):
+        if self._audio is not None:
+            self._audio.stop()
+
     def _space_pressed(self):
-        if self.currentWidget() is self._audio_holder:
-            self.audio._toggle()
+        if self.currentWidget() is self._audio_holder and self._audio is not None:
+            self._audio._toggle()
 
     def show_file(self, name: str, group_name: str, entry: dict, data: bytes,
                   modified: bool):
@@ -309,10 +320,10 @@ class PreviewPane(QTabWidget):
         # audio tab — decode VAG streams (file 'vag' / interleaved-VAG header).
         # Decoding a whole song is slow, so it runs on a worker thread; the UI
         # stays responsive and the player loads when the decode finishes.
-        from taiko2x6.audio import audioplayer
+        from taiko2x6.audio import vagsniff
         self._vag_gen += 1                  # invalidate any in-flight decode
-        if name.lower() == "vag" or audioplayer.is_vag(data):
-            self.audio.stop()
+        if name.lower() == "vag" or vagsniff.is_vag(data):
+            self._audio_stop()
             gen = self._vag_gen
             nm = group_name.split(".")[-1] or name
             self._audio_msg.setText(tr("VAG audio — {n}  (decoding…)").format(n=name))
@@ -328,7 +339,7 @@ class PreviewPane(QTabWidget):
             self._vag_workers.append(w)
             w.start()
         else:
-            self.audio.stop()
+            self._audio_stop()
             self._audio_msg.setText(tr("(no audio for this file)"))
 
         self.info.setPlainText(info)
@@ -340,7 +351,7 @@ class PreviewPane(QTabWidget):
                       r.get("gen"), self._vag_gen)
             return
         if "error" in r:
-            self.audio.stop()
+            self._audio_stop()
             self._audio_msg.setText(tr("(VAG decode failed: {e})").format(e=r["error"]))
             return
         pcm, rate, ch = r["pcm"], r["rate"], r["ch"]
@@ -444,6 +455,9 @@ class MainWindow(QMainWindow):
         self.tree.fileDropped.connect(self._on_file_dropped)
         self.tree.setModel(self.proxy)
         self.tree.setSortingEnabled(False)
+        # items are never renamed in place (cheaper than clearing the editable
+        # flag on each of the 100k+ items)
+        self.tree.setEditTriggers(QTreeView.NoEditTriggers)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QTreeView.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -628,6 +642,9 @@ class MainWindow(QMainWindow):
                 tr("Discarded {n} staged edit(s).").format(n=len(keys)))
 
     def _find_file_item(self, gi: int, fi: int) -> QStandardItem | None:
+        it = getattr(self, "_file_items", {}).get((gi, fi))
+        if it is not None and it.model() is self.model:
+            return it
         stack = [self.model.item(r, 0) for r in range(self.model.rowCount())]
         while stack:
             it = stack.pop()
@@ -1071,9 +1088,26 @@ class MainWindow(QMainWindow):
         self._update_actions()
 
     def _populate_tree(self):
-        self.model.removeRows(0, self.model.rowCount())
-        if self.archive is None:
-            return
+        # Detach the sort/filter proxy and the view while the model is bulk
+        # edited: every insert would otherwise be re-filtered and re-laid-out.
+        self.tree.setUpdatesEnabled(False)
+        self.proxy.setSourceModel(None)
+        self._file_items = {}
+        try:
+            self.model.removeRows(0, self.model.rowCount())
+            if self.archive is not None:
+                self._fill_tree()
+        finally:
+            self.proxy.setSourceModel(self.model)
+            self.tree.setUpdatesEnabled(True)
+        if self.archive is not None:
+            self.tree.collapseAll()
+            for (gi, fi), data in self.archive.replacements.items():
+                it = self._find_file_item(gi, fi)
+                if it is not None:
+                    self._style_file_item(it, len(data))
+
+    def _fill_tree(self):
         root = self.model.invisibleRootItem()
         folder_icon = self.style().standardIcon(QStyle.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.SP_FileIcon)
@@ -1087,12 +1121,8 @@ class MainWindow(QMainWindow):
                 return nodes[parts]
             parent = root if len(parts) == 1 else get_folder(parts[:-1])
             item = QStandardItem(folder_icon, parts[-1])
-            item.setEditable(False)
             item.setData("folder", ROLE_KIND)
-            blanks = [QStandardItem() for _ in range(3)]
-            for b in blanks:
-                b.setEditable(False)
-            parent.appendRow([item] + blanks)
+            parent.appendRow([item, QStandardItem(), QStandardItem(), QStandardItem()])
             nodes[parts] = item
             return item
 
@@ -1102,25 +1132,18 @@ class MainWindow(QMainWindow):
             gnode.setIcon(group_icon)
             gnode.setData("group", ROLE_KIND)
             gnode.setData(group["index"], ROLE_GROUP)
+            comp = {2: "zlib", 6: "raw"}.get(group["compression"], str(group["compression"]))
+            gi = group["index"]
             for entry in self.archive.layout.files_for_group(group):
                 name_item = QStandardItem(file_icon, entry["name"])
-                name_item.setEditable(False)
                 name_item.setData("file", ROLE_KIND)
                 name_item.setData(group["index"], ROLE_GROUP)
                 name_item.setData(entry["index"], ROLE_FILE)
                 size_item = QStandardItem(f"{entry['size']:,}")
-                comp = {2: "zlib", 6: "raw"}.get(group["compression"], str(group["compression"]))
                 type_item = QStandardItem(comp)
                 off_item = QStandardItem(f"0x{entry['offset']:X}")
-                for it in (size_item, type_item, off_item):
-                    it.setEditable(False)
                 gnode.appendRow([name_item, size_item, type_item, off_item])
-
-        self.tree.collapseAll()
-        for (gi, fi), data in self.archive.replacements.items():
-            it = self._find_file_item(gi, fi)
-            if it is not None:
-                self._style_file_item(it, len(data))
+                self._file_items[(gi, entry["index"])] = name_item
 
     # -- selection / preview --------------------------------------------------
     def _src_index(self, proxy_index: QModelIndex) -> QModelIndex:
