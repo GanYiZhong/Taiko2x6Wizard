@@ -50,10 +50,12 @@ def test_target_formats():
     t = image_import.texture_target(make_nut(32, 16))
     assert t["ok"] and (t["width"], t["height"], t["bits"], t["colors"]) == (32, 16, 4, 16)
     t8 = image_import.texture_target(make_nut(16, 16, 5, 256))
-    assert not t8["ok"] and t8["bits"] == 8 and "8-bit" in t8["reason"]
+    assert t8["ok"] and t8["bits"] == 8 and t8["colors"] == 256
+    t9 = image_import.texture_target(make_nut(16, 16, 9, 0))
+    assert not t9["ok"] and "type 9" in t9["reason"]
     assert not image_import.texture_target(b"garbage")["ok"]
     with pytest.raises(ValueError):
-        image_import.convert(make_nut(16, 16, 5, 256), np.zeros((16, 16, 4), np.uint8),
+        image_import.convert(make_nut(16, 16, 9, 0), np.zeros((16, 16, 4), np.uint8),
                              "stretch", False)
 
 
@@ -95,13 +97,20 @@ def test_dialog_ok_gated_and_result(qapp, tmp_path):
         d.deleteLater()
 
 
-def test_dialog_blocks_8bit(qapp, tmp_path):
+def test_dialog_accepts_8bit(qapp, tmp_path):
     png = tmp_path / "a.png"
-    Image.new("RGBA", (16, 16), (1, 2, 3, 255)).save(png)
-    d = image_import.ImageReplaceDialog(make_nut(16, 16, 5, 256), "x.nut", path=str(png))
+    src = np.zeros((16, 16, 4), np.uint8)
+    for i in range(16):
+        src[i, :] = (i * 15, 255 - i * 10, i, 255)
+    Image.fromarray(src, "RGBA").save(png)
+    nut = make_nut(16, 16, 5, 256)
+    d = image_import.ImageReplaceDialog(nut, "x.nut", path=str(png))
     try:
-        assert not d.b_ok.isEnabled()
+        assert d.b_ok.isEnabled() and d.result_bytes is not None
         assert "8-bit" in d.lbl_target.text()
+        staged = d.result_bytes
+        assert staged[:0x40] == nut[:0x40] and len(staged) == len(nut)
+        assert (tim2.decode_tim2(staged)[0][2] == src).all()
     finally:
         d.close()
         d.deleteLater()

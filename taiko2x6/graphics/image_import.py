@@ -58,20 +58,29 @@ def texture_target(template: bytes) -> dict:
                 "reason": tr("Not a readable TIM2 texture ({e}).").format(e=exc)}
     t = {"ok": True, "width": lay["width"], "height": lay["height"],
          "colors": 0, "bits": 0, "reason": ""}
-    if lay["image_type"] == 4:
-        t["bits"], t["colors"] = 4, min(16, lay["clut_colors"])
-        if lay["clut_size"] != lay["clut_colors"] * 4:
+    itype, w, h = lay["image_type"], lay["width"], lay["height"]
+    direct = {1: (16, 32768), 2: (24, 1 << 24), 3: (32, 1 << 24)}
+    if itype in (4, 5):
+        t["bits"] = 4 if itype == 4 else 8
+        bpp = tim2._clut_bpp(lay["clut_type"], lay["clut_size"], lay["clut_colors"])
+        t["colors"] = min(16 if itype == 4 else 256, lay["clut_colors"])
+        if lay["clut_colors"] <= 0 or lay["clut_size"] < lay["clut_colors"] * bpp:
             t["ok"] = False
-            t["reason"] = tr("This texture's palette is not 32-bit; it cannot be re-encoded.")
-    elif lay["image_type"] == 5:
-        t["ok"], t["bits"], t["colors"] = False, 8, 256
-        t["reason"] = tr("8-bit (256 colour) textures are not supported yet; "
-                         "only 4-bit (16 colour) textures can be replaced.")
+            t["reason"] = tr("This texture's palette is incomplete; it cannot be re-encoded.")
+    elif itype in direct:
+        t["bits"], t["colors"] = direct[itype]
     else:
         t["ok"] = False
         t["reason"] = tr("This texture format (type {n}) is not supported; "
-                         "only 4-bit (16 colour) textures can be replaced.").format(
-                             n=lay["image_type"])
+                         "only 4/8-bit indexed and 16/24/32-bit textures can be "
+                         "replaced.").format(n=itype)
+    if t["ok"]:
+        need = {1: w * h * 2, 2: w * h * 3, 3: w * h * 4,
+                4: (w * h + 1) // 2, 5: w * h}[itype]
+        if lay["image_size"] < need or lay["img_start"] + lay["image_size"] > len(template):
+            t["ok"] = False
+            t["reason"] = tr("This texture's pixel data does not match its size; "
+                             "it cannot be re-encoded.")
     return t
 
 

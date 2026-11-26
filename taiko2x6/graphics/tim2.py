@@ -302,22 +302,101 @@ def encode_indexed4_into_template(template: bytes, indices, palette_rgba) -> byt
     return bytes(out)
 
 
-def encode_rgba_into_template(template: bytes, rgba, dither: bool = False) -> bytes:
-    """Import a free-colour RGBA image into a 4-bit TIM2 template.
+def _to_rgba5551(rgba):
+    """RGBA uint8 (N,4) -> uint16 RGBA5551 (inverse of ``_rgba5551``)."""
+    import numpy as np
+    p = np.asarray(rgba, dtype=np.uint32).reshape(-1, 4)
+    r = (p[:, 0] * 31 + 127) // 255
+    g = (p[:, 1] * 31 + 127) // 255
+    b = (p[:, 2] * 31 + 127) // 255
+    a = (p[:, 3] >= 128).astype(np.uint32)
+    return (r | (g << 5) | (b << 10) | (a << 15)).astype("<u2")
 
+
+def _clut_to_bytes(pal255, bpp: int) -> bytes:
+    """Palette (N,4) uint8 with 0..255 alpha -> on-disk CLUT bytes."""
+    import numpy as np
+    from taiko2x6.graphics import quantize
+    pal = np.asarray(pal255, dtype=np.uint8).reshape(-1, 4)
+    if bpp == 4:
+        return quantize.to_ps2_alpha(pal).tobytes()
+    if bpp == 3:
+        return pal[:, :3].tobytes()
+    return _to_rgba5551(pal).tobytes()
+
+
+def _splice(out: bytearray, start: int, size: int, blob: bytes, what: str) -> None:
+    if len(blob) > size:
+        raise ValueError(f"{what} needs {len(blob)} bytes but the template "
+                         f"holds {size}")
+    out[start:start + len(blob)] = blob
+
+
+def encode_rgba_into_template(template: bytes, rgba, dither: bool = False) -> bytes:
+    """Import a free-colour RGBA image into a TIM2 template.
+
+    Supported (the decoder's formats): 4-bit and 8-bit indexed with a 16/24/32-bit
+    CLUT (the 256-colour CSM1 palette is swizzled exactly as ``decode_tim2``
+    un-swizzles it), and direct 16-bit RGBA5551 / 24-bit RGB / 32-bit RGBA.
     The palette is generated per image (alpha-aware median-cut + k-means, see
-    ``quantize.quantize_rgba``); images with <= 16 colours round-trip exactly.
-    `rgba` must match the template's width/height. Alpha is converted to the
-    PS2 0..128 scale. The fixed-palette song-plate path does not use this."""
+    ``quantize.quantize_rgba``); images within the palette size round-trip
+    exactly. `rgba` must match the template's width/height. 32-bit alpha is
+    converted to the PS2 0..128 scale. Only the base-level pixel and CLUT bytes
+    are replaced; headers, sizes and any trailing (mipmap) data are kept. The
+    fixed-palette song-plate path does not use this."""
     import numpy as np
     from taiko2x6.graphics import quantize
     lay = first_picture_layout(template)
+    w, h, itype = lay["width"], lay["height"], lay["image_type"]
     arr = np.asarray(rgba, dtype=np.uint8)
-    if arr.shape != (lay["height"], lay["width"], 4):
+    if arr.shape != (h, w, 4):
         raise ValueError(f"image {arr.shape} does not match template "
-                         f"{lay['width']}x{lay['height']} RGBA")
-    idx, pal = quantize.quantize_rgba(arr, min(16, lay["clut_colors"]), dither=dither)
-    return encode_indexed4_into_template(template, idx, quantize.to_ps2_alpha(pal))
+                         f"{w}x{h} RGBA")
+    if itype not in (1, 2, 3, 4, 5):
+        raise ValueError(f"unsupported TIM2 image_type {itype}")
+    n = w * h
+    out = bytearray(template)
+
+    if itype in (1, 2, 3):
+        flat = arr.reshape(-1, 4)
+        if itype == 3:
+            px = quantize.to_ps2_alpha(flat).tobytes()
+        elif itype == 2:
+            px = flat[:, :3].tobytes()
+        else:
+            px = _to_rgba5551(flat).tobytes()
+        _splice(out, lay["img_start"], lay["image_size"], px, "pixel data")
+        return bytes(out)
+
+    # indexed
+    bpp = _clut_bpp(lay["clut_type"], lay["clut_size"], lay["clut_colors"])
+    colors = lay["clut_colors"]
+    if colors <= 0 or lay["clut_size"] < colors * bpp:
+        raise ValueError("template CLUT is smaller than its declared colour count")
+    limit = min(16 if itype == 4 else 256, colors)
+    if itype == 4 and bpp == 4 and lay["clut_size"] == colors * 4:
+        idx, pal = quantize.quantize_rgba(arr, limit, dither=dither)
+        return encode_indexed4_into_template(template, idx, quantize.to_ps2_alpha(pal))
+    src = arr
+    if bpp == 2:                      # 1-bit alpha: decide before quantising
+        src = arr.copy()
+        src[:, :, 3] = np.where(arr[:, :, 3] >= 128, 255, 0)
+        src[src[:, :, 3] == 0, :3] = 0
+    idx, pal = quantize.quantize_rgba(src, limit, dither=dither)
+    pal = np.vstack([pal, np.zeros((colors - pal.shape[0], 4), np.uint8)]) \
+        if pal.shape[0] < colors else pal[:colors]
+    if itype == 5 and colors >= 256 and not (lay["clut_type"] & 0x80):
+        pal = _unswizzle_clut256(pal)          # self-inverse: logical -> CSM1
+    flat_i = idx.reshape(-1)
+    if itype == 4:
+        if n % 2:
+            flat_i = np.append(flat_i, np.uint8(0))
+        px = ((flat_i[1::2] << 4) | (flat_i[0::2] & 0x0F)).astype(np.uint8).tobytes()
+    else:
+        px = flat_i.astype(np.uint8).tobytes()
+    _splice(out, lay["img_start"], lay["image_size"], px, "pixel data")
+    _splice(out, lay["clut_start"], lay["clut_size"], _clut_to_bytes(pal, bpp), "CLUT")
+    return bytes(out)
 
 
 def crop_transparent_bottom(data: bytes, row_align: int = 8):
