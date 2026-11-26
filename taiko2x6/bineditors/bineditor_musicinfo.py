@@ -572,7 +572,7 @@ class Editor(QDialog):
             f"counts={m.counts}   offsets={m.offs}   "
             f"songs={len(m.sec0)}  strings={len(m.strings)}  pool={len(m.pool)}B"
         )
-        info.setStyleSheet("color:#aaa;font-family:Consolas;")
+        info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")
         lay.addWidget(info)
 
         tabs = QTabWidget()

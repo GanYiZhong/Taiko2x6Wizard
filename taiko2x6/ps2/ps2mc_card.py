@@ -488,7 +488,7 @@ if _HAVE_QT:
             top.addWidget(b_open); top.addWidget(self.lbl, 1)
             lay.addLayout(top)
 
-            self.info = QLabel(""); self.info.setStyleSheet("color:#aaa;font-family:Consolas;")
+            self.info = QLabel(""); self.info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")
             lay.addWidget(self.info)
 
             self.lst = QListWidget()
@@ -506,7 +506,7 @@ if _HAVE_QT:
             btns.addStretch(1); btns.addWidget(b_close)
             lay.addLayout(btns)
 
-            self.status = QLabel(""); self.status.setStyleSheet("color:#999;")
+            self.status = QLabel(""); self.status.setStyleSheet("color:palette(mid);")
             lay.addWidget(self.status)
 
         def _open(self, path=""):

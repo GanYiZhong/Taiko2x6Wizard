@@ -477,7 +477,7 @@ if _HAVE_QT:
             lay.addLayout(btns)
 
             self.status = QLabel("pfsshell backend. Close any emulator holding the image first.")
-            self.status.setStyleSheet("color:#999;")
+            self.status.setStyleSheet("color:palette(mid);")
             lay.addWidget(self.status)
 
         def _open(self, path=""):

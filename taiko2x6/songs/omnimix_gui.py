@@ -180,7 +180,7 @@ class OmnimixDialog(QDialog):
             "TARGET does not already have are added (dedup by id; the target is "
             "the base). Charts, textures, audio and stars are copied as-is. "
             "⚠ Close PCSX2 first, and work on a COPY — the .img is written in place."))
-        note.setWordWrap(True); note.setStyleSheet("color:#666;")
+        note.setWordWrap(True); note.setStyleSheet("color:palette(mid);")
         lay.addWidget(note)
 
         # --- target ---
@@ -250,7 +250,7 @@ class OmnimixDialog(QDialog):
             self.ck_boot[key] = cb
         hint = QLabel(tr("Unticked ones are left as they are. Change them later "
                          "under Tools ▸ taiko executable patches."))
-        hint.setWordWrap(True); hint.setStyleSheet("color:#888;")
+        hint.setWordWrap(True); hint.setStyleSheet("color:palette(mid);")
         gl.addWidget(hint)
         lay.addWidget(gp)
 

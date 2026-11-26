@@ -123,7 +123,7 @@ class HddBrowserDialog(QDialog):
         lay.addLayout(btns)
 
         self.status = QLabel(tr("Open a PS2 HDD image to begin."))
-        self.status.setStyleSheet("color:#999;")
+        self.status.setStyleSheet("color:palette(mid);")
         lay.addWidget(self.status)
 
     # -- open / browse --------------------------------------------------------

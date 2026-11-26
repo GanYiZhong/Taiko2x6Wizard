@@ -107,7 +107,7 @@ class AudioPlayer(QWidget):
         self.b_vag.setEnabled(False)
         vol.addWidget(self.b_wav); vol.addWidget(self.b_vag)
         self.info = QLabel("")
-        self.info.setStyleSheet("color:#999;")
+        self.info.setStyleSheet("color:palette(mid);")
         vol.addWidget(self.info, 1)
         lay.addLayout(vol)
         self._src_vag = None

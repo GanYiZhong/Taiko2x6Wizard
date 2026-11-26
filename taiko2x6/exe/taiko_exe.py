@@ -1180,7 +1180,7 @@ else:
                 f'arrayA (experimental, up to {MAX_SONGS_BIG}). Close PCSX2 first — it '
                 f'locks the .img. Back up `taiko` before your first patch.')
             self.status.setWordWrap(True)
-            self.status.setStyleSheet('color:#999;')
+            self.status.setStyleSheet('color:palette(mid);')
             lay.addWidget(self.status)
 
         def _ceiling_changed(self, n):
@@ -1395,7 +1395,7 @@ else:
                    'Close PCSX2 first — it locks the .img. Back up `taiko` before '
                    'your first patch.').format(n=TIMER_DEFAULT))
             self.status.setWordWrap(True)
-            self.status.setStyleSheet('color:#999;')
+            self.status.setStyleSheet('color:palette(mid);')
             lay.addWidget(self.status)
 
         def _pick(self):
@@ -1562,12 +1562,12 @@ else:
                 top = QHBoxLayout()
                 top.addWidget(cb, 1)
                 st = QLabel('')
-                st.setStyleSheet('color:#999;')
+                st.setStyleSheet('color:palette(mid);')
                 top.addWidget(st)
                 bl.addLayout(top)
                 desc = QLabel(tr(self.TIPS.get(key, '')))
                 desc.setWordWrap(True)
-                desc.setStyleSheet('color:#999; margin-left:22px;')
+                desc.setStyleSheet('color:palette(mid); margin-left:22px;')
                 bl.addWidget(desc)
                 self.cbs[key] = cb
                 self.state_lbl[key] = st
@@ -1592,7 +1592,7 @@ else:
                 'want and Apply. Unticking a patch restores the stock code. Close '
                 'PCSX2 first — it locks the .img.'))
             self.status.setWordWrap(True)
-            self.status.setStyleSheet('color:#999;')
+            self.status.setStyleSheet('color:palette(mid);')
             lay.addWidget(self.status)
 
         def _pick(self):
