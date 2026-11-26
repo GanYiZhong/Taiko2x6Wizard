@@ -192,12 +192,14 @@ def test_plan_skips_ids_missing_from_song_list(monkeypatch):
     monkeypatch.setattr(O, "_ordered_ids", lambda arc: ids[arc.name])
     monkeypatch.setattr(song_builder, "_read_named", lambda arc, name: mi[arc.name])
     monkeypatch.setattr(O, "read_song_meta", lambda arc: {})
-    monkeypatch.setattr(O, "song_titles", lambda arc: {})
+    monkeypatch.setattr(O, "song_titles", lambda arc: {"b": "Bee"})
     monkeypatch.setattr(O, "_target_star_fixes", lambda *a, **k: {})
     monkeypatch.setattr(O, "_resolve_trusted", lambda *a, **k: ({}, {}, {}, {}, {}))
     spec = SimpleNamespace(label="src", list_path="l", data_path="d", fmt=2)
     plan = O.plan_merge(tgt, [spec])
     assert [it.sid for it in plan.items] == ["b"]
+    # read-only info for the plan view
+    assert plan.titles == {"b": "Bee"} and plan.play_estimated == set()
 
 
 def _with_preview(raw, recsz, starts):

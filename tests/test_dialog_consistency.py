@@ -86,6 +86,18 @@ def _tim2(w=48, h=64):
     return b"TIM2\x04\x00\x01\x00" + bytes(8) + bytes(head) + pixels + clut
 
 
+from types import SimpleNamespace as _NS  # noqa: E402
+
+
+def _plan():
+    return _NS(items=[_NS(sid="a1", source_label="A", stars=[1, 2, 3, -1], genre=0,
+                          play=[1], preview=5)],
+               skipped_dupes={"a2": ["B"]}, skipped_titles={"a3": ("A", "t", "a1")},
+               genre_fixes={"x": 1}, star_fixes={"x": [1, 2, 3, 4]},
+               play_fixes={"x": [1]}, preview_fixes={"x": 9},
+               titles={"a1": "Song"}, play_estimated=set())
+
+
 def _factories():
     """name -> zero-arg callable returning a built dialog."""
     from taiko2x6.app import jobs, settings_dialog
@@ -154,6 +166,7 @@ def _factories():
         "Ps2mcDialog": ps2mc_card.Ps2mcDialog,
         "VagGeneratorDialog": generators.VagGeneratorDialog,
         "OmnimixDialog": omnimix_gui.OmnimixDialog,
+        "PlanDetailsDialog": lambda: omnimix_gui.PlanDetailsDialog(_plan(), [_NS(label="A")]),
         "StarsDialog": lambda: song_builder.StarsDialog("sid", [1, 2, 3, 4]),
         "SongBuilderDialog": lambda: song_builder.SongBuilderDialog(object()),
         "SongManager": lambda: song_manager.SongManager(_musicinfo(), _tuning(), _streaminfo()),
@@ -161,7 +174,7 @@ def _factories():
     }
 
 
-NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'StarsDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog']
+NAME_LIST = ['CrashDialog', 'SettingsDialog', 'SoundBankDialog', 'AudioImportDialog', 'EnsoPartsEditor', 'FnameEditor', 'HdbdinfoEditor', 'LampEditor', 'MusicinfoEditor', 'RankEditor', 'StreaminfoEditor', 'TuningEditor', 'ChartConverterDialog', 'ShtValidatorDialog', 'TaikoExeDialog', 'TaikoTimerDialog', 'TaikoBootDialog', 'UsbKeyboardDialog', 'FlipbookPlayer', 'SongTexDialog', 'SongTextureDialog', 'SwgEditor', 'ApaMergeDialog', 'HddBrowserDialog', 'HddSongWizard', 'ImgSlimDialog', 'PackIsoDialog', 'PfsShellDialog', 'Ps2mcDialog', 'VagGeneratorDialog', 'OmnimixDialog', 'PlanDetailsDialog', 'StarsDialog', 'SongBuilderDialog', 'SongManager', 'SongReplacerDialog']
 
 
 @pytest.fixture(autouse=True)
