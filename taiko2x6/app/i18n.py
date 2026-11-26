@@ -1537,3 +1537,24 @@ _BATCH_ADD_ZH = {
 }
 for _k, _v in _BATCH_ADD_ZH.items():
     ZH_TW.setdefault(_k, _v)
+_SONG_ASSETS_ZH = {
+    'Song assets': '歌曲資產',
+    'Asset': '項目',
+    'Details': '詳細資料',
+    'Preview': '預覽',
+    'Show in explorer': '在瀏覽器中顯示',
+    'Select a song to see its charts, audio and textures.': '選擇一首歌即可查看其譜面、音訊與貼圖。',
+    'Assets of {id}: {n} found': '{id} 的資產：找到 {n} 項',
+    'Selected in the explorer: {n}': '已在瀏覽器中選取：{n}',
+    'Could not find that file in the explorer.': '在瀏覽器中找不到該檔案。',
+    'Preview: {n}': '預覽：{n}',
+    '{n} notes': '{n} 個音符',
+    '{n} stars': '{n} 星',
+    '(chart not readable)': '（無法讀取譜面）',
+    'Audio stream': '音訊串流',
+    'Texture: {t}': '貼圖：{t}',
+    'Show song in Song Manager': '在歌曲管理員中顯示此歌曲',
+    'Song {id} is not in the song database.': '歌曲 {id} 不在歌曲資料庫中。',
+}
+for _k, _v in _SONG_ASSETS_ZH.items():
+    ZH_TW.setdefault(_k, _v)
