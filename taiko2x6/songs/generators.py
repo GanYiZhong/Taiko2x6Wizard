@@ -12,6 +12,7 @@ taiko2x6.charts.chart_convert.
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from taiko2x6.app import appconfig
 from taiko2x6.audio import vagtool
+from taiko2x6.app import jobs
+from taiko2x6.app.i18n import tr
 
 logger = logging.getLogger("taiko.generators")
 
@@ -40,10 +43,19 @@ class _VagWorker(QThread):
     def __init__(self, path, rate):
         super().__init__()
         self.path, self.rate = path, rate
+        self._stop = False
+
+    def cancel(self):
+        self._stop = True
 
     def run(self):
         try:
-            self.done.emit(vagtool.convert_audio_file(self.path, self.rate))
+            # Nothing is written while encoding (the file is written afterwards
+            # by the dialog), so the encoder may stop at any block.
+            self.done.emit(vagtool.convert_audio_file(
+                self.path, self.rate, cancel=lambda: self._stop))
+        except vagtool.EncodeCancelled:
+            self.done.emit(("CANCELLED",))
         except Exception as exc:
             self.done.emit(("ERROR", exc, traceback.format_exc()))
 
@@ -120,15 +132,23 @@ class VagGeneratorDialog(QDialog):
         self.log.appendPlainText(f"encoding {Path(audio).name} @ {rate} Hz…")
         logger.info("vag encode %s @ %d Hz", audio, rate)
         self.b_go.setEnabled(False)
-        self._prog = QProgressDialog("Encoding VAG…", None, 0, 0, self)
+        self._prog = QProgressDialog(tr("Encoding VAG…"), tr("Cancel"), 0, 0, self)
         self._prog.setWindowModality(Qt.WindowModal); self._prog.setMinimumDuration(0)
+        self._prog.setAutoClose(False); self._prog.setAutoReset(False)
         self._prog.show()
+        self._elapsed = jobs.attach_elapsed(self._prog, tr("Encoding VAG…"))
+        self._t0 = time.monotonic()
         self._worker = _VagWorker(audio, rate)
+        self._prog.canceled.connect(self._worker.cancel)
         self._worker.done.connect(self._done)
         self._worker.start()
 
     def _done(self, res):
-        self._prog.close(); self.b_go.setEnabled(True)
+        self._elapsed.stop(); self._prog.close(); self.b_go.setEnabled(True)
+        self._worker.wait()
+        if isinstance(res, tuple) and res and res[0] == "CANCELLED":
+            self.log.appendPlainText(tr("Cancelled. Nothing was written."))
+            return
         if isinstance(res, tuple) and res and res[0] == "ERROR":
             self.log.appendPlainText("FAILED:\n" + res[2])
             QMessageBox.critical(self, "VAG failed", str(res[1])); return

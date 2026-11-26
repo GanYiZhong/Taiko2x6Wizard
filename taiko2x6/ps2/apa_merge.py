@@ -289,6 +289,8 @@ def merge_problem(sources, out) -> str:
 
 try:
     from PySide6.QtCore import Qt, QThread, Signal
+    import time as _time
+    from taiko2x6.app import jobs
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                                    QLabel, QCheckBox, QFormLayout, QGroupBox,
                                    QTreeWidget, QTreeWidgetItem, QMessageBox,
@@ -496,6 +498,7 @@ if QDialog is not None:
                                 "1" if self.ck_verify.isChecked() else "0")
             self.bar.setVisible(True)
             self.bar.setValue(0)
+            self._t0 = _time.monotonic()
             self._worker = _MergeWorker(list(self._sources), out,
                                         self.ck_verify.isChecked())
             self._worker.line.connect(self._say)
@@ -506,7 +509,8 @@ if QDialog is not None:
 
         def _on_progress(self, pct, text):
             self.bar.setValue(pct)
-            self.bar.setFormat("%s  (%%p%%)" % text)
+            self.bar.setFormat("%s  (%%p%%)  %s" % (text, tr("Elapsed {t}").format(
+                t=jobs.fmt_elapsed(_time.monotonic() - self._t0))))
 
         def _on_done(self, ok):
             self._worker.wait()

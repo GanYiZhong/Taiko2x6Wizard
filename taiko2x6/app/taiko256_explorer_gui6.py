@@ -36,6 +36,7 @@ from taiko2x6.graphics import tim2  # noqa: E402  TIM2 (.nut) image decoding
 from taiko2x6.app import appconfig  # noqa: E402  last-used-path memory (config.ini)
 from taiko2x6.app import i18n  # noqa: E402  zh-TW / English UI strings
 from taiko2x6.app import theme  # noqa: E402  light/dark look
+from taiko2x6.app import jobs  # noqa: E402  log file, crash dialog, elapsed time
 from taiko2x6.app.i18n import tr  # noqa: E402
 
 from PySide6.QtCore import (  # noqa: E402
@@ -772,6 +773,10 @@ class MainWindow(QMainWindow):
             tgroup.addAction(a)
             theme_menu.addAction(a)
             self.theme_actions[mode] = a
+        help_menu = self.menuBar().addMenu(tr("&Help"))
+        self.act_open_log = QAction(tr("Open log folder"), self)
+        self.act_open_log.triggered.connect(jobs.open_log_folder)
+        help_menu.addAction(self.act_open_log)
         self._update_actions()
 
     def _set_theme(self, mode: str):
@@ -1578,9 +1583,10 @@ class MainWindow(QMainWindow):
                      write_manifest: bool, convert_png: bool):
         prog = QProgressDialog(
             f"Extracting {len(groups)} groups using {workers} threads…",
-            "Cancel", 0, len(groups), self)
+            tr("Cancel"), 0, len(groups), self)
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
+        t_start = time.monotonic()
         # we close the dialog explicitly in on_done; don't let reaching the max
         # value auto-close/reset it and race the cancel signal.
         prog.setAutoClose(False)
@@ -1591,7 +1597,8 @@ class MainWindow(QMainWindow):
 
         def on_progress(done, total, name):
             prog.setValue(done)
-            prog.setLabelText(f"[{done}/{total}] {name}")
+            prog.setLabelText(f"[{done}/{total}] {name}  ("
+                              f"{jobs.fmt_elapsed(time.monotonic() - t_start)})")
 
         def on_done(g, f, pngs, elapsed, error, png_skipped):
             prog.close()
@@ -1709,6 +1716,9 @@ def _setup_logging(argv):
     log.addHandler(h)
     log.setLevel(level)
     log.propagate = False
+    # The file always records at least INFO (DEBUG when asked) so a problem
+    # report has something to attach.
+    jobs.setup_file_logging(log, level)
 
 
 def main():
@@ -1719,6 +1729,7 @@ def main():
     theme.configure_high_dpi()
     app = QApplication(argv)
     theme.apply(app)
+    jobs.install_excepthook()
     app.setApplicationName("Taiko SYSTEM256 Explorer")
     win = MainWindow()
     win.show()

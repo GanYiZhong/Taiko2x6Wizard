@@ -460,6 +460,8 @@ def pack_problem(orig, data, lst, out) -> str:
 
 try:
     from PySide6.QtCore import Qt, QThread, Signal
+    import time as _time
+    from taiko2x6.app import jobs
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton,
         QLabel, QProgressBar, QMessageBox, QGroupBox,
@@ -585,6 +587,7 @@ try:
             self.b_go.setEnabled(False)
             self.bar.setVisible(True)
             self.bar.setValue(0)
+            self._t0 = _time.monotonic()
             self._worker = _PackWorker(*paths)
             self._worker.prog.connect(self._on_prog)
             self._worker.done.connect(self._on_done)
@@ -594,7 +597,9 @@ try:
             self.bar.setMaximum(max(total, 1))
             self.bar.setValue(done)
             self.bar.setFormat(tr("writing {msg}… {done} / {total}").format(
-                msg=msg, done=human_size(done), total=human_size(total)))
+                msg=msg, done=human_size(done), total=human_size(total))
+                + "  " + tr("Elapsed {t}").format(
+                    t=jobs.fmt_elapsed(_time.monotonic() - self._t0)))
 
         def _on_done(self, r):
             self._worker.wait()

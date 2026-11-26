@@ -250,11 +250,19 @@ def write(song, out_dir, formats, players=("1p",), out_id=None, log=print,
     return written
 
 
-def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print):
+def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print,
+            cancel=None):
     """Load, group and write. Returns (songs, written paths, errors).
-    `out_id` makes every input one song with that id."""
+    `out_id` makes every input one song with that id.
+
+    `cancel()` is polled between input files and between songs (never inside
+    a song's write), so a cancel leaves only whole files behind: the songs
+    already written stay, the rest are not started."""
     pieces, errors = [], []
     for p in paths:
+        if cancel is not None and cancel():
+            log("cancelled")
+            return [], [], errors
         try:
             pc = load(p)
         except Exception as e:
@@ -267,6 +275,9 @@ def convert(paths, out_dir, formats, players=("1p",), out_id=None, log=print):
     songs = group(pieces, out_id=out_id, warn=lambda w: log("note " + w))
     written = []
     for s in songs:
+        if cancel is not None and cancel():
+            log("cancelled before %s" % s["id"])
+            break
         n0, e0 = len(written), len(errors)
         write(s, out_dir, formats, players=players, log=log,
               written=written, errors=errors, protect=paths)
@@ -294,6 +305,7 @@ except ImportError:                                            # headless / CLI
 
 if QDialog is not None:
     from taiko2x6.app.i18n import tr
+    from taiko2x6.app import jobs
 
     class _ConvertWorker(QThread):
         """Runs convert() off the UI thread (vgmstream and decrypting many
@@ -304,10 +316,15 @@ if QDialog is not None:
         def __init__(self, kwargs, parent=None):
             super().__init__(parent)
             self.kwargs = kwargs
+            self._stop = False
+
+        def cancel(self):
+            self._stop = True
 
         def run(self):
             try:
-                self.done.emit(convert(log=self.line.emit, **self.kwargs))
+                self.done.emit(convert(log=self.line.emit,
+                                       cancel=lambda: self._stop, **self.kwargs))
             except Exception as e:                  # report, never vanish
                 self.done.emit(e)
 
@@ -420,6 +437,15 @@ if QDialog is not None:
             self.b_go = QPushButton(tr("Convert"))
             self.b_go.setDefault(True)
             self.b_go.clicked.connect(self._run)
+            self.lb_elapsed = jobs.ElapsedLabel()
+            row.addWidget(self.lb_elapsed)
+            self.b_cancel = QPushButton(tr("Cancel"))
+            self.b_cancel.setAutoDefault(False)
+            self.b_cancel.setEnabled(False)
+            self.b_cancel.setToolTip(tr(
+                "Stops after the song being written; finished files stay."))
+            self.b_cancel.clicked.connect(self._cancel)
+            row.addWidget(self.b_cancel)
             row.addWidget(self.b_go)
             close = QPushButton(tr("Close"))
             close.setAutoDefault(False)
@@ -468,6 +494,7 @@ if QDialog is not None:
             ready = (n > 0 and bool(self.ed_out.text().strip())
                      and any(c.isChecked() for c in self.ck.values()))
             self.b_go.setEnabled(ready and not busy)
+            self.b_cancel.setEnabled(busy and not w._stop)
             self.b_go.setToolTip("" if ready else tr(
                 "Add files, tick a format and pick an output folder first."))
             self.b_clear.setEnabled(n > 0)
@@ -571,16 +598,26 @@ if QDialog is not None:
             self._worker.line.connect(self._say)
             self._worker.done.connect(self._finished)
             self._worker.start()
+            self.lb_elapsed.start()
             self._sync()
+
+        def _cancel(self):
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.cancel()
+                self._say(tr("Cancelling after the current song…"))
+                self._sync()
 
         def _finished(self, res):
             self._worker.wait()
+            self.lb_elapsed.stop()
             self._sync()
             if isinstance(res, Exception):
                 self._say("FAILED %r" % res)
                 QMessageBox.critical(self, self.windowTitle(), str(res))
                 return
             songs, written, errors = res
+            if self._worker._stop:
+                self._say(tr("Cancelled. Files already written were kept."))
             self._say(tr("done: {s} songs, {f} files written, {e} problems")
                       .format(s=len(songs), f=len(written), e=len(errors)))
             for er in errors:
