@@ -35,22 +35,7 @@ def human_size(n: int) -> str:
             return f"{v:.1f} {unit}"
 
 
-def is_locked_error(exc: BaseException) -> bool:
-    """True when `exc` looks like the image being held by another process
-    (PCSX2 keeps the .img open while it runs)."""
-    if isinstance(exc, PermissionError):
-        return True
-    if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (5, 32, 33):
-        return True
-    return "locked by another process" in str(exc).lower()
-
-
-def friendly_error(exc: BaseException) -> str:
-    """User-facing text for an exception; explains the PCSX2 lock case."""
-    if is_locked_error(exc):
-        return tr("The image is locked by another program (usually PCSX2). "
-                  "Close PCSX2 and try again.")
-    return str(exc)
+from taiko2x6.app.errors import friendly_error, is_locked_error  # noqa: E402,F401
 
 
 class _SizeItem(QTreeWidgetItem):

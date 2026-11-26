@@ -1088,21 +1088,7 @@ def restore_hdd(img: str | Path, pristine: str | Path,
     log('restored.')
 
 
-def friendly_error(exc) -> str:
-    """Message for a failed image job: a locked / read-only image (PCSX2 still
-    open) gets a plain explanation instead of the raw OS exception."""
-    from taiko2x6.app.i18n import tr
-    msg = str(exc)
-    low = msg.lower()
-    locked = (isinstance(exc, PermissionError)
-              or getattr(exc, 'winerror', None) in (5, 32, 33)
-              or 'being used by another process' in low
-              or 'permission denied' in low)
-    if locked:
-        return tr('The image is locked or read-only. Close PCSX2 (and any '
-                  'other program using the .img) and try again; the image '
-                  'was not changed.') + '\n\n' + msg
-    return msg
+from taiko2x6.app.errors import friendly_error  # noqa: E402  (re-exported)
 
 
 # --------------------------------------------------------------------------- #
