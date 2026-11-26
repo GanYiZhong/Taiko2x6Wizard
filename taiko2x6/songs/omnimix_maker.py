@@ -736,6 +736,10 @@ class MergePlan:
     play_fixes: dict = field(default_factory=dict)
     # target rows whose preview start is corrected: sid -> ms
     preview_fixes: dict = field(default_factory=dict)
+    # read-only info for the plan view: sid -> title (where known), and the
+    # ids whose gauge values were estimated from the chart, not taken from a source
+    titles: dict = field(default_factory=dict)
+    play_estimated: set = field(default_factory=set)
 
     @property
     def total_after(self) -> int:
@@ -875,7 +879,9 @@ def _plan_merge(target, sources, log, dedupe_titles) -> MergePlan:
         for sid, g in gfix.items():
             fixes.setdefault(sid, g)          # the C-POP refiling wins
         star_fixes.update(sfix)
-        _estimate_missing_play(target, opened, items, play_fixes, log)
+        play_estimated = set()
+        _estimate_missing_play(target, opened, items, play_fixes, log,
+                               estimated=play_estimated)
     finally:
         for _spec, src in opened:
             src.close()
@@ -886,7 +892,8 @@ def _plan_merge(target, sources, log, dedupe_titles) -> MergePlan:
     return MergePlan(target_ids=target_ids, items=items, skipped_dupes=skipped,
                      skipped_titles=skipped_titles, genre_fixes=fixes,
                      star_fixes=star_fixes, order=order, play_fixes=play_fixes,
-                     preview_fixes=preview_fixes)
+                     preview_fixes=preview_fixes, titles=dict(titles),
+                     play_estimated=play_estimated)
 
 
 def _valid_stars(st) -> bool:
@@ -1087,7 +1094,8 @@ def _resolve_trusted(target, opened, items, metas, log=lambda s: None, plays=Non
     return gfix, sfix, rank, pfix, vfix
 
 
-def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None):
+def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None,
+                           estimated=None):
     """Gauge estimates for the songs _resolve_trusted found no values for:
     added songs (from the chart in their own source) and target songs an
     earlier merge added that still carry the template row's gauge."""
@@ -1114,6 +1122,8 @@ def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None
         if any(est):
             it.play = est
             n_items += 1
+            if estimated is not None:
+                estimated.add(it.sid)
     n_tgt = 0
     try:
         tuning = _named(target, "tuning.bin")
@@ -1128,6 +1138,8 @@ def _estimate_missing_play(target, opened, items, play_fixes, log=lambda s: None
                 if any(est):
                     play_fixes[sid] = est
                     n_tgt += 1
+                    if estimated is not None:
+                        estimated.add(sid)
     except Exception as exc:
         log(f"gauge estimate for target songs skipped ({exc})")
     if n_items or n_tgt:

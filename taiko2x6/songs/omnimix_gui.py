@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QPushButton, QFileDialog, QCheckBox, QPlainTextEdit, QLabel, QMessageBox,
     QWidget, QListWidget, QListWidgetItem, QInputDialog, QGroupBox,
     QProgressBar, QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
+    QTabWidget,
 )
 
 from taiko2x6.app import appconfig
@@ -115,6 +116,191 @@ def input_error(target: str, is_img: bool, sources) -> str:
     if errs:
         return "\n".join(errs)
     return ""
+
+
+def genre_name(g) -> str:
+    return GENRE_NAMES.get(g) or tr("genre {g}").format(g=g)
+
+
+def _stars_text(st) -> str:
+    return "/".join("-" if (v is None or v < 0) else str(v) for v in (st or []))
+
+
+def _title(plan, sid) -> str:
+    return (getattr(plan, "titles", None) or {}).get(sid, "")
+
+
+def plan_song_rows(plan) -> list:
+    """One row per song the build adds: (id, title, source, folder, stars,
+    gauge, preview). Gauge says whether the values come from a source game,
+    were estimated from the chart, or stay the template's; preview likewise."""
+    est = getattr(plan, "play_estimated", None) or set()
+    rows = []
+    for it in plan.items:
+        if it.play:
+            gauge = tr("estimated from chart") if it.sid in est else tr("from source")
+        else:
+            gauge = tr("template default")
+        prev = tr("from source") if getattr(it, "preview", None) else tr("template default")
+        rows.append((it.sid, _title(plan, it.sid), it.source_label,
+                     genre_name(it.genre), _stars_text(it.stars), gauge, prev))
+    return rows
+
+
+def plan_skipped_rows(plan) -> list:
+    """(id, title, source, reason, duplicates) for every song left out."""
+    rows = []
+    for sid, labels in plan.skipped_dupes.items():
+        for lb in labels:
+            rows.append((sid, _title(plan, sid), lb,
+                         tr("same id already added"), sid))
+    for sid, (lb, title, other) in plan.skipped_titles.items():
+        rows.append((sid, title or _title(plan, sid), lb,
+                     tr("same title as another id"), other))
+    return rows
+
+
+def plan_fix_rows(plan) -> list:
+    """(id, title, what is corrected, new value) for songs already in the target."""
+    est = getattr(plan, "play_estimated", None) or set()
+    rows = []
+    for sid, g in plan.genre_fixes.items():
+        rows.append((sid, _title(plan, sid), tr("genre"), genre_name(g)))
+    for sid, st in plan.star_fixes.items():
+        rows.append((sid, _title(plan, sid), tr("stars"), _stars_text(st)))
+    for sid in plan.play_fixes:
+        rows.append((sid, _title(plan, sid), tr("gauge"),
+                     tr("estimated from chart") if sid in est else tr("from source")))
+    for sid, ms in plan.preview_fixes.items():
+        rows.append((sid, _title(plan, sid), tr("preview start"), f"{ms} ms"))
+    return rows
+
+
+def plan_csv_rows(plan) -> list:
+    """Whole plan as flat rows for a CSV (header first)."""
+    out = [[tr("Section"), tr("ID"), tr("Title"), tr("Source"), tr("Folder"),
+            tr("Stars"), tr("Gauge"), tr("Preview"), tr("Detail")]]
+    sec = tr("Added")
+    for sid, title, src, gen, st, ga, pv in plan_song_rows(plan):
+        out.append([sec, sid, title, src, gen, st, ga, pv, ""])
+    sec = tr("Skipped")
+    for sid, title, src, why, other in plan_skipped_rows(plan):
+        out.append([sec, sid, title, src, "", "", "", "", f"{why}: {other}"])
+    sec = tr("Corrected")
+    for sid, title, what, val in plan_fix_rows(plan):
+        out.append([sec, sid, title, "", "", "", "", "", f"{what}: {val}"])
+    return out
+
+
+def write_plan_csv(plan, path) -> int:
+    import csv
+    rows = plan_csv_rows(plan)
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerows(rows)
+    return len(rows) - 1
+
+
+class PlanDetailsDialog(QDialog):
+    """Read-only view of what the build will do: added songs, skipped ones,
+    and corrections to songs already in the target."""
+
+    def __init__(self, plan, specs=(), parent=None, source=""):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Omnimix plan details"))
+        self.resize(900, 560)
+        self._plan = plan
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.lbl_filter = QLabel(tr("filter:"))
+        self.ed_filter = QLineEdit()
+        self.ed_filter.setPlaceholderText(tr("id, title, folder…"))
+        self.lbl_filter.setBuddy(self.ed_filter)
+        self.lbl_source = QLabel(tr("source:"))
+        self.cb_source = QComboBox()
+        self.cb_source.addItem(tr("(all sources)"), "")
+        labels = [getattr(sp, "label", sp) for sp in specs]
+        for it in plan.items:
+            if it.source_label not in labels:
+                labels.append(it.source_label)
+        for lb in labels:
+            self.cb_source.addItem(lb, lb)
+        self.lbl_source.setBuddy(self.cb_source)
+        top.addWidget(self.lbl_filter); top.addWidget(self.ed_filter, 1)
+        top.addWidget(self.lbl_source); top.addWidget(self.cb_source)
+        lay.addLayout(top)
+
+        self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(False)
+        self._specs = [
+            (plan_song_rows(plan), 2, tr("Songs added"),
+             [tr("ID"), tr("Title"), tr("Source"), tr("Folder"), tr("Stars"),
+              tr("Gauge"), tr("Preview")]),
+            (plan_skipped_rows(plan), 2, tr("Skipped"),
+             [tr("ID"), tr("Title"), tr("Source"), tr("Reason"), tr("Duplicates")]),
+            (plan_fix_rows(plan), None, tr("Corrections to target songs"),
+             [tr("ID"), tr("Title"), tr("Corrected"), tr("New value")]),
+        ]
+        self.tables = []
+        for rows, _src, name, heads in self._specs:
+            t = QTableWidget(len(rows), len(heads))
+            t.setHorizontalHeaderLabels(heads)
+            t.setEditTriggers(QTableWidget.NoEditTriggers)
+            t.setSelectionBehavior(QTableWidget.SelectRows)
+            t.horizontalHeader().setStretchLastSection(True)
+            t.verticalHeader().setVisible(False)
+            for r, row in enumerate(rows):
+                for c, v in enumerate(row):
+                    t.setItem(r, c, QTableWidgetItem(str(v)))
+            t.setSortingEnabled(True)
+            t.resizeColumnsToContents()
+            self.tables.append(t)
+            self.tabs.addTab(t, name)
+        lay.addWidget(self.tabs, 1)
+        self.lbl_count = QLabel("")
+        lay.addWidget(self.lbl_count)
+
+        btns = QHBoxLayout(); btns.addStretch(1)
+        b_csv = self.b_csv = QPushButton(tr("Export CSV…"))
+        b_csv.clicked.connect(self._export)
+        b_close = self.b_close = QPushButton(tr("Close"))
+        b_close.clicked.connect(self.accept)
+        btns.addWidget(b_csv); btns.addWidget(b_close)
+        lay.addLayout(btns)
+
+        self.ed_filter.textChanged.connect(self._apply)
+        self.cb_source.currentIndexChanged.connect(self._apply)
+        i = self.cb_source.findData(source) if source else 0
+        self.cb_source.setCurrentIndex(max(i, 0))
+        self._apply()
+        polish(self, primary=b_close)
+
+    def _apply(self, *_):
+        needle = self.ed_filter.text().strip().casefold()
+        src = self.cb_source.currentData() or ""
+        parts = []
+        for t, (rows, scol, name, _h) in zip(self.tables, self._specs):
+            shown = 0
+            for r in range(t.rowCount()):
+                cells = [t.item(r, c).text() for c in range(t.columnCount())]
+                ok = (not src or scol is None or cells[scol] == src) and \
+                    (not needle or any(needle in v.casefold() for v in cells))
+                t.setRowHidden(r, not ok)
+                shown += ok
+            parts.append(f"{name}: {shown}/{len(rows)}")
+        self.lbl_count.setText("   ".join(parts))
+
+    def _export(self):
+        path = appconfig.pick_save(self, "omnimixplan", tr("Export plan as CSV"),
+                                   "omnimix_plan.csv", "CSV (*.csv);;All (*)")
+        if not path:
+            return
+        try:
+            n = write_plan_csv(self._plan, path)
+        except OSError as exc:
+            QMessageBox.critical(self, tr("Export plan as CSV"), str(exc))
+            return
+        QMessageBox.information(self, tr("Export plan as CSV"),
+                                tr("Wrote {n} rows to {path}.").format(n=n, path=path))
 
 
 def fmt_size(n: int) -> str:
@@ -263,6 +449,8 @@ class OmnimixDialog(QDialog):
         self.tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl.setMaximumHeight(150)
+        self.tbl.setToolTip(tr("Double-click a source to see its songs in the plan details."))
+        self.tbl.itemDoubleClicked.connect(self._open_details)
         self.tbl.setVisible(False)
         self.lbl_size = QLabel(""); self.lbl_size.setWordWrap(True)
         self.lbl_size.setVisible(False)
@@ -291,6 +479,10 @@ class OmnimixDialog(QDialog):
         self.b_prev = QPushButton(tr("Preview plan")); self.b_prev.clicked.connect(self._preview)
         self.b_build = QPushButton(tr("Build Omnimix")); self.b_build.clicked.connect(self._build)
         self.b_build.setEnabled(False)
+        self.b_details = QPushButton(tr("Plan details…"))
+        self.b_details.setToolTip(tr("Every song the build adds, skips or corrects, with its source."))
+        self.b_details.clicked.connect(self._open_details)
+        self.b_details.setEnabled(False)
         self.b_repair = QPushButton(tr("Repair existing Omnimix"))
         self.b_repair.setToolTip(tr(
             "Brings an Omnimix built with an older version up to date without "
@@ -300,6 +492,7 @@ class OmnimixDialog(QDialog):
         self.b_repair.clicked.connect(self._repair)
         b_close = QPushButton(tr("Close")); b_close.clicked.connect(self.reject)
         btns.addWidget(self.b_repair)
+        btns.addWidget(self.b_details)
         btns.addWidget(self.b_prev); btns.addWidget(self.b_build); btns.addWidget(b_close)
         lay.addLayout(btns)
         self._sync_target()
@@ -423,7 +616,7 @@ class OmnimixDialog(QDialog):
 
     def _invalidate_plan(self):
         self._plan = None; self._db = None
-        self.b_build.setEnabled(False)
+        self.b_build.setEnabled(False); self.b_details.setEnabled(False)
         self.tbl.setVisible(False); self.lbl_size.setVisible(False)
 
     def _target_edited(self, _text=""):
@@ -550,9 +743,20 @@ class OmnimixDialog(QDialog):
         self.log.appendPlainText("\n" + msg)
         self._show_summary(p, specs, td)
         self.b_build.setEnabled(len(p.items) > 0)
+        self.b_details.setEnabled(True)
         self._end(tr("plan ready"))
         QMessageBox.information(self, tr("Plan ready"), msg
                                 + "\n\n" + tr("Click “Build Omnimix” to assemble."))
+
+    def _open_details(self, *_):
+        if not self._plan:
+            return
+        row = self.tbl.currentRow()
+        it = self.tbl.item(row, 0) if row >= 0 and self.tbl.isVisible() else None
+        d = PlanDetailsDialog(self._plan, getattr(self, "_specs", ()), self,
+                              source=it.text() if it else "")
+        d.exec()
+        d.deleteLater()
 
     def _show_summary(self, plan, specs, data_path):
         rows = source_summary(plan, specs)

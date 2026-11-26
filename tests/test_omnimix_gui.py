@@ -45,3 +45,50 @@ def test_settings_round_trip_and_reorder(tmp_path, monkeypatch):
     assert [s["label"] for s in e._sources] == ["B", "A"]
     assert e.cb_audio.currentIndex() == 1
     assert e.lst.count() == 2 and not e.b_build.isEnabled()
+
+
+def _plan():
+    return NS(items=[NS(sid="a1", source_label="A", stars=[1, 2, 3, -1], genre=0,
+                        play=[1], preview=5),
+                     NS(sid="a2", source_label="B", stars=[4, 5, 6, 7], genre=99,
+                        play=[1], preview=None),
+                     NS(sid="a3", source_label="B", stars=[1, 1, 1, 1], genre=1,
+                        play=None, preview=None)],
+              skipped_dupes={"d1": ["B"]}, skipped_titles={"t1": ("B", "Same", "a1")},
+              genre_fixes={"x": 1}, star_fixes={"x": [1, 2, 3, 4]},
+              play_fixes={"x": [1]}, preview_fixes={"x": 9},
+              titles={"a1": "Song One"}, play_estimated={"a2", "x"})
+
+
+def test_plan_rows_and_csv(tmp_path):
+    from taiko2x6.app import i18n
+    i18n._lang = "en"
+    p = _plan()
+    rows = G.plan_song_rows(p)
+    assert rows[0][:5] == ("a1", "Song One", "A", "J-POP", "1/2/3/-")
+    assert rows[0][5] == "from source" and rows[0][6] == "from source"
+    assert rows[1][5] == "estimated from chart" and rows[1][6] == "template default"
+    assert rows[2][5] == "template default"
+    assert G.plan_skipped_rows(p) == [
+        ("d1", "", "B", "same id already added", "d1"),
+        ("t1", "Same", "B", "same title as another id", "a1")]
+    assert [r[2] for r in G.plan_fix_rows(p)] == ["genre", "stars", "gauge", "preview start"]
+    out = tmp_path / "p.csv"
+    assert G.write_plan_csv(p, out) == 3 + 2 + 4
+    assert len(out.read_text(encoding="utf-8-sig").splitlines()) == 10
+
+
+def test_plan_details_dialog_filters():
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    d = G.PlanDetailsDialog(_plan(), [NS(label="A"), NS(label="B")], source="B")
+    try:
+        t = d.tables[0]
+        vis = lambda: [r for r in range(t.rowCount()) if not t.isRowHidden(r)]
+        assert len(vis()) == 2
+        d.ed_filter.setText("a3")
+        assert len(vis()) == 1
+        d.cb_source.setCurrentIndex(0); d.ed_filter.setText("")
+        assert len(vis()) == 3
+    finally:
+        d.close(); d.deleteLater()
