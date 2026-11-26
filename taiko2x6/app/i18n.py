@@ -1281,3 +1281,40 @@ _GUIDE_ZH: dict[str, str] = {
         '請維持 0。音樂會自動依 TJA 的 BPM 與 OFFSET 同步，所以請提供原始的 .tja 與 .ogg，不要用已被其他工具處理過的檔案。只有當歌曲感覺略有偏差時才微調：正值讓音樂延後，負值讓音樂提前。',
 }
 ZH_TW.update(_GUIDE_ZH)
+
+# --- drag and drop onto the main window (taiko2x6/app/drop_router.py) ---
+ZH_TW.update({
+    'Open with…': '開啟方式…',
+    'What should be done with {name}?': '要如何處理 {name}？',
+    'Open': '開啟',
+    'Open archive': '開啟封存檔',
+    'Browse, preview and replace files of DATA.000 + list.bin.': '瀏覽、預覽並取代 DATA.000 + list.bin 內的檔案。',
+    'Use as T14LOAD key file': '設為 T14LOAD 金鑰檔',
+    'Save it in Settings for the patch tools.': '儲存到設定，供修補工具使用。',
+    'HDD browser': 'HDD 瀏覽器',
+    'Browse the image and extract or replace DATA.000 / list.bin.': '瀏覽映像，並擷取或取代 DATA.000 / list.bin。',
+    'HDD Song Wizard': 'HDD 歌曲精靈',
+    'Add or replace a song directly in this image.': '直接在此映像中新增或取代歌曲。',
+    'Omnimix Maker (as target)': 'Omnimix 製作器（作為目標）',
+    'Merge songs from other images into this one.': '把其他映像的歌曲合併進此映像。',
+    'USB keyboard patch': 'USB 鍵盤修補',
+    'Play Taiko 14 with a USB keyboard; this image is the target.': '用 USB 鍵盤遊玩太鼓 14；此映像為目標。',
+    'Slim image': '縮小映像',
+    'Make this image smaller.': '讓此映像變小。',
+    'Omnimix Maker (as source)': 'Omnimix 製作器（作為來源）',
+    'Take songs from this game ISO.': '從這個遊戲 ISO 取得歌曲。',
+    'Pack to ISO': '封裝成 ISO',
+    'Inject the open DATA.000 + list.bin into this ISO.': '把目前開啟的 DATA.000 + list.bin 寫入此 ISO。',
+    'Memory card browser': '記憶卡瀏覽器',
+    'Browse the memory-card image and its saves.': '瀏覽記憶卡映像與其存檔。',
+    'Use this dongle card as the stock module source.': '以此加密狗記憶卡作為原版模組來源。',
+    'Chart converter': '譜面轉換器',
+    'Convert TJA / sht / Gen3 .bin charts (files are prefilled).': '轉換 TJA / sht / Gen3 .bin 譜面（已預先填入檔案）。',
+    'Custom Song Builder': '自製歌曲建置器',
+    'Build a song into the open archive from a TJA and audio.': '用 TJA 與音訊在目前開啟的封存檔中建置歌曲。',
+    'Drop': '拖放',
+    '{n} items': '{n} 個項目',
+    'Taiko2x6Wizard does not know what to do with {name}.\n\nDrop a folder with DATA.000 + list.bin, a PS2 HDD image or game ISO, a memory-card image, T14LOAD.bin, or charts (.tja / .sht / Gen3 .bin).':
+        'Taiko2x6Wizard 不知道要如何處理 {name}。\n\n請拖入含 DATA.000 + list.bin 的資料夾、PS2 HDD 映像或遊戲 ISO、記憶卡映像、T14LOAD.bin，或譜面（.tja / .sht / Gen3 .bin）。',
+    'T14LOAD key file set to {p}.': 'T14LOAD 金鑰檔已設為 {p}。',
+})

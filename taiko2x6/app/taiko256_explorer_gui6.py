@@ -438,6 +438,8 @@ class MainWindow(QMainWindow):
         self.resize(1180, 720)
         self.archive: Archive | None = None
         self.worker: ExtractWorker | None = None
+        self._img_override = ""             # HDD image from a drop, for one tool
+        self.setAcceptDrops(True)
 
         self._build_ui()
         self._build_actions()
@@ -805,6 +807,112 @@ class MainWindow(QMainWindow):
         self._start_buttons = page.cards
         self._refresh_setup_box()
         return page
+
+    # -- drag and drop onto the window -----------------------------------------
+    @staticmethod
+    def _dropped_paths(event) -> list[str]:
+        md = event.mimeData()
+        if not md.hasUrls():
+            return []
+        return [u.toLocalFile() for u in md.urls()
+                if u.isLocalFile() and Path(u.toLocalFile()).exists()]
+
+    def dragEnterEvent(self, event):
+        if self._dropped_paths(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    dragMoveEvent = dragEnterEvent
+
+    def dropEvent(self, event):
+        paths = self._dropped_paths(event)
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.route_drop(paths)
+
+    def route_drop(self, paths):
+        """Send dropped files / folders to the obvious tool (or ask which)."""
+        from taiko2x6.app import drop_router
+        kind, paths = drop_router.classify_all(paths)
+        opts = drop_router.candidates(kind, has_archive=self.archive is not None)
+        if not opts:
+            QMessageBox.information(
+                self, tr("Drop"),
+                tr("Taiko2x6Wizard does not know what to do with {name}.\n\n"
+                   "Drop a folder with DATA.000 + list.bin, a PS2 HDD image or "
+                   "game ISO, a memory-card image, T14LOAD.bin, or charts "
+                   "(.tja / .sht / Gen3 .bin).").format(name=Path(paths[0]).name))
+            return
+        key = opts[0][0]
+        if len(opts) > 1:
+            label = Path(paths[0]).name if len(paths) == 1 \
+                else tr("{n} items").format(n=len(paths))
+            dlg = drop_router.OpenWithDialog(label, opts, self)
+            ok = bool(dlg.exec())
+            key = dlg.chosen
+            dlg.deleteLater()
+            if not ok or not key:
+                return
+        getattr(self, "_drop_" + key)(paths)
+
+    def _drop_archive(self, paths):
+        p = Path(paths[0])
+        self.open_folder(p if p.is_dir() else p.parent)
+
+    def _drop_t14load(self, paths):
+        appconfig.remember("t14load", paths[0])
+        self._refresh_setup_box()
+        self.statusBar().showMessage(
+            tr("T14LOAD key file set to {p}.").format(p=paths[0]))
+
+    def _with_img(self, path, fn):
+        self._img_override = str(path)
+        try:
+            fn()
+        finally:
+            self._img_override = ""
+
+    def _drop_hdd_browser(self, paths):
+        appconfig.remember("hddimg", paths[0])
+        self._with_img(paths[0], self.open_hdd_browser)
+
+    def _drop_hdd_wizard(self, paths):
+        appconfig.remember("hddimg", paths[0])
+        self._with_img(paths[0], self.open_hdd_wizard)
+
+    def _drop_omnimix_target(self, paths):
+        self._with_img(paths[0], self.open_omnimix)
+
+    def _drop_usb_keyboard(self, paths):
+        appconfig.remember("hddimg", paths[0])
+        self._with_img(paths[0], self.open_usb_keyboard)
+
+    def _drop_slim(self, paths):
+        self._with_img(paths[0], self.open_img_slim)
+
+    def _drop_omnimix_source(self, paths):
+        self.open_omnimix(source_iso=paths[0])
+
+    def _drop_pack_iso(self, paths):
+        self.open_pack_iso(iso=paths[0])
+
+    def _drop_ps2mc(self, paths):
+        appconfig.remember("ps2mc", paths[0])
+        from taiko2x6.ps2 import ps2mc_card
+        ps2mc_card.Ps2mcDialog(self, default_img=paths[0]).exec()
+
+    def _drop_usb_keyboard_card(self, paths):
+        appconfig.remember("ps2mc", paths[0])
+        self.open_usb_keyboard()
+
+    def _drop_chart_convert(self, paths):
+        self.open_chart_converter(paths)
+
+    def _drop_song_builder(self, paths):
+        self.open_song_builder()
 
     def _recent_entries(self) -> list[tuple[str, str]]:
         out = [("folder", p) for p in self._recent_folders()]
@@ -1538,6 +1646,8 @@ class MainWindow(QMainWindow):
 
     def _recent_hdd_img(self) -> str:
         """Last successfully opened HDD .img path (persisted via QSettings), or ""."""
+        if self._img_override:
+            return self._img_override
         guess = QSettings("TaikoTools", "SYSTEM256Explorer").value("recent_hdd_img", "")
         guess = str(guess) if guess else ""
         return guess if guess and Path(guess).exists() else ""
@@ -1631,24 +1741,26 @@ class MainWindow(QMainWindow):
         dlg = apa_merge.ApaMergeDialog(self)
         dlg.exec()
 
-    def open_omnimix(self):
+    def open_omnimix(self, source_iso=""):
         try:
             from taiko2x6.songs import omnimix_gui
         except Exception as exc:
             QMessageBox.warning(self, tr("Omnimix Maker"), f"Could not load: {exc}")
             return
         dlg = omnimix_gui.OmnimixDialog(self, default_img=self._recent_hdd_img() or "")
+        if source_iso:
+            dlg.add_source_iso(source_iso)
         dlg.exec()
 
-    def open_pack_iso(self):
+    def open_pack_iso(self, iso=""):
         if not self.archive:
             return
         from taiko2x6.ps2 import iso_packer
         # guess the original ISO next to the data dir
         data_dir = Path(self.archive.data_path).resolve().parent
-        guess = ""
-        for cand in (data_dir.parent / "Taiko No Tatsujin 8.iso",
-                     data_dir / "Taiko No Tatsujin 8.iso"):
+        guess = iso
+        for cand in (() if iso else (data_dir.parent / "Taiko No Tatsujin 8.iso",
+                     data_dir / "Taiko No Tatsujin 8.iso")):
             if cand.exists():
                 guess = str(cand)
                 break
@@ -1683,12 +1795,29 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.save_archive()
 
-    def open_chart_converter(self):
+    def open_chart_converter(self, paths=()):
         from taiko2x6.charts import chart_convert
         if chart_convert.QDialog is None:
             QMessageBox.warning(self, "Chart converter", tr("PySide6 is required."))
             return
-        chart_convert.ChartConverterDialog(self).exec()
+        dlg = chart_convert.ChartConverterDialog(self)
+        if paths:
+            dlg.add_paths(self._chart_files(paths))
+        dlg.exec()
+
+    @staticmethod
+    def _chart_files(paths) -> list[str]:
+        """Dropped chart files, with folders expanded to the charts inside."""
+        from taiko2x6.charts import chart_convert
+        out: list[str] = []
+        for s in paths:
+            p = Path(s)
+            if p.is_dir():
+                out += [str(x) for x in sorted(p.rglob("*"))
+                        if x.is_file() and chart_convert._quick_kind(x)]
+            else:
+                out.append(str(p))
+        return out
 
     def open_vag_generator(self):
         from taiko2x6.songs import generators
