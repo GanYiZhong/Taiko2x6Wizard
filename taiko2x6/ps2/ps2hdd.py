@@ -1572,11 +1572,53 @@ class Ps2Hdd:
         else:
             # in-place / shrink: rewrite data, then update size + timestamps on
             # the root inode (kept as the single committing write).
-            self._write_payload(part, scale, zs, extents, data, capacity)
+            self._only_changed = True
+            try:
+                self._write_payload(part, scale, zs, extents, data, capacity)
+            finally:
+                self._only_changed = False
             self._update_root_inode(part, scale, root_bi, len(data))
         return len(data)
 
     _WRITE_RUN_MAX = 8 * 1024 * 1024
+
+    _DIFF_CHUNK = 1024 * 1024
+
+    def _write_changed(self, lba, chunk):
+        """Write `chunk` at `lba` but only the sectors whose bytes differ from
+        what is on the device (compared in 1 MiB chunks, then per sector inside
+        a differing chunk; adjacent differing sectors are one write).  Sectors
+        past the end of the image are always written so the file still grows
+        exactly as a full write would.  Returns bytes written."""
+        dev = self.dev
+        mv = memoryview(chunk)
+        total = len(mv)
+        written = 0
+        step = self._DIFF_CHUNK
+        for co in range(0, total, step):
+            ce = min(co + step, total)
+            cl = lba + co // SECTOR
+            cur = dev.read_sectors(cl, (ce - co) // SECTOR)
+            if (cl + (ce - co) // SECTOR) * SECTOR <= dev.size and cur == mv[co:ce]:
+                continue
+            start = None
+            for so in range(co, ce, SECTOR):
+                sl = lba + so // SECTOR
+                same = (cur[so - co:so - co + SECTOR] == mv[so:so + SECTOR]
+                        and (sl + 1) * SECTOR <= dev.size)
+                if same:
+                    if start is not None:
+                        dev.write_sectors(lba + start // SECTOR, bytes(mv[start:so]))
+                        written += so - start
+                        start = None
+                elif start is None:
+                    start = so
+            if start is not None:
+                dev.write_sectors(lba + start // SECTOR, bytes(mv[start:ce]))
+                written += ce - start
+        return written
+
+    _only_changed = False   # set by pfs_write's in-place branch only
 
     def _write_payload(self, part, scale, zs, extents, data, capacity):
         """Write `data` (zero-padded to `capacity`) across `extents` in order.
@@ -1610,7 +1652,10 @@ class Ps2Hdd:
                 chunk = bytearray(nbytes)          # zero tail padding
                 if pos < dlen:
                     chunk[:dlen - pos] = mv[pos:dlen]
-            self.dev.write_bytes(lba * SECTOR, chunk)
+            if self._only_changed:
+                self._write_changed(lba, chunk)
+            else:
+                self.dev.write_bytes(lba * SECTOR, chunk)
             pos = end
 
     def _update_root_inode(self, part, scale, root_bi, new_size):
