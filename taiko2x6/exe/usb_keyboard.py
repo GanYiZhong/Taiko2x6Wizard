@@ -618,6 +618,7 @@ except ImportError:                     # CLI-only environment
     QDialog = None
 else:
     from taiko2x6.app import appconfig
+    from taiko2x6.app.i18n import tr
 
     class _Worker(QThread):
         done = Signal(object)
@@ -638,75 +639,89 @@ else:
 
         def __init__(self, parent=None, default_img=""):
             super().__init__(parent)
-            self.setWindowTitle("USB keyboard patch (Taiko 14)")
-            self.resize(760, 560)
+            self.setWindowTitle(tr("USB keyboard patch (Taiko 14)"))
+            self.resize(780, 700)
             self._worker = None
+            self._st = None             # last state read from the target
+            self._again = False
             lay = QVBoxLayout(self)
 
-            mode = QGroupBox("Where to install")
+            intro = QLabel(tr(
+                "Lets a USB keyboard play Taiko 14: the KBD2EE module is added "
+                "to the game's module archive (IRXARC.BIN). Pick where, read "
+                "the current state, then install or remove."))
+            intro.setWordWrap(True)
+            lay.addWidget(intro)
+
+            mode = QGroupBox(tr("Where to install"))
             ml = QVBoxLayout(mode)
-            self.rb_hdd = QRadioButton(
+            self.rb_hdd = QRadioButton(tr(
                 "HDD image — write IRXARC.BIN into the game partition "
-                "(card untouched; not yet tested on hardware)")
-            self.rb_card = QRadioButton(
+                "(card untouched; not yet tested on hardware)"))
+            self.rb_card = QRadioButton(tr(
                 "Dongle card image — patch IRXARC.BIN + T14LOAD on the card "
-                "(the hardware-tested method)")
+                "(the hardware-tested method)"))
             self.rb_hdd.setChecked(True)
             ml.addWidget(self.rb_hdd); ml.addWidget(self.rb_card)
             lay.addWidget(mode)
 
-            build = QGroupBox("Which build")
+            build = QGroupBox(tr("Which build"))
             bl = QVBoxLayout(build)
-            self.rb_full = QRadioButton(
+            self.rb_full = QRadioButton(tr(
                 "Keyboard + dummy JVS — play with NO I/O board attached "
-                "(the hardware-tested build)")
-            self.rb_kbdonly = QRadioButton(
+                "(the hardware-tested build)"))
+            self.rb_kbdonly = QRadioButton(tr(
                 "Keyboard only — the machine keeps its real I/O board, the "
-                "keyboard works alongside it (not yet tested on hardware)")
+                "keyboard works alongside it (not yet tested on hardware)"))
             self.rb_full.setChecked(True)
             bl.addWidget(self.rb_full); bl.addWidget(self.rb_kbdonly)
             lay.addWidget(build)
 
             grid = QGridLayout()
-            self.ed_target = QLineEdit(default_img)
-            b1 = QPushButton("Browse…"); b1.clicked.connect(self._pick_target)
-            self.ed_card = QLineEdit()
-            self.ed_card.setPlaceholderText(
+            self.ed_target = QLineEdit(default_img or appconfig.last_existing("hddimg"))
+            b1 = QPushButton(tr("Browse…")); b1.clicked.connect(self._pick_target)
+            self.ed_card = QLineEdit(appconfig.last_existing("ps2mc"))
+            self.ed_card.setPlaceholderText(tr(
                 "stock module archive: dongle card image or IRXARC.BIN "
-                "(first HDD install only)")
-            b2 = QPushButton("Browse…"); b2.clicked.connect(self._pick_card)
-            self.lb_card = QLabel("Card / IRXARC.BIN:")
-            self.ed_img = QLineEdit()
-            self.ed_img.setPlaceholderText(
-                "card mode: the T14 HDD image this card boots (to check taiko)")
-            b3 = QPushButton("Browse…"); b3.clicked.connect(self._pick_img)
-            self.lb_img = QLabel("HDD image:")
-            self.ed_t14 = QLineEdit()
-            self.ed_t14.setPlaceholderText(
-                "optional: T14LOAD key file (otherwise taken from the card / T14LOAD.bin)")
-            b4 = QPushButton("Browse…"); b4.clicked.connect(self._pick_t14)
-            grid.addWidget(QLabel("Target:"), 0, 0); grid.addWidget(self.ed_target, 0, 1)
+                "(first HDD install only)"))
+            b2 = QPushButton(tr("Browse…")); b2.clicked.connect(self._pick_card)
+            self.lb_card = QLabel(tr("Card / IRXARC.BIN:"))
+            self.ed_img = QLineEdit(appconfig.last_existing("hddimg"))
+            self.ed_img.setPlaceholderText(tr(
+                "card mode: the T14 HDD image this card boots (to check taiko)"))
+            b3 = QPushButton(tr("Browse…")); b3.clicked.connect(self._pick_img)
+            self.lb_img = QLabel(tr("HDD image:"))
+            self.ed_t14 = QLineEdit(appconfig.last_existing("t14load"))
+            self.ed_t14.setPlaceholderText(tr(
+                "optional: T14LOAD key file (otherwise taken from the card / T14LOAD.bin)"))
+            b4 = QPushButton(tr("Browse…")); b4.clicked.connect(self._pick_t14)
+            grid.addWidget(QLabel(tr("Target:")), 0, 0); grid.addWidget(self.ed_target, 0, 1)
             grid.addWidget(b1, 0, 2)
             grid.addWidget(self.lb_card, 1, 0); grid.addWidget(self.ed_card, 1, 1)
             grid.addWidget(b2, 1, 2)
             grid.addWidget(self.lb_img, 2, 0); grid.addWidget(self.ed_img, 2, 1)
             grid.addWidget(b3, 2, 2)
-            grid.addWidget(QLabel("T14LOAD:"), 3, 0); grid.addWidget(self.ed_t14, 3, 1)
+            grid.addWidget(QLabel(tr("T14LOAD:")), 3, 0); grid.addWidget(self.ed_t14, 3, 1)
             grid.addWidget(b4, 3, 2)
             lay.addLayout(grid)
-            self.rb_card.toggled.connect(self._mode_changed)
 
-            keys = QLabel("<br>".join(f"<b>{k}</b>: {v}" for v, k in
-                                       [(a, b) for a, b in KEYMAP])
-                          + "<br><i>Unplug and replug the keyboard once after "
-                            "boot. Close PCSX2 before writing.</i>")
+            self.lb_state = QLabel()
+            self.lb_state.setWordWrap(True)
+            self.lb_state.setStyleSheet("font-weight:bold;")
+            lay.addWidget(self.lb_state)
+
+            keys = QLabel("<br>".join(f"<b>{k}</b>: {tr(v)}" for v, k in KEYMAP)
+                          + "<br><i>" + tr(
+                              "Unplug and replug the keyboard once after boot. "
+                              "Close PCSX2 first — it locks the image.") + "</i>")
             keys.setWordWrap(True)
             lay.addWidget(keys)
 
             row = QHBoxLayout()
-            self.b_status = QPushButton("Status + check"); self.b_status.clicked.connect(self._status)
-            self.b_install = QPushButton("Install"); self.b_install.clicked.connect(self._install)
-            self.b_remove = QPushButton("Remove"); self.b_remove.clicked.connect(self._remove)
+            self.b_status = QPushButton(tr("Read current state + check"))
+            self.b_status.clicked.connect(self._status)
+            self.b_install = QPushButton(tr("Install")); self.b_install.clicked.connect(self._install)
+            self.b_remove = QPushButton(tr("Remove")); self.b_remove.clicked.connect(self._remove)
             for b in (self.b_status, self.b_install, self.b_remove):
                 row.addWidget(b)
             row.addStretch(1)
@@ -714,22 +729,84 @@ else:
             self.log = QPlainTextEdit(); self.log.setReadOnly(True)
             lay.addWidget(self.log, 1)
 
+            self.rb_card.toggled.connect(self._mode_changed)
+            self.rb_kbdonly.toggled.connect(self._update_buttons)
+            self.ed_target.editingFinished.connect(self._refresh)
             self._mode_changed()
 
-        def _mode_changed(self):
+        # ---- state --------------------------------------------------------
+        def _busy(self):
+            return self._worker is not None
+
+        def _mode_changed(self, *_):
             hdd = self.rb_hdd.isChecked()
             self.ed_card.setEnabled(hdd); self.lb_card.setEnabled(hdd)
             self.ed_img.setEnabled(not hdd); self.lb_img.setEnabled(not hdd)
+            self._refresh()
 
+        def _wanted_build(self):
+            return "kbdonly" if self.rb_kbdonly.isChecked() else "full"
+
+        def _needs_install(self):
+            st = self._st
+            if not st:
+                return False
+            if not st.get("installed"):
+                return True
+            if st.get("build") != self._wanted_build():
+                return True
+            if self.rb_hdd.isChecked():
+                return len(st.get("files", [])) < len(HDD_NAMES)
+            return not st.get("t14load")
+
+        def _describe(self):
+            st = self._st
+            if not st:
+                return tr("State unknown — choose a target to read it.")
+            if not st.get("installed"):
+                return tr("Not installed.")
+            build = {"full": tr("keyboard + dummy JVS"),
+                     "kbdonly": tr("keyboard only")}.get(
+                         st.get("build"), tr("a different build"))
+            msg = tr("Installed: {build}.").format(build=build)
+            if self._needs_install():
+                msg += " " + tr("Install again to switch to the chosen build or "
+                                "finish a partial install.")
+            return msg
+
+        def _update_buttons(self, *_):
+            idle = not self._busy()
+            self.b_status.setEnabled(idle)
+            self.b_install.setEnabled(idle and self._needs_install())
+            self.b_remove.setEnabled(idle and bool(self._st and self._st.get("installed")))
+            self.lb_state.setText(self._describe())
+
+        def _refresh(self):
+            """Read the target's current state (read-only) in the background."""
+            t = self.ed_target.text().strip()
+            if self._busy():
+                self._again = True
+                return
+            self._st = None
+            self._update_buttons()
+            if not t or not Path(t).is_file():
+                return
+            hdd = self.rb_hdd.isChecked()
+
+            def job(log):
+                return ("STATE", hdd_status(t) if hdd else card_status(t))
+            self._run(job, quiet=True)
+
+        # ---- pickers ------------------------------------------------------
         def _pick_img(self):
-            p = appconfig.pick_open(self, "hddimg", "T14 HDD image",
-                                    "HDD image (*.img);;All files (*)")
+            p = appconfig.pick_open(self, "hddimg", tr("T14 HDD image"),
+                                    tr("HDD image") + " (*.img);;" + tr("All files") + " (*)")
             if p:
                 self.ed_img.setText(p)
 
         def _pick_t14(self):
-            p = appconfig.pick_open(self, "t14load", "T14LOAD key file",
-                                    "T14LOAD (T14LOAD*);;All files (*)")
+            p = appconfig.pick_open(self, "t14load", tr("T14LOAD key file"),
+                                    "T14LOAD (T14LOAD*);;" + tr("All files") + " (*)")
             if p:
                 self.ed_t14.setText(p)
 
@@ -738,49 +815,84 @@ else:
 
         def _pick_target(self):
             if self.rb_hdd.isChecked():
-                p = appconfig.pick_open(self, "hddimg", "T14 HDD image",
-                                        "HDD image (*.img);;All files (*)")
+                p = appconfig.pick_open(self, "hddimg", tr("T14 HDD image"),
+                                        tr("HDD image") + " (*.img);;" + tr("All files") + " (*)")
             else:
-                p = appconfig.pick_open(self, "ps2mc", "Dongle card image",
-                                        "Card image (*.ps2 *.bin);;All files (*)")
+                p = appconfig.pick_open(self, "ps2mc", tr("Dongle card image"),
+                                        tr("Card image") + " (*.ps2 *.bin);;" + tr("All files") + " (*)")
             if p:
                 self.ed_target.setText(p)
+                self._refresh()
 
         def _pick_card(self):
-            p = appconfig.pick_open(self, "ps2mc", "Card image or IRXARC.BIN",
-                                    "Card / IRXARC (*.ps2 *.bin *.BIN);;All files (*)")
+            p = appconfig.pick_open(self, "ps2mc", tr("Card image or IRXARC.BIN"),
+                                    tr("Card / IRXARC") + " (*.ps2 *.bin *.BIN);;"
+                                    + tr("All files") + " (*)")
             if p:
                 self.ed_card.setText(p)
 
         def _target(self):
             t = self.ed_target.text().strip()
             if not t or not Path(t).is_file():
-                QMessageBox.warning(self, "USB keyboard", "Choose a target file first.")
+                QMessageBox.warning(self, tr("USB keyboard"), tr("Choose a target file first."))
                 return None
             return t
 
-        def _run(self, fn):
-            for b in (self.b_status, self.b_install, self.b_remove):
-                b.setEnabled(False)
+        def _remember(self):
+            """Keep the paths the user actually used for next time."""
+            hdd = self.rb_hdd.isChecked()
+            for key, ed in (("hddimg" if hdd else "ps2mc", self.ed_target),
+                            ("ps2mc", self.ed_card if hdd else None),
+                            ("hddimg", None if hdd else self.ed_img),
+                            ("t14load", self.ed_t14)):
+                if ed is not None and ed.text().strip():
+                    appconfig.remember(key, ed.text().strip())
+
+        # ---- worker -------------------------------------------------------
+        def _run(self, fn, quiet=False):
             self._worker = _Worker(fn)
+            self._update_buttons()
             self._worker.line.connect(self.log.appendPlainText)
-            self._worker.done.connect(self._done)
+            self._worker.done.connect(lambda r: self._done(r, quiet))
+            self._worker.finished.connect(self._finished)
             self._worker.start()
 
-        def _done(self, r):
-            for b in (self.b_status, self.b_install, self.b_remove):
-                b.setEnabled(True)
+        def _finished(self):
+            w, self._worker = self._worker, None
+            if w is not None:
+                w.deleteLater()
+            self._update_buttons()
+            if self._again:
+                self._again = False
+                self._refresh()
+
+        def _done(self, r, quiet=False):
             if isinstance(r, tuple) and r and r[0] == "ERROR":
-                self.log.appendPlainText(f"ERROR: {r[1]}")
-                QMessageBox.critical(self, "USB keyboard", str(r[1]))
-            elif isinstance(r, dict):
+                from taiko2x6.exe.taiko_exe import friendly_error
+                msg = friendly_error(r[1])
+                self._st = None
+                if quiet:
+                    self.log.appendPlainText(f"{tr('Could not read the target')}: {r[1]}")
+                else:
+                    self.log.appendPlainText(f"ERROR: {r[1]}")
+                    QMessageBox.critical(self, tr("USB keyboard"), msg)
+                return
+            if isinstance(r, tuple) and r and r[0] == "STATE":
+                self._st = r[1]
+                if quiet:
+                    self.log.appendPlainText(self._describe())
+                return
+            if isinstance(r, dict):
                 for k, v in r.items():
                     self.log.appendPlainText(f"  {k}: {v}")
+            self._again = True          # re-read the state after a write
 
+        # ---- actions ------------------------------------------------------
         def _status(self):
             t = self._target()
             if not t:
                 return
+            self._remember()
             hdd = self.rb_hdd.isChecked()
             src, img, t14 = self._opt(self.ed_card), self._opt(self.ed_img), self._opt(self.ed_t14)
 
@@ -793,42 +905,44 @@ else:
                     try:
                         check_hdd_taiko(hdd_img, None, t14, src if hdd else t, log)
                     except KeyboardPatchError as exc:
-                        log(f"taiko check not run: {exc}")
+                        log(tr("taiko check not run: {err}").format(err=exc))
                 else:
-                    log("taiko not checked (choose the HDD image)")
-                return None
+                    log(tr("taiko not checked (choose the HDD image)"))
+                return ("STATE", st)
             self._run(job)
 
         def _confirm(self, verb, t):
-            what = ("The image is modified in place; everything overwritten is "
-                    "saved to an undo journal first." if self.rb_hdd.isChecked()
-                    else "A .bak copy of the card is made first.")
+            what = (tr("The image is modified in place; everything overwritten is "
+                       "saved to an undo journal first.") if self.rb_hdd.isChecked()
+                    else tr("A .bak copy of the card is made first."))
             return QMessageBox.question(
-                self, "USB keyboard", f"{verb} the keyboard patch in\n{t}?\n\n"
-                f"{what} Close PCSX2 first.") == QMessageBox.Yes
+                self, tr("USB keyboard"), verb.format(t=t) + "\n\n" + what + " "
+                + tr("Close PCSX2 first.")) == QMessageBox.Yes
 
         def _install(self):
             t = self._target()
-            if not t or not self._confirm("Install", t):
+            if not t or not self._confirm(tr("Install the keyboard patch in\n{t}?"), t):
                 return
+            self._remember()
             t14 = self._opt(self.ed_t14)
-            irx = bundled_irx("kbdonly" if self.rb_kbdonly.isChecked() else "full")
+            irx = bundled_irx(self._wanted_build())
             if self.rb_hdd.isChecked():
                 src = self._opt(self.ed_card)
                 self._run(lambda log: hdd_install(t, src, irx=irx, log=log, t14load=t14))
             else:
                 img = self._opt(self.ed_img)
                 if not img and QMessageBox.question(
-                        self, "USB keyboard",
-                        "No HDD image chosen, so the game executable cannot be "
-                        "checked. Install on the card anyway?") != QMessageBox.Yes:
+                        self, tr("USB keyboard"),
+                        tr("No HDD image chosen, so the game executable cannot be "
+                           "checked. Install on the card anyway?")) != QMessageBox.Yes:
                     return
                 self._run(lambda log: card_install(t, irx, log=log, img=img))
 
         def _remove(self):
             t = self._target()
-            if not t or not self._confirm("Remove", t):
+            if not t or not self._confirm(tr("Remove the keyboard patch from\n{t}?"), t):
                 return
+            self._remember()
             hdd = self.rb_hdd.isChecked()
             self._run(lambda log: hdd_remove(t, log=log) if hdd else card_remove(t, log=log))
 

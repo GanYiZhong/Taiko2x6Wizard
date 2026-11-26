@@ -1088,6 +1088,23 @@ def restore_hdd(img: str | Path, pristine: str | Path,
     log('restored.')
 
 
+def friendly_error(exc) -> str:
+    """Message for a failed image job: a locked / read-only image (PCSX2 still
+    open) gets a plain explanation instead of the raw OS exception."""
+    from taiko2x6.app.i18n import tr
+    msg = str(exc)
+    low = msg.lower()
+    locked = (isinstance(exc, PermissionError)
+              or getattr(exc, 'winerror', None) in (5, 32, 33)
+              or 'being used by another process' in low
+              or 'permission denied' in low)
+    if locked:
+        return tr('The image is locked or read-only. Close PCSX2 (and any '
+                  'other program using the .img) and try again; the image '
+                  'was not changed.') + '\n\n' + msg
+    return msg
+
+
 # --------------------------------------------------------------------------- #
 #  GUI dialog
 # --------------------------------------------------------------------------- #
@@ -1127,6 +1144,7 @@ else:
             self.resize(720, 460)
             self._workers: list[_Worker] = []
             self._build_ui()
+            default_img = default_img or appconfig.last_existing('hddimg')
             if default_img:
                 self.ed_img.setText(default_img)
 
@@ -1316,7 +1334,7 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, tr('Patch taiko'), str(r[1]))
+                    QMessageBox.critical(self, tr('Patch taiko'), friendly_error(r[1]))
                     self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
@@ -1341,6 +1359,7 @@ else:
             self.resize(680, 380)
             self._workers: list[_Worker] = []
             self._build_ui()
+            default_img = default_img or appconfig.last_existing('hddimg')
             if default_img:
                 self.ed_img.setText(default_img)
 
@@ -1489,7 +1508,7 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, tr('Song-select timer'), str(r[1]))
+                    QMessageBox.critical(self, tr('Song-select timer'), friendly_error(r[1]))
                     self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
@@ -1527,10 +1546,11 @@ else:
         def __init__(self, parent=None, default_img=''):
             super().__init__(parent)
             self.setWindowTitle(tr(self.TITLE))
-            self.resize(640, 440)
+            self.resize(680, 600)
             self._workers: list[_Worker] = []
             self._state: dict | None = None
             self._build_ui()
+            default_img = default_img or appconfig.last_existing('hddimg')
             if default_img:
                 self.ed_img.setText(default_img)
                 self._check()
@@ -1547,13 +1567,24 @@ else:
             box = QGroupBox(tr('Patches (ticked = on)'))
             bl = QVBoxLayout(box)
             self.cbs: dict[str, QCheckBox] = {}
+            self.state_lbl: dict[str, QLabel] = {}
             for key, (label, *_fns) in BOOT_PATCHES.items():
                 cb = QCheckBox(tr(label))
                 cb.setToolTip(tr(self.TIPS.get(key, '')))
                 cb.setEnabled(False)
                 cb.toggled.connect(self._dirty)
-                bl.addWidget(cb)
+                top = QHBoxLayout()
+                top.addWidget(cb, 1)
+                st = QLabel('')
+                st.setStyleSheet('color:#999;')
+                top.addWidget(st)
+                bl.addLayout(top)
+                desc = QLabel(tr(self.TIPS.get(key, '')))
+                desc.setWordWrap(True)
+                desc.setStyleSheet('color:#999; margin-left:22px;')
+                bl.addWidget(desc)
                 self.cbs[key] = cb
+                self.state_lbl[key] = st
             lay.addWidget(box)
 
             row = QHBoxLayout()
@@ -1600,6 +1631,13 @@ else:
 
         def _dirty(self, *_):
             ch = self._changes()
+            for k, lb in self.state_lbl.items():
+                if self._state is None:
+                    lb.setText('')
+                elif k in ch:
+                    lb.setText(tr('will turn on') if ch[k] else tr('will turn off'))
+                else:
+                    lb.setText(tr('on in image') if self._state[k] else tr('off in image'))
             self.b_patch.setEnabled(bool(ch) and not self._workers)
             if self._state is not None:
                 self.status.setText(tr('{n} change(s) to apply').format(n=len(ch)) if ch
@@ -1702,7 +1740,7 @@ else:
             def done(r):
                 if isinstance(r, tuple) and r and r[0] == 'ERROR':
                     self._say(f'FAILED: {r[1]}')
-                    QMessageBox.critical(self, tr(self.TITLE), str(r[1]))
+                    QMessageBox.critical(self, tr(self.TITLE), friendly_error(r[1]))
                     self.status.setText(tr('failed — image untouched'))
                     return
                 on_ok(r)
