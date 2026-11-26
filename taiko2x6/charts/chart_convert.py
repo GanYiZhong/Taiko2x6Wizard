@@ -442,6 +442,13 @@ if QDialog is not None:
             self.b_clear.setAutoDefault(False)
             self.b_clear.clicked.connect(self.lst.clear)
             row.addWidget(self.b_clear)
+            self.b_check = QPushButton(tr("Check TJA…"))
+            self.b_check.setAutoDefault(False)
+            self.b_check.setToolTip(tr(
+                "Look for common mistakes in the queued TJA files (or the "
+                "selected ones) and save a fixed copy."))
+            self.b_check.clicked.connect(self._check_tja)
+            row.addWidget(self.b_check)
             self.lb_count = QLabel()
             row.addWidget(self.lb_count)
             row.addStretch(1)
@@ -660,6 +667,16 @@ if QDialog is not None:
                 tr("Charts and audio (*.tja *.sht *.bin sht *.nus3bank);;"
                    "All files (*)"))
             self.add_paths(ps)
+
+        def _check_tja(self):
+            items = self.lst.selectedItems() or [
+                self.lst.item(i) for i in range(self.lst.count())]
+            paths = [it.text() for it in items
+                     if it.text().lower().endswith(".tja")]
+            from taiko2x6.charts.tja_check_dialog import TjaCheckDialog
+            dlg = TjaCheckDialog(paths, self)
+            dlg.exec()
+            dlg.deleteLater()
 
         def _remove(self):
             for it in self.lst.selectedItems():

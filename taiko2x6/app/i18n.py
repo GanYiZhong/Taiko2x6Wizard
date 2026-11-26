@@ -1583,3 +1583,91 @@ _SONG_ASSETS_ZH = {
 }
 for _k, _v in _SONG_ASSETS_ZH.items():
     ZH_TW.setdefault(_k, _v)
+
+# --- TJA check (taiko2x6/charts/tja_lint.py, tja_check_dialog.py) ---
+ZH_TW.update({
+    'Check TJA': '檢查 TJA',
+    'Check TJA…': '檢查 TJA…',
+    'Looks for common TJA mistakes (COURSE / LEVEL, BALLOON counts, notes outside #START / #END, open rolls, branches, OFFSET, WAVE, encoding). Nothing is changed in your files.':
+        '檢查常見的 TJA 錯誤（COURSE / LEVEL、BALLOON 數量、#START / #END 之外的音符、未結束的連打、分歧、OFFSET、WAVE、編碼）。不會更動你的檔案。',
+    'Save fixed copy…': '儲存修正副本…',
+    'Save fixed copy': '儲存修正副本',
+    'Write <name>.fixed.tja next to each TJA that has automatic fixes. Your original file is never overwritten.':
+        '在每個有自動修正的 TJA 旁寫入 <名稱>.fixed.tja。不會覆寫你的原始檔案。',
+    'Add TJA files': '加入 TJA 檔案',
+    'TJA charts (*.tja);;All files (*)': 'TJA 譜面 (*.tja);;所有檔案 (*)',
+    'These copies will be created (your originals stay untouched):': '將建立下列副本（原始檔案不會被更動）：',
+    'File': '檔案',
+    'Line': '行',
+    'Suggested fix': '建議的修正',
+    'Auto-fix': '自動修正',
+    'Yes': '是',
+    '{f} file(s) checked, {n} issue(s)': '已檢查 {f} 個檔案，{n} 個問題',
+    'Saved {n} fixed copy file(s):': '已儲存 {n} 個修正副本：',
+    'Could not read the file: {err}': '無法讀取檔案：{err}',
+    'Look for common mistakes in the queued TJA files (or the selected ones) and save a fixed copy.':
+        '檢查佇列中（或所選）TJA 檔案的常見錯誤，並可儲存修正副本。',
+    '(+{n} more; see Check TJA… in the chart converter)': '（另有 {n} 項；請見譜面轉換器的「檢查 TJA…」）',
+    'line {n}: ': '第 {n} 行：',
+    'Chart has no #END': '譜面沒有 #END',
+    'Add #END after the last measure.': '在最後一小節後加上 #END。',
+    '#START again before the previous chart\'s #END': '上一個譜面的 #END 之前又出現 #START',
+    'Close the previous chart with #END.': '請用 #END 結束上一個譜面。',
+    '#END without a #START': '#END 沒有對應的 #START',
+    'Remove it or add the missing #START.': '請刪除它，或補上缺少的 #START。',
+    'Note data outside #START / #END ({n} line(s)); the converter ignores it':
+        '音符資料在 #START / #END 之外（{n} 行）；轉換器會忽略它',
+    'Move it between #START and #END, or delete it.': '請移到 #START 與 #END 之間，或刪除。',
+    'Roll or balloon started here is never closed with 8': '此處開始的連打或氣球從未以 8 結束',
+    'Add an 8 where the roll / balloon ends.': '請在連打 / 氣球結束處加上 8。',
+    'A roll starts before the previous one was closed with 8': '前一個連打尚未以 8 結束，就開始了新的連打',
+    'Close the earlier roll / balloon with 8 first.': '請先以 8 結束前一個連打 / 氣球。',
+    'Last measure has no closing comma': '最後一小節沒有結尾逗號',
+    'End the measure with a comma.': '請以逗號結束小節。',
+    'Add the missing comma at the end of this line.': '在此行結尾補上缺少的逗號。',
+    '#BRANCHSTART lacks {routes}': '#BRANCHSTART 缺少 {routes}',
+    'A branch needs all of #N, #E and #M.': '分歧需要 #N、#E、#M 三條路線齊全。',
+    'Branch routes differ in length: #N {n}, #E {e}, #M {m} measures':
+        '分歧路線長度不同：#N {n}、#E {e}、#M {m} 小節',
+    'Give every route the same number of measures; otherwise the converter keeps only one path.':
+        '請讓每條路線的小節數相同；否則轉換器只會保留一條路線。',
+    '#BRANCHSTART is never closed with #BRANCHEND': '#BRANCHSTART 從未以 #BRANCHEND 結束',
+    'Add #BRANCHEND after the last route.': '請在最後一條路線後加上 #BRANCHEND。',
+    'Odd character(s) in note line: {chars}; the converter turns them into 0':
+        '音符行含有異常字元：{chars}；轉換器會把它們當成 0',
+    'Notes are 0-9, A, B and the comma.': '音符只能是 0-9、A、B 與逗號。',
+    'Replace full-width digits / commas with plain ones.': '把全形數字 / 逗號換成半形。',
+    'No COURSE: before #START; the chart is taken as Oni': '#START 之前沒有 COURSE:；此譜面會被視為魔王（Oni）',
+    'Add a COURSE: line (Easy / Normal / Hard / Oni / Edit).': '請加上 COURSE: 行（Easy / Normal / Hard / Oni / Edit）。',
+    "Unknown COURSE '{v}'; the converter ignores this chart": '未知的 COURSE「{v}」；轉換器會忽略此譜面',
+    'Use Easy, Normal, Hard, Oni or Edit.': '請使用 Easy、Normal、Hard、Oni 或 Edit。',
+    'Course {c} has no LEVEL': '難度 {c} 沒有 LEVEL',
+    'Add a LEVEL: line with the star count (1-10).': '請加上 LEVEL: 行，填入星數（1-10）。',
+    "LEVEL '{v}' is not a number": 'LEVEL「{v}」不是數字',
+    'Use a whole number such as LEVEL:8.': '請使用整數，例如 LEVEL:8。',
+    'Course {c}: BALLOON has {have} value(s) but the chart has {want} balloon note(s)':
+        '難度 {c}：BALLOON 有 {have} 個值，但譜面有 {want} 個氣球音符',
+    'Course {c}: BALLOON has {have} value(s) but the chart has only {want} balloon note(s)':
+        '難度 {c}：BALLOON 有 {have} 個值，但譜面只有 {want} 個氣球音符',
+    'Give one hit count per balloon note, in chart order.': '請依譜面順序，為每個氣球音符給一個打擊次數。',
+    'Pad BALLOON with {v} up to {n} value(s) (the last value, or {d} when there is none).':
+        '把 BALLOON 以 {v} 補到 {n} 個值（沿用最後一個值；沒有值時用 {d}）。',
+    'Remove the extra values (they are unused).': '請刪除多餘的值（不會被使用）。',
+    'First note is {s:.2f} s before the music starts (OFFSET {o:g}); the sign of OFFSET may be wrong':
+        '第一個音符比音樂開始早 {s:.2f} 秒（OFFSET {o:g}）；OFFSET 的正負號可能錯了',
+    'If the music starts later than the chart, OFFSET is negative: try OFFSET:{v:g}':
+        '若音樂比譜面晚開始，OFFSET 應為負值：請試試 OFFSET:{v:g}',
+    'No WAVE: header': '沒有 WAVE: 標頭',
+    'Add WAVE:<audio file> so players find the music.': '請加上 WAVE:<音訊檔>，讓播放器找得到音樂。',
+    "WAVE file '{f}' is not next to the TJA": 'WAVE 檔案「{f}」不在 TJA 旁邊',
+    'Copy the audio beside the TJA or fix the WAVE: name.': '請把音訊複製到 TJA 旁邊，或修正 WAVE: 的檔名。',
+    'File is Shift-JIS (not UTF-8)': '檔案為 Shift-JIS（不是 UTF-8）',
+    'Fine for the converter; keep it unless titles look broken.': '轉換器可正常讀取；除非標題顯示異常，否則維持原樣即可。',
+    'File is neither UTF-8 nor Shift-JIS': '檔案既不是 UTF-8 也不是 Shift-JIS',
+    'Re-save it as UTF-8 or Shift-JIS.': '請重新儲存為 UTF-8 或 Shift-JIS。',
+    'Re-save the file as UTF-8 or Shift-JIS.': '請把檔案重新儲存為 UTF-8 或 Shift-JIS。',
+    '{k} looks garbled (UTF-8 read with the wrong encoding): {v}': '{k} 看起來是亂碼（UTF-8 被以錯誤編碼讀取）：{v}',
+    'Probably "{good}"; re-save the file as UTF-8.': '應該是「{good}」；請把檔案重新儲存為 UTF-8。',
+    'Re-read the whole file as UTF-8 text.': '把整個檔案以 UTF-8 文字重新解讀。',
+    '{k} contains broken characters: {v}': '{k} 含有損壞的字元：{v}',
+})
