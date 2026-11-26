@@ -659,7 +659,7 @@ class SongManager(QDialog):
             f"{len(self._songs)} songs · musicinfo sec0={len(self.mi.sec0)} · "
             f"tuning blocks={len(self.tu.blocks)} · streaminfo records={self.si.count}"
         )
-        info.setStyleSheet("color:#888;font-family:Consolas;")
+        info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")
         lay.addWidget(info)
 
         note = QLabel(

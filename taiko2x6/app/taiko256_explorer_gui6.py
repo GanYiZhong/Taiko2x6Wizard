@@ -35,6 +35,7 @@ from taiko2x6.archive import taiko256_archive_tool_v2 as core  # noqa: E402
 from taiko2x6.graphics import tim2  # noqa: E402  TIM2 (.nut) image decoding
 from taiko2x6.app import appconfig  # noqa: E402  last-used-path memory (config.ini)
 from taiko2x6.app import i18n  # noqa: E402  zh-TW / English UI strings
+from taiko2x6.app import theme  # noqa: E402  light/dark look
 from taiko2x6.app.i18n import tr  # noqa: E402
 
 from PySide6.QtCore import (  # noqa: E402
@@ -212,11 +213,11 @@ class PreviewPane(QTabWidget):
         self._vag_gen = 0                   # bumped per selection; stale decodes dropped
         self._vag_workers = []              # keep refs alive until QThread finishes
         self.info = QPlainTextEdit(readOnly=True)
-        self.info.setFont(QFont("Consolas", 9))
+        self.info.setFont(theme.mono_font())
         self.hex = QPlainTextEdit(readOnly=True)
-        self.hex.setFont(QFont("Consolas", 9))
+        self.hex.setFont(theme.mono_font())
         self.text = QPlainTextEdit(readOnly=True)
-        self.text.setFont(QFont("Consolas", 9))
+        self.text.setFont(theme.mono_font())
         self.image_label = QLabel(tr("(no image)"), alignment=Qt.AlignCenter)
         self.image_label.setMinimumSize(QSize(64, 64))
 
@@ -506,7 +507,7 @@ class MainWindow(QMainWindow):
         sub = QLabel(tr("Pick where to start. Everything here is also in the "
                         "File and Tools menus."))
         sub.setWordWrap(True)
-        sub.setStyleSheet("color:#888;")
+        sub.setStyleSheet("color:palette(mid);")
         v.addWidget(sub)
         v.addSpacing(16)
         self._start_buttons = []
@@ -530,7 +531,7 @@ class MainWindow(QMainWindow):
             v.addWidget(b)
             h = QLabel(hint)
             h.setWordWrap(True)
-            h.setStyleSheet("color:#888; margin:0 0 10px 14px;")
+            h.setStyleSheet("color:palette(mid); margin:0 0 10px 14px;")
             v.addWidget(h)
             self._start_buttons.append(b)
         v.addStretch(2)
@@ -705,7 +706,23 @@ class MainWindow(QMainWindow):
             group.addAction(a)
             lang_menu.addAction(a)
             self.lang_actions[code] = a
+        theme_menu = settings.addMenu(tr("Theme"))
+        tgroup = QActionGroup(self)
+        tgroup.setExclusive(True)
+        self.theme_actions = {}
+        for mode, name in (("system", tr("System")), ("light", tr("Light")),
+                           ("dark", tr("Dark"))):
+            a = QAction(name, self, checkable=True)
+            a.setChecked(mode == theme.saved_mode())
+            a.triggered.connect(lambda _=False, m=mode: self._set_theme(m))
+            tgroup.addAction(a)
+            theme_menu.addAction(a)
+            self.theme_actions[mode] = a
         self._update_actions()
+
+    def _set_theme(self, mode: str):
+        theme.save_mode(mode)
+        theme.apply(QApplication.instance(), mode)
 
     def _focus_filter(self):
         if self.archive is not None:
@@ -1645,7 +1662,9 @@ def main():
     _setup_logging(sys.argv)
     log.info("Taiko SYSTEM256 Explorer starting (log level %s)",
              logging.getLevelName(log.level))
+    theme.configure_high_dpi()
     app = QApplication(argv)
+    theme.apply(app)
     app.setApplicationName("Taiko SYSTEM256 Explorer")
     win = MainWindow()
     win.show()

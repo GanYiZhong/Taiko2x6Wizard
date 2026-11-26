@@ -87,7 +87,7 @@ class SongReplacerDialog(QDialog):
             "the game still boots. (Adding a brand-new song overflows the game's "
             "fixed song table and won't boot.)"))
         note.setWordWrap(True)
-        note.setStyleSheet("color:#666;")
+        note.setStyleSheet("color:palette(mid);")
         lay.addWidget(note)
 
         # ---- Target ----------------------------------------------------------

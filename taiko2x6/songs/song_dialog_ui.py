@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from taiko2x6.app.i18n import tr
 
 _COURSE_NAMES = {0: "easy", 1: "normal", 2: "hard", 3: "oni", 4: "ura"}
-_BAD_STYLE = "border:1px solid #c0392b;"
+_BAD_STYLE = "border:1px solid #e0533f;"
 
 
 def summarize_tja(text: str) -> dict:
@@ -141,10 +141,10 @@ def set_status(lbl: QLabel, problems: list) -> None:
     if problems:
         lbl.setText("⚠ " + problems[0] +
                     ("  (+%d)" % (len(problems) - 1) if len(problems) > 1 else ""))
-        lbl.setStyleSheet("color:#c0392b;")
+        lbl.setStyleSheet("color:#e0533f;")
     else:
         lbl.setText("✓ " + tr("Ready to build."))
-        lbl.setStyleSheet("color:#2e7d32;")
+        lbl.setStyleSheet("color:#3fa34d;")
 
 
 def file_problem(path: str, what: str):

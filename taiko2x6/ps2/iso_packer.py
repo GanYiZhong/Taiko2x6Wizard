@@ -466,7 +466,7 @@ try:
             lay.addLayout(form)
             self.bar = QProgressBar()
             lay.addWidget(self.bar)
-            self.lbl = QLabel(""); self.lbl.setStyleSheet("color:#999;")
+            self.lbl = QLabel(""); self.lbl.setStyleSheet("color:palette(mid);")
             lay.addWidget(self.lbl)
             btns = QHBoxLayout(); btns.addStretch(1)
             self.b_go = QPushButton("Build ISO"); self.b_go.clicked.connect(self._go)
