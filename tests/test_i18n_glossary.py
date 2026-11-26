@@ -20,7 +20,7 @@ FULL_PUNCT = "，。、；：？！（）「」"
 
 # Values that legitimately equal their English key (names, tokens, layout strings).
 SAME_AS_KEY = {"ID", "TJA…", "vgmstream", "pfsshell", "#", "A", "B", "ISO (*.iso)",
-               "BPM         : {b}", "+{a} -{r} ~{c} ={u}", "[{i}/{n}] {sid} — {title}"}
+               "BPM         : {b}", "+{a} -{r} ~{c} ={u}", "[{i}/{n}] {sid} — {title}", "Omnimix"}
 
 # (pattern, what to use instead). Patterns are searched in every zh-TW value.
 BANNED = [

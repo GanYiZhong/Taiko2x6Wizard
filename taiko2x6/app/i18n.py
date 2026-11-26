@@ -149,6 +149,7 @@ ZH_TW: dict[str, str] = {
     "Browse…": "瀏覽…",
     "Output folder:": "輸出資料夾：",
     "Output folder": "輸出資料夾",
+    "Output": "輸出",
     "Pick an output folder.": "請選擇輸出資料夾。",
     "Chart converter (TJA / sht / Gen3 .bin)…": "譜面轉換器（TJA / sht / Gen3 .bin）…",
     "Chart converter (TJA / sht / Gen3 .bin)": "譜面轉換器（TJA / sht / Gen3 .bin）",
@@ -1620,7 +1621,7 @@ _HISTORY_ZH = {
     'Activity history…': '操作記錄…',
     'Every write the toolkit made: archive saves, HDD image writes and game '
     'patches. Only paths and a short summary are kept, never file contents.':
-        '工具組所做的每次寫入：封包儲存、HDD 映像寫入與遊戲修補。只保留路徑與簡短摘要，不會記錄檔案內容。',
+        '工具組所做的每次寫入：封存檔儲存、HDD 映像檔寫入與遊戲修補。只保留路徑與簡短摘要，不會記錄檔案內容。',
     'All tools': '所有工具',
     'Tool:': '工具：',
     'Target contains:': '目標包含：',
