@@ -880,7 +880,9 @@ def patch_hdd(img: str | Path, songs: int, partition: str = PARTITION,
     if decrypt_taiko(new_enc, t14load) != out:
         raise TaikoExeError('repack failed its round-trip self-check — not writing')
 
-    write_to_hdd(img, new_enc, partition)
+    from taiko2x6 import history
+    with history.operation('Game patches', f'Song limit: {songs} songs', [img]):
+        write_to_hdd(img, new_enc, partition)
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'songs': songs, 'size': len(new_enc), 'md5': md5}
@@ -903,7 +905,9 @@ def patch_hdd_timer(img: str | Path, seconds: int, partition: str = PARTITION,
     new_enc = encrypt_taiko(out, t14load, progress)
     if decrypt_taiko(new_enc, t14load) != out:
         raise TaikoExeError('repack failed its round-trip self-check — not writing')
-    write_to_hdd(img, new_enc, partition)
+    from taiko2x6 import history
+    with history.operation('Game patches', f'Select timer: {seconds} s', [img]):
+        write_to_hdd(img, new_enc, partition)
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'seconds': seconds, 'was': cur, 'md5': md5}
@@ -939,7 +943,9 @@ def patch_hdd_boot(img: str | Path, skip_notice: bool = True,
     new_enc = encrypt_taiko(out, t14load, progress)
     if decrypt_taiko(new_enc, t14load) != out:
         raise TaikoExeError('repack failed its round-trip self-check — not writing')
-    write_to_hdd(img, new_enc, partition)
+    from taiko2x6 import history
+    with history.operation('Game patches', 'Boot patches: ' + ', '.join(applied), [img]):
+        write_to_hdd(img, new_enc, partition)
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'applied': applied, 'md5': md5}
@@ -1073,7 +1079,10 @@ def set_hdd_boot(img: str | Path, wanted: dict, partition: str = PARTITION,
     new_enc = encrypt_taiko(out, t14load, progress)
     if decrypt_taiko(new_enc, t14load) != out:
         raise TaikoExeError('repack failed its round-trip self-check — not writing')
-    write_to_hdd(img, new_enc, partition)
+    from taiko2x6 import history
+    bits = ', '.join(f"{k} {'on' if v else 'off'}" for k, v in wanted.items())
+    with history.operation('Game patches', 'Boot patches: ' + bits, [img]):
+        write_to_hdd(img, new_enc, partition)
     md5 = hashlib.md5(new_enc).hexdigest()
     log(f'written and read back OK — md5 {md5}')
     return {'changed': True, 'state': boot_patch_state(out), 'md5': md5}

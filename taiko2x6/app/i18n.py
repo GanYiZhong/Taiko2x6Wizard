@@ -1583,3 +1583,30 @@ _SONG_ASSETS_ZH = {
 }
 for _k, _v in _SONG_ASSETS_ZH.items():
     ZH_TW.setdefault(_k, _v)
+
+_HISTORY_ZH = {
+    'Activity history': '操作記錄',
+    'Activity history…': '操作記錄…',
+    'Every write the toolkit made: archive saves, HDD image writes and game '
+    'patches. Only paths and a short summary are kept, never file contents.':
+        '工具組所做的每次寫入：封包儲存、HDD 映像寫入與遊戲修補。只保留路徑與簡短摘要，不會記錄檔案內容。',
+    'All tools': '所有工具',
+    'Tool:': '工具：',
+    'Target contains:': '目標包含：',
+    'From:': '日期範圍：',
+    'to': '至',
+    'Any': '不限',
+    'Failed only': '僅顯示失敗',
+    'Tool': '工具',
+    'Summary': '摘要',
+    'Result': '結果',
+    'HDD image': 'HDD 映像',
+    'Game patches': '遊戲修補',
+    'USB keyboard': 'USB 鍵盤',
+    'Omnimix': 'Omnimix',
+    'Open folder': '開啟資料夾',
+    'Open in Backups && undo…': '在備份與復原中開啟…',
+    '{n} of {total} entries': '{n} / {total} 筆',
+}
+for _k, _v in _HISTORY_ZH.items():
+    ZH_TW.setdefault(_k, _v)

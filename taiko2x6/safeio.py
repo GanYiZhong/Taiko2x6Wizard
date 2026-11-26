@@ -176,7 +176,7 @@ def txn_path(first_target) -> Path:
     return p.with_name(p.name + ".txn")
 
 
-def write_pair(files, backup: bool = True, log=None) -> list[Path]:
+def _write_pair(files, backup: bool = True, log=None) -> list[Path]:
     """Replace several files as one all-or-nothing transaction.
 
     ``files`` is a sequence of ``(path, data)``; ``data`` is bytes-like or a
@@ -255,6 +255,19 @@ def write_pair(files, backup: bool = True, log=None) -> list[Path]:
             pass
     _fsync_dir(files[0][0].parent)
     return backups
+
+
+def write_pair(files, backup: bool = True, log=None) -> list[Path]:
+    """``_write_pair`` (see above) plus one activity-history entry."""
+    from taiko2x6 import history
+    files = [(Path(p), d) for p, d in files]
+    names = ", ".join(p.name for p, _ in files)
+    with history.operation("Archive", f"Wrote {names}",
+                           [p for p, _ in files]) as op:
+        backups = _write_pair(files, backup=backup, log=log)
+        if backups:
+            op.add(undo=backups[0])
+        return backups
 
 
 def _rollback_entries(entries):

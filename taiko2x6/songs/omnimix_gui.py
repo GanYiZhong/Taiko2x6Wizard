@@ -848,27 +848,32 @@ class OmnimixDialog(QDialog):
                 % (res["added"], res["total"], time.perf_counter() - t0))
             if res["errors"]:
                 log("errors: " + "; ".join(res["errors"]))
-            if is_img:
-                if do_backup:
-                    bak = img + ".omnimix.bak"
-                    log(f"backing up target → {Path(bak).name} (copying, large)…")
-                    shutil.copy2(img, bak)
-                # a fresh full copy already exists -> skip the undo journal
-                OM.write_partition_growing(img, tpart, res["list"], res["data"],
-                                           log, undo=not do_backup)
-                if do_limit:
-                    cap_safe = (self.cb_over.currentIndex() == 1)
-                    ceil = OM.patch_song_limit(img, res["total"],
-                                               cap_safe=cap_safe, log=log)
-                    res["ceiling"] = ceil
-                if boot:
-                    from taiko2x6.exe import taiko_exe
-                    log("applying game patches: " + ", ".join(boot))
-                    taiko_exe.set_hdd_boot(img, boot, log=log)
-                    res["boot"] = list(boot)
-            else:
-                write_pair([(td, res["data"]), (tl, res["list"])], backup=True)
-                log(f"wrote merged pair → {Path(td).parent}")
+            from taiko2x6 import history
+            with history.operation(
+                    "Omnimix", f"Omnimix build: {res['added']} songs added "
+                    f"(total {res['total']})", [img if is_img else td]) as hop:
+                if is_img:
+                    if do_backup:
+                        bak = img + ".omnimix.bak"
+                        log(f"backing up target → {Path(bak).name} (copying, large)…")
+                        shutil.copy2(img, bak)
+                        hop.add(undo=bak)
+                    # a fresh full copy already exists -> skip the undo journal
+                    OM.write_partition_growing(img, tpart, res["list"], res["data"],
+                                               log, undo=not do_backup)
+                    if do_limit:
+                        cap_safe = (self.cb_over.currentIndex() == 1)
+                        ceil = OM.patch_song_limit(img, res["total"],
+                                                   cap_safe=cap_safe, log=log)
+                        res["ceiling"] = ceil
+                    if boot:
+                        from taiko2x6.exe import taiko_exe
+                        log("applying game patches: " + ", ".join(boot))
+                        taiko_exe.set_hdd_boot(img, boot, log=log)
+                        res["boot"] = list(boot)
+                else:
+                    write_pair([(td, res["data"]), (tl, res["list"])], backup=True)
+                    log(f"wrote merged pair → {Path(td).parent}")
             res["by_genre"] = added_by_genre
             return res
 
