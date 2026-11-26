@@ -1372,3 +1372,22 @@ _BACKUP_ZH = {
     'Tools > PS2 HDD & memory card > Backups & undo lists the journals and rolls back for you.': '「工具 > PS2 HDD 與記憶卡 > 備份與復原」會幫你列出日誌並復原。',
 }
 ZH_TW.update(_BACKUP_ZH)
+
+_SYNC_PREVIEW_ZH = {
+    'Preview sync…': '預覽對齊…',
+    'Preview sync': '預覽對齊',
+    'Play the song with a click on every note (don low, ka high) to check the OFFSET / sync nudge by ear before building.': '播放歌曲並在每個音符上加入點擊聲（咚低、喀高），建置前用耳朵檢查 OFFSET / 對齊微調。',
+    'course:': '難度：',
+    'sync nudge:': '對齊微調：',
+    "+ moves the music later, − earlier. Same value as the Song Builder's sync nudge.": '正值讓音樂延後、負值提前。與歌曲建置器的對齊微調是同一個值。',
+    'start at:': '起點：',
+    'Only one minute is rendered, starting here, so changes are instant. Positions in the player are relative to this start.': '只渲染從這裡開始的一分鐘，所以調整能即時生效。播放器中的位置是相對於此起點。',
+    'Apply nudge': '套用微調',
+    'Copy this nudge back into the Song Builder.': '把這個微調值帶回歌曲建置器。',
+    'This TJA has no playable course.': '這份 TJA 沒有可播放的難度。',
+    'Could not prepare the preview: {err}': '無法準備預覽：{err}',
+    'Music shift: +{lead:.0f} ms silence, −{trim:.0f} ms trimmed off the front.': '音樂位移：前面加 {lead:.0f} 毫秒靜音，並裁掉開頭 {trim:.0f} 毫秒。',
+    '{n} notes in this window. Don = low click, ka = high click.': '此區段有 {n} 個音符。咚＝低音點擊，喀＝高音點擊。',
+    'Nudge applied: {v:g} ms': '已套用微調：{v:g} 毫秒',
+}
+ZH_TW.update(_SYNC_PREVIEW_ZH)

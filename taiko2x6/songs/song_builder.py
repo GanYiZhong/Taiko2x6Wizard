@@ -979,6 +979,12 @@ try:
                    "the music later, a negative one earlier."),
                 self.ed_gap))
             self.lbl_gap = f_src.labelForField(self.ed_gap)
+            self.b_preview = QPushButton(tr("Preview sync…"))
+            self.b_preview.setToolTip(tr(
+                "Play the song with a click on every note (don low, ka high) "
+                "to check the OFFSET / sync nudge by ear before building."))
+            self.b_preview.clicked.connect(self._preview_sync)
+            f_src.addRow(self.b_preview)
 
             # parsed-chart preview
             self.lbl_summary = QLabel()
@@ -1085,6 +1091,11 @@ try:
             else:
                 UI.mark_bad(self.ed_newid, False)
             UI.set_status(self.lbl_status, problems)
+            self.b_preview.setEnabled(
+                not g3 and not any(UI.file_problem(e.text(), "") for e in
+                                   (self.ed_tja, self.ed_audio))
+                and bool(self.ed_tja.text().strip())
+                and bool(self.ed_audio.text().strip()))
             self.b_build.setEnabled(self._worker is None and not problems)
 
         def _refresh_tja_summary(self, *_):
@@ -1116,7 +1127,7 @@ try:
             """Show only the rows the selected source actually uses."""
             g3 = self._is_gen3()
             for w in (self.row_tja, self.lbl_tja, self.row_audio, self.lbl_audio,
-                      self.ed_gap, self.lbl_gap):
+                      self.ed_gap, self.lbl_gap, self.b_preview):
                 if w is not None:
                     w.setVisible(not g3)
             for w in (self.row_gen3, self.lbl_gen3):
@@ -1145,6 +1156,23 @@ try:
                     self._new_forced = False
                 self.ck_new.setEnabled(True)
             self._validate()
+
+        def _preview_sync(self):
+            """Click-track preview of the chart against the music; its Apply
+            button writes the tuned nudge back into the sync nudge field."""
+            from taiko2x6.songs import sync_preview
+            try:
+                text, _warn = _read_tja_text(self.ed_tja.text().strip())
+                nudge = float(self.ed_gap.text().strip() or "0")
+            except Exception as exc:
+                QMessageBox.warning(self, tr("Song Builder"),
+                                    tr("Could not read TJA: {err}").format(err=exc))
+                return
+            dlg = sync_preview.SyncPreviewDialog(
+                text, self.ed_audio.text().strip(), nudge, self)
+            dlg.nudge_applied.connect(lambda v: self.ed_gap.setText("%g" % v))
+            dlg.exec()
+            dlg.deleteLater()
 
         def _pick_gen3(self):
             d = appconfig.pick_dir(self, "gen3_dir",

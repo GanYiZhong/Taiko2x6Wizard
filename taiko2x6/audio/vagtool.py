@@ -556,6 +556,66 @@ def detect_lead_silence_ms(path: str, threshold: int = 1000) -> float:
     return float(hits[0]) / rate * 1000.0
 
 
+def load_game_pcm(path: str, sample_rate: int = 44100) -> np.ndarray:
+    """Load a .wav/.ogg and return int16 stereo (n, 2) at ``sample_rate``."""
+    pcm, rate = _load_audio_any(path)
+
+    rate = int(rate)
+    if pcm.ndim == 1:
+        pcm = pcm[:, None]
+    if pcm.shape[1] > 2:
+        pcm = pcm[:, :2]
+
+    # Resample BEFORE duplicating mono -> stereo so we don't resample two
+    # identical channels (half the work). Mono stays mono through resampling.
+    if rate != sample_rate:
+        resampled = _resample_linear(pcm, rate, sample_rate)
+        pcm = np.clip(resampled, -32768, 32767).round().astype(np.int16)
+
+    # force stereo
+    if pcm.shape[1] == 1:
+        pcm = np.repeat(pcm, 2, axis=1)
+    return pcm
+
+
+def shifted_length(n: int, sample_rate: int, lead_silence_ms: float = 0.0,
+                   trim_start_ms: float = 0.0) -> int:
+    """Length in samples of ``shift_pcm`` output for an ``n``-sample input."""
+    cut = int(round(trim_start_ms * sample_rate / 1000.0))         if trim_start_ms and trim_start_ms > 0 else 0
+    pad = int(round(lead_silence_ms * sample_rate / 1000.0))         if lead_silence_ms and lead_silence_ms > 0 else 0
+    return max(0, n - cut) + max(0, pad)
+
+
+def shift_pcm_window(pcm: np.ndarray, sample_rate: int, lead_silence_ms: float,
+                     trim_start_ms: float, start: int, stop: int) -> np.ndarray:
+    """Samples [start, stop) of the shifted audio, without building all of it.
+
+    This is THE shift formula (trim off the front, then silence in front);
+    shift_pcm is just the whole range, so a preview and a build cannot differ.
+    """
+    cut = int(round(trim_start_ms * sample_rate / 1000.0))         if trim_start_ms and trim_start_ms > 0 else 0
+    pad = int(round(lead_silence_ms * sample_rate / 1000.0))         if lead_silence_ms and lead_silence_ms > 0 else 0
+    pad = max(0, pad)
+    total = shifted_length(len(pcm), sample_rate, lead_silence_ms, trim_start_ms)
+    start = max(0, start)
+    stop = min(stop, total)
+    out = np.zeros((max(0, stop - start), pcm.shape[1]), dtype=np.int16)
+    # output index i holds source sample i - pad + cut (silence while < pad)
+    s0 = max(start, pad)
+    if stop > s0:
+        src0 = s0 - pad + cut
+        out[s0 - start:] = pcm[src0:src0 + (stop - s0)]
+    return out
+
+
+def shift_pcm(pcm: np.ndarray, sample_rate: int, lead_silence_ms: float = 0.0,
+              trim_start_ms: float = 0.0) -> np.ndarray:
+    """Apply the build's front trim + leading silence to stereo int16 PCM."""
+    total = shifted_length(len(pcm), sample_rate, lead_silence_ms, trim_start_ms)
+    return shift_pcm_window(pcm, sample_rate, lead_silence_ms, trim_start_ms,
+                            0, total)
+
+
 def convert_audio_file(path: str, sample_rate: int = 44100,
                        progress=None, cancel=None, lead_silence_ms: float = 0.0,
                        trim_start_ms: float = 0.0) -> bytes:
@@ -575,33 +635,11 @@ def convert_audio_file(path: str, sample_rate: int = 44100,
     Optional ``progress(done, total)`` / ``cancel()`` callbacks are forwarded to
     the encoder so a GUI worker thread can report progress and cancel.
     """
-    pcm, rate = _load_audio_any(path)
-
-    rate = int(rate)
-    if pcm.ndim == 1:
-        pcm = pcm[:, None]
-    if pcm.shape[1] > 2:
-        pcm = pcm[:, :2]
-
-    # Resample BEFORE duplicating mono -> stereo so we don't resample two
-    # identical channels (half the work). Mono stays mono through resampling.
-    if rate != sample_rate:
-        resampled = _resample_linear(pcm, rate, sample_rate)
-        pcm = np.clip(resampled, -32768, 32767).round().astype(np.int16)
-
-    # force stereo
-    if pcm.shape[1] == 1:
-        pcm = np.repeat(pcm, 2, axis=1)
+    pcm = load_game_pcm(path, sample_rate)
 
     # Shift the music so its downbeat lands where the chart expects it (see
     # docstring). Done after resample so the gap is exact in output samples.
-    if trim_start_ms and trim_start_ms > 0:
-        cut = int(round(trim_start_ms * sample_rate / 1000.0))
-        pcm = pcm[cut:] if cut < len(pcm) else pcm[:0]
-    if lead_silence_ms and lead_silence_ms > 0:
-        pad = int(round(lead_silence_ms * sample_rate / 1000.0))
-        if pad > 0:
-            pcm = np.concatenate([np.zeros((pad, 2), dtype=np.int16), pcm], axis=0)
+    pcm = shift_pcm(pcm, sample_rate, lead_silence_ms, trim_start_ms)
 
     return encode_vag(pcm, sample_rate, channels=2,
                       progress=progress, cancel=cancel)
