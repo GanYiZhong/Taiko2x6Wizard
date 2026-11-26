@@ -399,6 +399,26 @@ class OmnimixDialog(QDialog):
                         (tr("Remove"), self._remove)):
             b = QPushButton(txt); b.clicked.connect(fn); sb.addWidget(b)
         sb.addStretch(1)
+        from taiko2x6.app import guide
+        help_btn = guide.help_button(
+            self, tr("Omnimix: sources and options"),
+            tr("The target is the base: only songs it does not already have are "
+               "added, matched by song id.\n\n"
+               "Source order: sources are read top to bottom, and when two have "
+               "the same song id the one higher in the list wins. Use Up / Down "
+               "to reorder.\n\n"
+               "More than 214 songs: “Fit everything” grows the game's song "
+               "tables and patches the exe ceiling (up to 644); records of songs "
+               "past 210 are not kept across a reboot. “Cap at 214” stops at 214.\n\n"
+               "Song audio: DATA.000 must stay under 2 GiB or the game hangs on "
+               "LOADING (about 430 songs at 44.1 kHz). 30 or 24 kHz keeps speed "
+               "and pitch, with less treble.\n\n"
+               "Backup: ticked, the target .img is copied to <img>.omnimix.bak "
+               "before writing; unticked, an undo journal is kept instead.\n\n"
+               "Game patches: ticked ones are applied to `taiko` after the build; "
+               "unticked ones are left as they are. Preview plan writes nothing."),
+            self.lst)
+        sb.addWidget(help_btn)
         sv.addLayout(sb)
         lay.addWidget(gs)
 
@@ -424,6 +444,8 @@ class OmnimixDialog(QDialog):
         self.ck_limit.setChecked(True)
         of.addRow("", self.ck_limit)
         lay.addWidget(go)
+        for w in (self.cb_over, self.cb_audio, self.ck_backup):
+            w.setWhatsThis(help_btn.whatsThis())
 
         # --- boot / select patches, applied to `taiko` after the build ---
         from taiko2x6.exe import taiko_exe
