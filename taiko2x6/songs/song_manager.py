@@ -654,6 +654,9 @@ class _Cell(QTableWidgetItem):
         return super().__lt__(other)
 
 
+_RO_FLAGS = QTableWidgetItem().flags() & ~Qt.ItemIsEditable   # computed once
+
+
 class _GenreDelegate(QStyledItemDelegate):
     """Genre cells edit through a drop-down of the named genre folders."""
 
@@ -1036,15 +1039,31 @@ class SongManager(QDialog):
         return song.stream, song.stream.lower()
 
     def _fill_row(self, r, song: _Song):
+        """Create row ``r``'s cells straight from ``song`` (same end state as
+        creating blank cells and calling _refresh_row, without the second
+        pass over every cell)."""
         uid = self._uid_for(song)
+        changed = self._changed_cols(song)
+        new = self._is_new(song)
+        setItem = self.tbl.setItem
         for col in range(len(COLS)):
             it = _Cell()
             if not self._cell_editable(song, col):
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setFlags(_RO_FLAGS)
             if col == COL_IDX:
                 it.setData(Qt.UserRole, uid)
-            self.tbl.setItem(r, col, it)
-        self._refresh_row(r, song)
+            text, key = self._cell_value(song, col)
+            it.setText(text)
+            it.setData(SORT_ROLE, key)
+            if col == COL_GENRE:
+                it.setData(GENRE_ROLE, song.genre)
+            if new:
+                it.setData(Qt.BackgroundRole, _NEW_BG)
+                it.setData(Qt.ForegroundRole, _INK)
+            elif col in changed:
+                it.setData(Qt.BackgroundRole, _CHANGED_BG)
+                it.setData(Qt.ForegroundRole, _INK)
+            setItem(r, col, it)
 
     def _refresh_row(self, r, song):
         """Rewrite one row's cells in place from ``song`` and mark edits."""

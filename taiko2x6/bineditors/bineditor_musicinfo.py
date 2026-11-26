@@ -514,6 +514,7 @@ try:
     from taiko2x6.app.dialog_polish import polish
     from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
                                                  remember_size)
+    _RO = QTableWidgetItem().flags() & ~Qt.ItemIsEditable   # computed once
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -580,7 +581,7 @@ class Editor(QDialog):
             hexv.setRowCount(len(rows))
             for r, h in enumerate(rows):
                 it = QTableWidgetItem(h)
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setFlags(_RO)
                 hexv.setItem(r, 0, it)
             lay.addWidget(hexv, 1)
             btns = QHBoxLayout(); btns.addStretch(1)
@@ -619,7 +620,7 @@ class Editor(QDialog):
         for r, s in enumerate(m.strings):
             for c, v in enumerate((s.section, str(s.index), str(s.pool_off))):
                 it = QTableWidgetItem(v)
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setFlags(_RO)
                 self.tbl_str.setItem(r, c, it)
             self.tbl_str.setItem(r, 3, QTableWidgetItem(s.text))
         self.tbl_str.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
@@ -669,7 +670,7 @@ class Editor(QDialog):
         for c, v in enumerate((section, name, str(a), str(b))):
             it = QTableWidgetItem(v)
             if c in (0,):  # section read-only; name/start/count editable
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setFlags(_RO)
             self.tbl_grp.setItem(row, c, it)
 
     # -- save ----------------------------------------------------------------
