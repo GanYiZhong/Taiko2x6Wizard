@@ -20,7 +20,9 @@ TRANSLATED = ["taiko2x6/app/taiko256_explorer_gui6.py", "taiko2x6/songs/omnimix_
               "taiko2x6/bineditors/bineditor_lamp.py",
               "taiko2x6/bineditors/bineditor_enso_parts.py",
               "taiko2x6/bineditors/bineditor_fname.py",
-              "taiko2x6/bineditors/bineditor_hdbdinfo.py"]
+              "taiko2x6/bineditors/bineditor_hdbdinfo.py",
+              "taiko2x6/audio/audioplayer.py", "taiko2x6/graphics/flipbook_player.py",
+              "taiko2x6/graphics/imageview.py", "taiko2x6/charts/chart_preview.py"]
 
 
 def _tr_keys(path):
