@@ -218,7 +218,11 @@ class BlockDevice:
         self.undo = None
         if writable and not overlay and undo:
             from taiko2x6.safeio import UndoJournal
-            self.undo = UndoJournal(path, None if undo is True else undo)
+            try:
+                self.undo = UndoJournal(path, None if undo is True else undo)
+            except BaseException:
+                self.f.close()              # don't leak the image handle
+                raise
 
     # --- sector-level ---
     def read_sectors(self, lba, count):
