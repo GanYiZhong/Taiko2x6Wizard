@@ -224,6 +224,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
         QPushButton, QLabel, QTabWidget, QHeaderView, QMessageBox, QLineEdit,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -260,7 +263,7 @@ if _HAVE_QT:
             super().__init__(parent)
             self.setWindowTitle(f"hdbdinfo.bin Editor — {title}" if title
                                 else "hdbdinfo.bin Editor")
-            self.resize(1100, 680)
+            remember_size(self, "hdbdinfo", (1100, 680))
             self.model = parse(data)
             self.result_bytes: bytes | None = None
             # map record -> its PoolString (by name_ptr) for editing names
@@ -272,8 +275,10 @@ if _HAVE_QT:
             m = self.model
             cats = ", ".join(m.category_names())
             lay.addWidget(QLabel(
-                f"records: {m.count_b}   strings: {len(m.strings)}   "
-                f"pool@0x{m.pool_off:X}   categories ({m.count_a}): {cats}"))
+                tr("records: {r}   strings: {s}   pool@0x{p:X}   categories ({n}): {cats}").format(
+                    r=m.count_b, s=len(m.strings), p=m.pool_off, n=m.count_a, cats=cats)))
+            bar_slot = QVBoxLayout()
+            lay.addLayout(bar_slot)
 
             tabs = QTabWidget()
 
@@ -297,11 +302,11 @@ if _HAVE_QT:
                     else:
                         it = QTableWidgetItem(str(rec.values[fidx]))
                     self.tbl.setItem(r, c, it)
-            tabs.addTab(self.tbl, f"Records ({len(m.records)})")
+            tabs.addTab(self.tbl, tr("Records ({n})").format(n=len(m.records)))
 
             # ---- raw string pool tab ----
             self.tbl_str = QTableWidget(len(m.strings), 3)
-            self.tbl_str.setHorizontalHeaderLabels(["offset", "slot", "text (editable)"])
+            self.tbl_str.setHorizontalHeaderLabels([tr("offset"), tr("slot"), tr("text (editable)")])
             self.tbl_str.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
             for r, s in enumerate(m.strings):
                 o = QTableWidgetItem(f"0x{s.offset:X}")
@@ -311,29 +316,23 @@ if _HAVE_QT:
                 self.tbl_str.setItem(r, 0, o)
                 self.tbl_str.setItem(r, 1, cap)
                 self.tbl_str.setItem(r, 2, QTableWidgetItem(s.text))
-            tabs.addTab(self.tbl_str, f"String pool ({len(m.strings)})")
+            tabs.addTab(self.tbl_str, tr("String pool ({n})").format(n=len(m.strings)))
             lay.addWidget(tabs, 1)
 
-            # filter box for the records table
-            flt = QHBoxLayout()
-            flt.addWidget(QLabel("filter:"))
-            self.ed_filter = QLineEdit()
-            self.ed_filter.textChanged.connect(self._apply_filter)
-            flt.addWidget(self.ed_filter)
-            lay.addLayout(flt)
+            # shared tools: filter, edited highlight, int-range check, copy/paste
+            int_cols = [c for c, (lbl, f) in enumerate(self.REC_COLUMNS)
+                        if f is not None and lbl != "name"]
+            self._tools = [TableTools(self.tbl, int_cols=int_cols),
+                           TableTools(self.tbl_str, int_cols=())]
+            bar = ToolBar(self._tools, tr("Filter by sound name, category or value..."))
+            self.ed_filter = bar.ed
+            bar_slot.addWidget(bar)
 
             btns = QHBoxLayout()
-            b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-            b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+            b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+            b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
             btns.addStretch(1); btns.addWidget(b_save); btns.addWidget(b_cancel)
             lay.addLayout(btns)
-
-        def _apply_filter(self, text: str):
-            text = text.lower()
-            for r in range(self.tbl.rowCount()):
-                name_item = self.tbl.item(r, 1)
-                name = name_item.text().lower() if name_item else ""
-                self.tbl.setRowHidden(r, bool(text) and text not in name)
 
         def _save(self):
             m = self.model
@@ -399,7 +398,7 @@ if _HAVE_QT:
                         if val != rec.values[fidx]:
                             set_record_field(m, r, fidx, val)
             except (ValueError, struct.error) as exc:
-                QMessageBox.critical(self, "Edit error", str(exc))
+                QMessageBox.critical(self, tr("Edit error"), str(exc))
                 return
             self.result_bytes = serialize(m)
             self.accept()

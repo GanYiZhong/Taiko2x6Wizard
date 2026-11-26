@@ -158,6 +158,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox, QWidget,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -182,7 +185,7 @@ class Editor(QDialog):
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"lamp.bin Editor — {title}" if title else "lamp.bin Editor")
-        self.resize(820, 600)
+        remember_size(self, "lamp", (820, 600))
         self._orig = bytes(data)
         self.model = parse(data)
         self.result_bytes: bytes | None = None
@@ -195,11 +198,11 @@ class Editor(QDialog):
 
         m = self.model
         if m.raw_fallback is not None:
-            lay.addWidget(QLabel(
+            lay.addWidget(QLabel(tr(
                 "lamp.bin did not match the known structure; showing a raw hex "
-                "view. Saving re-writes the original bytes unchanged."))
+                "view. Saving re-writes the original bytes unchanged.")))
             hexv = QTableWidget(0, 1)
-            hexv.setHorizontalHeaderLabels(["raw bytes (read-only)"])
+            hexv.setHorizontalHeaderLabels([tr("raw bytes (read-only)")])
             hexv.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             rows = [m.raw_fallback[i:i + 16].hex(" ")
                     for i in range(0, len(m.raw_fallback), 16)]
@@ -213,14 +216,16 @@ class Editor(QDialog):
             return
 
         lay.addWidget(QLabel(
-            f"strings: {m.num_strings}   units: {m.num_units}   "
-            f"groups: {len(m.groups)}"))
+            tr("strings: {s}   units: {u}   groups: {g}").format(
+                s=m.num_strings, u=m.num_units, g=len(m.groups))))
+        bar_slot = QVBoxLayout()
+        lay.addLayout(bar_slot)
 
         tabs = QTabWidget()
 
         # --- Strings tab (the meaningful editable content) ---
         self.tbl_str = QTableWidget(len(m.descs), 3)
-        self.tbl_str.setHorizontalHeaderLabels(["pool offset", "value", "name (editable)"])
+        self.tbl_str.setHorizontalHeaderLabels([tr("pool offset"), tr("value"), tr("name (editable)")])
         self.tbl_str.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         for r, (poff, val) in enumerate(m.descs):
             io = QTableWidgetItem(str(poff))
@@ -228,16 +233,16 @@ class Editor(QDialog):
             self.tbl_str.setItem(r, 0, io)
             self.tbl_str.setItem(r, 1, QTableWidgetItem(str(val)))
             self.tbl_str.setItem(r, 2, QTableWidgetItem(m.string_at(poff)))
-        tabs.addTab(self.tbl_str, f"Strings ({len(m.descs)})")
+        tabs.addTab(self.tbl_str, tr("Strings ({n})").format(n=len(m.descs)))
 
         # --- Groups tab ---
         self.tbl_grp = QTableWidget(len(m.groups), 2)
-        self.tbl_grp.setHorizontalHeaderLabels(["start unit", "count"])
+        self.tbl_grp.setHorizontalHeaderLabels([tr("start unit"), tr("count")])
         self.tbl_grp.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         for r, (s, c) in enumerate(m.groups):
             self.tbl_grp.setItem(r, 0, QTableWidgetItem(str(s)))
             self.tbl_grp.setItem(r, 1, QTableWidgetItem(str(c)))
-        tabs.addTab(self.tbl_grp, f"Groups ({len(m.groups)})")
+        tabs.addTab(self.tbl_grp, tr("Groups ({n})").format(n=len(m.groups)))
 
         # --- Units tab ---
         self.tbl_unit = QTableWidget(len(m.units), 2)
@@ -246,18 +251,23 @@ class Editor(QDialog):
         for r, (a, b) in enumerate(m.units):
             self.tbl_unit.setItem(r, 0, QTableWidgetItem(str(a)))
             self.tbl_unit.setItem(r, 1, QTableWidgetItem(str(b)))
-        tabs.addTab(self.tbl_unit, f"Units ({len(m.units)})")
+        tabs.addTab(self.tbl_unit, tr("Units ({n})").format(n=len(m.units)))
 
         lay.addWidget(tabs, 1)
+        u32 = (0, 0xFFFFFFFF)
+        self._tools = [TableTools(self.tbl_str, int_cols=(1,), int_range=u32),
+                       TableTools(self.tbl_grp, int_range=u32),
+                       TableTools(self.tbl_unit, int_range=u32)]
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by name or value...")))
         self._build_buttons(lay)
 
     def _build_buttons(self, lay):
         row = QWidget()
         btns = QHBoxLayout(row)
         btns.addStretch(1)
-        b_save = QPushButton("Save")
+        b_save = QPushButton(tr("Save"))
         b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel")
+        b_cancel = QPushButton(tr("Cancel"))
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_save)
         btns.addWidget(b_cancel)
