@@ -286,6 +286,8 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QPlainTextEdit, QFileDialog, QMessageBox, QListWidget, QCheckBox,
         QGroupBox, QAbstractItemView)
+    from PySide6.QtCore import Qt, QUrl
+    from PySide6.QtGui import QDesktopServices
 except ImportError:                                            # headless / CLI
     QDialog = None
 
@@ -339,17 +341,24 @@ if QDialog is not None:
 
             self.lst = QListWidget()
             self.lst.setSelectionMode(QAbstractItemView.ExtendedSelection)
+            self.lst.setToolTip(tr(
+                "Queued files. Select and press Delete to remove."))
             v.addWidget(self.lst, 1)
             row = QHBoxLayout()
             b = QPushButton(tr("Add files…"))
+            b.setAutoDefault(False)
             b.clicked.connect(self._add)
             row.addWidget(b)
-            b = QPushButton(tr("Remove"))
-            b.clicked.connect(self._remove)
-            row.addWidget(b)
-            b = QPushButton(tr("Clear"))
-            b.clicked.connect(self.lst.clear)
-            row.addWidget(b)
+            self.b_rm = QPushButton(tr("Remove"))
+            self.b_rm.setAutoDefault(False)
+            self.b_rm.clicked.connect(self._remove)
+            row.addWidget(self.b_rm)
+            self.b_clear = QPushButton(tr("Clear"))
+            self.b_clear.setAutoDefault(False)
+            self.b_clear.clicked.connect(self.lst.clear)
+            row.addWidget(self.b_clear)
+            self.lb_count = QLabel()
+            row.addWidget(self.lb_count)
             row.addStretch(1)
             v.addLayout(row)
 
@@ -391,8 +400,15 @@ if QDialog is not None:
             self.ed_out = QLineEdit()
             row.addWidget(self.ed_out, 1)
             b = QPushButton(tr("Browse…"))
+            b.setAutoDefault(False)
             b.clicked.connect(self._browse_out)
             row.addWidget(b)
+            self.b_open = QPushButton(tr("Open output folder"))
+            self.b_open.setAutoDefault(False)
+            self.b_open.setToolTip(tr(
+                "Show the output folder in the file manager."))
+            self.b_open.clicked.connect(self._open_out)
+            row.addWidget(self.b_open)
             v.addLayout(row)
 
             self.log = QPlainTextEdit()
@@ -402,12 +418,75 @@ if QDialog is not None:
             row = QHBoxLayout()
             row.addStretch(1)
             self.b_go = QPushButton(tr("Convert"))
+            self.b_go.setDefault(True)
             self.b_go.clicked.connect(self._run)
             row.addWidget(self.b_go)
             close = QPushButton(tr("Close"))
+            close.setAutoDefault(False)
             close.clicked.connect(self.reject)
             row.addWidget(close)
             v.addLayout(row)
+
+            self._drop_style = "QListWidget { border: 2px dashed #3b82f6; }"
+            self._load_settings()
+            self.lst.model().rowsInserted.connect(self._sync)
+            self.lst.model().rowsRemoved.connect(self._sync)
+            self.lst.model().modelReset.connect(self._sync)
+            self.ed_out.textChanged.connect(self._sync)
+            for c in self.ck.values():
+                c.toggled.connect(self._sync)
+            self._sync()
+
+        # -- settings -------------------------------------------------------
+        def _load_settings(self):
+            from taiko2x6.app import appconfig
+            g = lambda k: appconfig.get("chart_convert", k)
+            self.ed_out.setText(g("out_dir"))
+            fm = g("formats")
+            if fm:
+                have = set(fm.split(","))
+                for k, c in self.ck.items():
+                    c.setChecked(k in have)
+            pl = g("players")
+            if pl:
+                self.ck_1p.setChecked("1p" in pl.split(","))
+                self.ck_2p.setChecked("2p" in pl.split(","))
+
+        def _save_settings(self, out, formats, players):
+            from taiko2x6.app import appconfig
+            appconfig.set_value("chart_convert", "out_dir", out)
+            appconfig.set_value("chart_convert", "formats",
+                                ",".join(sorted(formats)))
+            appconfig.set_value("chart_convert", "players", ",".join(players))
+
+        def _sync(self, *_):
+            n = self.lst.count()
+            self.lb_count.setText(tr("{n} file(s) queued").format(n=n)
+                                  if n else "")
+            w = getattr(self, "_worker", None)
+            busy = w is not None and w.isRunning()
+            ready = (n > 0 and bool(self.ed_out.text().strip())
+                     and any(c.isChecked() for c in self.ck.values()))
+            self.b_go.setEnabled(ready and not busy)
+            self.b_go.setToolTip("" if ready else tr(
+                "Add files, tick a format and pick an output folder first."))
+            self.b_clear.setEnabled(n > 0)
+            self.b_rm.setEnabled(n > 0)
+            self.b_open.setEnabled(bool(self.ed_out.text().strip()))
+
+        def keyPressEvent(self, e):
+            if e.key() == Qt.Key_Delete and self.lst.hasFocus():
+                self._remove()
+                return
+            super().keyPressEvent(e)
+
+        def _open_out(self):
+            d = pathlib.Path(self.ed_out.text().strip())
+            if not d.is_dir():
+                QMessageBox.information(self, self.windowTitle(), tr(
+                    "The output folder does not exist yet."))
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
 
         # -- inputs ---------------------------------------------------------
         def add_paths(self, paths):
@@ -424,8 +503,9 @@ if QDialog is not None:
                 self.ed_out.setText(str(base / "converted"))
 
         def _add(self):
-            ps, _ = QFileDialog.getOpenFileNames(
-                self, tr("Add charts"), "",
+            from taiko2x6.app import appconfig
+            ps = appconfig.pick_open_many(
+                self, "chart_convert_in", tr("Add charts"),
                 tr("Charts and audio (*.tja *.sht *.bin sht *.nus3bank);;"
                    "All files (*)"))
             self.add_paths(ps)
@@ -436,9 +516,15 @@ if QDialog is not None:
 
         def dragEnterEvent(self, e):
             if e.mimeData().hasUrls():
+                self.lst.setStyleSheet(self._drop_style)
                 e.acceptProposedAction()
 
+        def dragLeaveEvent(self, e):
+            self.lst.setStyleSheet("")
+
         def dropEvent(self, e):
+            self.lst.setStyleSheet("")
+            before = self.lst.count()
             paths = []
             for u in e.mimeData().urls():
                 p = pathlib.Path(u.toLocalFile())
@@ -448,6 +534,8 @@ if QDialog is not None:
                 elif p.is_file():
                     paths.append(str(p))
             self.add_paths(paths)
+            n = self.lst.count() - before
+            self._say(tr("Added {n} file(s) from the drop.").format(n=n))
 
         def _browse_out(self):
             p = QFileDialog.getExistingDirectory(self, tr("Output folder"),
@@ -475,7 +563,7 @@ if QDialog is not None:
                 return
             players = tuple(p for p, c in (("1p", self.ck_1p), ("2p", self.ck_2p))
                             if c.isChecked()) or ("1p",)
-            self.b_go.setEnabled(False)
+            self._save_settings(out, formats, players)
             self.log.clear()
             self._worker = _ConvertWorker(dict(
                 paths=paths, out_dir=out, formats=formats, players=players,
@@ -483,9 +571,11 @@ if QDialog is not None:
             self._worker.line.connect(self._say)
             self._worker.done.connect(self._finished)
             self._worker.start()
+            self._sync()
 
         def _finished(self, res):
-            self.b_go.setEnabled(True)
+            self._worker.wait()
+            self._sync()
             if isinstance(res, Exception):
                 self._say("FAILED %r" % res)
                 QMessageBox.critical(self, self.windowTitle(), str(res))
@@ -493,6 +583,8 @@ if QDialog is not None:
             songs, written, errors = res
             self._say(tr("done: {s} songs, {f} files written, {e} problems")
                       .format(s=len(songs), f=len(written), e=len(errors)))
+            for er in errors:
+                self._say("  ! %s" % er)
 
         def reject(self):
             w = getattr(self, "_worker", None)
