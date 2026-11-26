@@ -440,12 +440,17 @@ def _render_white_outline(coverage: np.ndarray, stroke: int) -> np.ndarray:
 def _quantize_to_palette(rgba: np.ndarray, pal: np.ndarray) -> np.ndarray:
     """Nearest-colour map HxWx4 RGBA -> HxW indices into the 16-entry palette."""
     h, w, _ = rgba.shape
-    px = rgba.reshape(-1, 4).astype(np.int32)
+    # Text plates hold only a handful of distinct colours, so measure each
+    # distinct pixel once (packed into one uint32) and scatter the result back.
+    packed = np.ascontiguousarray(rgba, dtype=np.uint8).reshape(-1, 4).view(np.uint32).ravel()
+    uniq, inv = np.unique(packed, return_inverse=True)
+    px = uniq.view(np.uint8).reshape(-1, 4).astype(np.int32)
     P = pal.astype(np.int32)
     # Weight alpha strongly so transparent snaps to the transparent entry.
     wv = np.array([1, 1, 1, 3], np.int32)
     d = (((px[:, None, :] - P[None, :, :]) ** 2) * wv).sum(axis=2)
-    return d.argmin(axis=1).astype(np.uint8).reshape(h, w)
+    best = d.argmin(axis=1).astype(np.uint8)
+    return best[inv.reshape(-1)].reshape(h, w)
 
 
 def _font_for_box(text: str, max_w: float, max_h: float) -> ImageFont.FreeTypeFont:
