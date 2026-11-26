@@ -98,6 +98,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
         QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -110,7 +113,7 @@ class Editor(QDialog):
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"rank.bin Editor — {title}" if title else "rank.bin Editor")
-        self.resize(680, 560)
+        remember_size(self, "rank", (680, 560))
         self._orig = bytes(data)
         self.model = parse(data)
         self.result_bytes: bytes | None = None
@@ -120,7 +123,7 @@ class Editor(QDialog):
         lay = QVBoxLayout(self)
 
         # --- header section ---
-        gen = QGroupBox("Header")
+        gen = QGroupBox(tr("Header"))
         gf = QFormLayout(gen)
         self.tbl_hdr = QTableWidget(1, len(self.model.header))
         self.tbl_hdr.setHorizontalHeaderLabels(
@@ -139,40 +142,50 @@ class Editor(QDialog):
         self.tbl_hdr.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tbl_hdr.setFixedHeight(72)
         gf.addRow(self.tbl_hdr)
-        gf.addRow(QLabel(f"size: {len(self._orig)} bytes  |  "
-                         f"body rows: {len(self.model.rows)} x {ROW_WIDTH} u32"
-                         + (f"  |  tail: {len(self.model.tail)} bytes" if self.model.tail else "")))
-        gf.addRow(QLabel("Note: 'count'/'stride' are descriptive header fields "
-                         "(read-only); they do not reshape the body grid."))
+        gf.addRow(QLabel(
+            tr("size: {size} bytes  |  body rows: {rows} x {w} u32").format(
+                size=len(self._orig), rows=len(self.model.rows), w=ROW_WIDTH)
+            + (tr("  |  tail: {n} bytes").format(n=len(self.model.tail))
+               if self.model.tail else "")))
+        gf.addRow(QLabel(tr("Note: 'count'/'stride' are descriptive header fields "
+                            "(read-only); they do not reshape the body grid.")))
         lay.addWidget(gen)
 
         # --- body grid ---
-        body = QGroupBox(f"Body rows ({len(self.model.rows)} x {ROW_WIDTH} u32, little-endian)")
+        body = QGroupBox(tr("Body rows ({rows} x {w} u32, little-endian)").format(
+            rows=len(self.model.rows), w=ROW_WIDTH))
         bl = QVBoxLayout(body)
         self.tbl = QTableWidget(len(self.model.rows), ROW_WIDTH)
-        self.tbl.setHorizontalHeaderLabels([f"col {c}" for c in range(ROW_WIDTH)])
-        self.tbl.setVerticalHeaderLabels([f"row {r}" for r in range(len(self.model.rows))])
+        self.tbl.setHorizontalHeaderLabels([tr("col {c}").format(c=c) for c in range(ROW_WIDTH)])
+        self.tbl.setVerticalHeaderLabels([tr("row {r}").format(r=r) for r in range(len(self.model.rows))])
         for r, row in enumerate(self.model.rows):
             for c, v in enumerate(row):
                 self.tbl.setItem(r, c, QTableWidgetItem(str(v)))
         self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         bl.addWidget(self.tbl)
+        lay.insertWidget(0, ToolBar(self._tools_for_bar(), tr("Filter by row or value...")))
         lay.addWidget(body, 1)
 
         # --- buttons ---
         btns = QHBoxLayout()
-        b_save = QPushButton("Save")
+        b_save = QPushButton(tr("Save"))
         b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel")
+        b_cancel = QPushButton(tr("Cancel"))
         b_cancel.clicked.connect(self.reject)
         btns.addStretch(1)
         btns.addWidget(b_save)
         btns.addWidget(b_cancel)
         lay.addLayout(btns)
 
+    def _tools_for_bar(self):
+        u32 = (0, 0xFFFFFFFF)
+        self._tools = [TableTools(self.tbl_hdr, int_range=u32),
+                       TableTools(self.tbl, int_range=u32)]
+        return self._tools
+
     @staticmethod
     def _u32(text: str) -> int:
-        v = int(str(text).strip(), 0)  # accept decimal or 0x-hex
+        v = parse_int(text)  # accept decimal or 0x-hex
         if not (0 <= v <= 0xFFFFFFFF):
             raise ValueError(f"value {v} out of u32 range")
         return v
@@ -186,7 +199,7 @@ class Editor(QDialog):
                 rows.append([self._u32(self.tbl.item(r, c).text())
                              for c in range(self.tbl.columnCount())])
         except Exception as exc:
-            QMessageBox.critical(self, "Edit error", str(exc))
+            QMessageBox.critical(self, tr("Edit error"), str(exc))
             return
         new_model = RankModel(header=header, rows=rows, tail=self.model.tail)
         self.result_bytes = serialize(new_model)

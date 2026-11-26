@@ -180,12 +180,18 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
         QPushButton, QLabel, QHeaderView, QMessageBox, QAbstractItemView,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
     QDialog = object  # type: ignore
 
 _FIELD_HEADERS = ["#", "name (editable)", "slot", "field1", "field2", "field3", "field4"]
+_FIELD_TIPS = ["Record index", "Stream name (edited in place inside its slot)",
+               "Bytes available for the name", "Group / type id",
+               "Likely volume / gain", "", ""]
 
 
 class Editor(QDialog):
@@ -198,7 +204,7 @@ class Editor(QDialog):
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"streaminfo.bin — {title}" if title else "streaminfo.bin editor")
-        self.resize(760, 620)
+        remember_size(self, "streaminfo", (760, 620))
         self._orig = bytes(data)
         self.model = parse(data)
         self.result_bytes: bytes | None = None
@@ -208,12 +214,14 @@ class Editor(QDialog):
         lay = QVBoxLayout(self)
         m = self.model
         lay.addWidget(QLabel(
-            f"{m.count} records · pool @ 0x{m.pool_offset:X} · "
-            f"record stride {RECORD_SIZE} bytes"
+            tr("{n} records | pool @ 0x{off:X} | record stride {stride} bytes").format(
+                n=m.count, off=m.pool_offset, stride=RECORD_SIZE)
         ))
+        bar_slot = QVBoxLayout()
+        lay.addLayout(bar_slot)
 
         self.tbl = QTableWidget(len(m.records), len(_FIELD_HEADERS))
-        self.tbl.setHorizontalHeaderLabels(_FIELD_HEADERS)
+        self.tbl.setHorizontalHeaderLabels([tr(h) if h != "#" else h for h in _FIELD_HEADERS])
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked
@@ -237,12 +245,15 @@ class Editor(QDialog):
                 self.tbl.setItem(r, 3 + c, QTableWidgetItem(str(val)))
 
         lay.addWidget(self.tbl, 1)
+        self._tools = [TableTools(self.tbl, int_cols=(3, 4, 5, 6), max_len={1: 200},
+                                  col_tips=[tr(t) if t else "" for t in _FIELD_TIPS])]
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by stream name or value...")))
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        b_save = QPushButton("Save")
+        b_save = QPushButton(tr("Save"))
         b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel")
+        b_cancel = QPushButton(tr("Cancel"))
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_save)
         btns.addWidget(b_cancel)
@@ -255,14 +266,14 @@ class Editor(QDialog):
                 new_fields = []
                 for c in range(4):
                     txt = self.tbl.item(r, 3 + c).text().strip()
-                    new_fields.append(int(txt, 0))
+                    new_fields.append(parse_int(txt))
                 rec.fields = new_fields
                 # name (in-place into its slot)
                 new_name = self.tbl.item(r, 1).text()
                 if new_name != rec.name:
                     _apply_name(self.model, rec, new_name)
         except (ValueError, struct.error) as exc:
-            QMessageBox.critical(self, "Edit error", str(exc))
+            QMessageBox.critical(self, tr("Edit error"), str(exc))
             return
         self.result_bytes = serialize(self.model)
         self.accept()

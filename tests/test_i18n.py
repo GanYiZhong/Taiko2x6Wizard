@@ -11,7 +11,16 @@ TRANSLATED = ["taiko2x6/app/taiko256_explorer_gui6.py", "taiko2x6/songs/omnimix_
               "taiko2x6/exe/taiko_exe.py", "taiko2x6/exe/usb_keyboard.py",
               "taiko2x6/ps2/hdd_song_wizard.py", "taiko2x6/ps2/hdd_browser.py",
               "taiko2x6/songs/song_builder.py", "taiko2x6/songs/song_replacer.py",
-              "taiko2x6/songs/song_dialog_ui.py", "taiko2x6/app/settings_dialog.py"]
+              "taiko2x6/songs/song_dialog_ui.py", "taiko2x6/app/settings_dialog.py",
+              "taiko2x6/bineditors/table_tools.py",
+              "taiko2x6/bineditors/bineditor_musicinfo.py",
+              "taiko2x6/bineditors/bineditor_tuning.py",
+              "taiko2x6/bineditors/bineditor_streaminfo.py",
+              "taiko2x6/bineditors/bineditor_rank.py",
+              "taiko2x6/bineditors/bineditor_lamp.py",
+              "taiko2x6/bineditors/bineditor_enso_parts.py",
+              "taiko2x6/bineditors/bineditor_fname.py",
+              "taiko2x6/bineditors/bineditor_hdbdinfo.py"]
 
 
 def _tr_keys(path):

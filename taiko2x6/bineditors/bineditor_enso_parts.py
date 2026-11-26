@@ -312,6 +312,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox, QWidget,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -329,7 +332,7 @@ class Editor(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"enso_parts.bin editor — {title}" if title
                             else "enso_parts.bin editor")
-        self.resize(1000, 680)
+        remember_size(self, "enso_parts", (1000, 680))
         self.result_bytes: bytes | None = None
         self._orig = bytes(data)
         self.model = parse(data)
@@ -341,13 +344,13 @@ class Editor(QDialog):
         lay = QVBoxLayout(self)
 
         if self.model.raw_fallback is not None:
-            lay.addWidget(QLabel(
+            lay.addWidget(QLabel(tr(
                 "enso_parts.bin did not match the known structure; showing a "
                 "read-only hex view. Saving re-writes the original bytes "
-                "unchanged."))
+                "unchanged.")))
             blob = self.model.raw_fallback
             hexv = QTableWidget(0, 1)
-            hexv.setHorizontalHeaderLabels(["raw bytes (read-only)"])
+            hexv.setHorizontalHeaderLabels([tr("raw bytes (read-only)")])
             hexv.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             rows = [blob[i:i + 16].hex(" ") for i in range(0, len(blob), 16)]
             hexv.setRowCount(len(rows))
@@ -357,8 +360,8 @@ class Editor(QDialog):
                 hexv.setItem(r, 0, it)
             lay.addWidget(hexv, 1)
             btns = QHBoxLayout(); btns.addStretch(1)
-            b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-            b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+            b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+            b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
             btns.addWidget(b_save); btns.addWidget(b_cancel)
             lay.addLayout(btns)
             return
@@ -372,6 +375,8 @@ class Editor(QDialog):
         info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(info)
 
+        bar_slot = QVBoxLayout()
+        lay.addLayout(bar_slot)
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs, 1)
 
@@ -399,7 +404,7 @@ class Editor(QDialog):
         refs = referenced_strings(self.model)
         self.tbl_str = QTableWidget(len(refs), 3)
         self.tbl_str.setHorizontalHeaderLabels(
-            ["idx", "pool part", "text (editable)"])
+            [tr("idx"), tr("pool part"), tr("text (editable)")])
         for r, (ti, pi, text) in enumerate(refs):
             a = QTableWidgetItem(str(ti)); a.setFlags(a.flags() & ~Qt.ItemIsEditable)
             b = QTableWidgetItem(str(pi)); b.setFlags(b.flags() & ~Qt.ItemIsEditable)
@@ -407,13 +412,13 @@ class Editor(QDialog):
             self.tbl_str.setItem(r, 1, b)
             self.tbl_str.setItem(r, 2, QTableWidgetItem(text))
         self.tbl_str.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.tabs.addTab(self.tbl_str, "strings (%d)" % len(refs))
+        self.tabs.addTab(self.tbl_str, tr("strings ({n})").format(n=len(refs)))
         self._ref_rows = refs  # keep table index mapping
 
         # ---- all-pool-strings tab (read-only context) ----
         parts = [p for p in self.model.pool_parts]
         self.tbl_pool = QTableWidget(len(parts), 2)
-        self.tbl_pool.setHorizontalHeaderLabels(["part #", "text"])
+        self.tbl_pool.setHorizontalHeaderLabels([tr("part #"), tr("text")])
         for r, p in enumerate(parts):
             a = QTableWidgetItem(str(r)); a.setFlags(a.flags() & ~Qt.ItemIsEditable)
             t = QTableWidgetItem(p.decode("latin1"))
@@ -421,13 +426,17 @@ class Editor(QDialog):
             self.tbl_pool.setItem(r, 0, a)
             self.tbl_pool.setItem(r, 1, t)
         self.tbl_pool.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.tabs.addTab(self.tbl_pool, "pool (%d)" % len(parts))
+        self.tabs.addTab(self.tbl_pool, tr("pool ({n})").format(n=len(parts)))
+
+        self._tools = [TableTools(t) for t in self._sec_tables]
+        self._tools.append(TableTools(self.tbl_str, int_cols=()))
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by row or value...")))
 
         # ---- buttons ----
         btns = QHBoxLayout()
         btns.addStretch(1)
-        b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+        b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+        b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_save); btns.addWidget(b_cancel)
         lay.addLayout(btns)
 
@@ -468,7 +477,7 @@ class Editor(QDialog):
 
             new_bytes = serialize(self.model)
         except (ValueError, struct.error) as exc:
-            QMessageBox.critical(self, "Save error", str(exc))
+            QMessageBox.critical(self, tr("Save error"), str(exc))
             return
 
         # Refresh the read-only pool tab so it reflects any string edits, and

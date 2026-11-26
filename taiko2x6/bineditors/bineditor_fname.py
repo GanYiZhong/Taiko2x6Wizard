@@ -142,6 +142,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
         QPushButton, QLabel, QHeaderView, QMessageBox, QAbstractItemView,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -158,20 +161,22 @@ class Editor(QDialog):
         self.model = parse(data)
         self.result_bytes: bytes | None = None
         self.setWindowTitle(f"fname.bin — name pool editor {('— ' + title) if title else ''}".strip())
-        self.resize(560, 680)
+        remember_size(self, "fname", (560, 680))
         self._build_ui()
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
 
         info = QLabel(
-            f"{len(self.model.slots)} names · 4 chars max each "
-            f"(padding {PAD_CHAR!r}=U+3000 added automatically)")
+            tr("{n} names, 4 chars max each (padding {pad}=U+3000 added automatically)").format(
+                n=len(self.model.slots), pad=repr(PAD_CHAR)))
         info.setWordWrap(True)
         lay.addWidget(info)
+        bar_slot = QVBoxLayout()
+        lay.addLayout(bar_slot)
 
         self.tbl = QTableWidget(len(self.model.slots), 2)
-        self.tbl.setHorizontalHeaderLabels(["#", "name (editable, max 4 chars)"])
+        self.tbl.setHorizontalHeaderLabels(["#", tr("name (editable, max 4 chars)")])
         self.tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tbl.verticalHeader().setVisible(False)
@@ -183,11 +188,13 @@ class Editor(QDialog):
             self.tbl.setItem(r, 0, idx)
             self.tbl.setItem(r, 1, QTableWidgetItem(slot.name))
         lay.addWidget(self.tbl, 1)
+        self._tools = [TableTools(self.tbl, int_cols=(), max_len={1: SLOT_CHARS})]
+        bar_slot.addWidget(ToolBar(self._tools, tr("Filter by number or name...")))
 
         btns = QHBoxLayout()
-        b_save = QPushButton("Save")
+        b_save = QPushButton(tr("Save"))
         b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel")
+        b_cancel = QPushButton(tr("Cancel"))
         b_cancel.clicked.connect(self.reject)
         btns.addStretch(1)
         btns.addWidget(b_save)
@@ -209,7 +216,7 @@ class Editor(QDialog):
                 slot.name = new
             out = serialize(self.model)
         except (ValueError, struct.error) as exc:
-            QMessageBox.critical(self, "Save error", str(exc))
+            QMessageBox.critical(self, tr("Save error"), str(exc))
             return
         self.result_bytes = out
         self.accept()

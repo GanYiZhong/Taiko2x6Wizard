@@ -509,6 +509,9 @@ try:
         QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox, QWidget,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
     _HAVE_QT = True
 except Exception:  # pragma: no cover - Qt optional for headless import
     _HAVE_QT = False
@@ -528,13 +531,26 @@ _SEC0_HEADERS[19] = "score(b)"
 _SEC0_HEADERS[20] = "score+5k"
 
 
+_SEC0_TIPS = {
+    0: "Song id (pool pointer, shown in the row header)",
+    2: "Genre: 0 J-POP, 1 anime, 2 variety, 3 classic, 4 Namco original, "
+       "5 children's, 6 game music; 7+ are folder header rows",
+    7: "Score",
+    11: "Sort index in the song-select list",
+    17: "Score threshold (a)",
+    18: "Threshold (a) + 3000",
+    19: "Score threshold (b), equals (a)",
+    20: "Threshold (a) + 5000",
+}
+
+
 class Editor(QDialog):
     """Modal editor. After exec(), result_bytes holds new bytes if saved."""
 
     def __init__(self, data: bytes, title: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"musicinfo.bin — {title}" if title else "musicinfo.bin")
-        self.resize(1100, 680)
+        remember_size(self, "musicinfo", (1100, 680))
         self.model = parse(data)
         self._orig = bytes(data)
         self.result_bytes: bytes | None = None
@@ -546,13 +562,13 @@ class Editor(QDialog):
 
         m = self.model
         if m.raw_fallback is not None:
-            lay.addWidget(QLabel(
+            lay.addWidget(QLabel(tr(
                 "musicinfo.bin did not match the known structure; showing a "
                 "read-only hex view. Saving re-writes the original bytes "
-                "unchanged."))
+                "unchanged.")))
             blob = m.raw_fallback
             hexv = QTableWidget(0, 1)
-            hexv.setHorizontalHeaderLabels(["raw bytes (read-only)"])
+            hexv.setHorizontalHeaderLabels([tr("raw bytes (read-only)")])
             hexv.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             rows = [blob[i:i + 16].hex(" ") for i in range(0, len(blob), 16)]
             hexv.setRowCount(len(rows))
@@ -562,8 +578,8 @@ class Editor(QDialog):
                 hexv.setItem(r, 0, it)
             lay.addWidget(hexv, 1)
             btns = QHBoxLayout(); btns.addStretch(1)
-            b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-            b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+            b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+            b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
             btns.addWidget(b_save); btns.addWidget(b_cancel)
             lay.addLayout(btns)
             return
@@ -575,22 +591,25 @@ class Editor(QDialog):
         info.setStyleSheet("color:palette(mid);font-family:Consolas,monospace;")
         lay.addWidget(info)
 
+        self._bar_slot = QVBoxLayout()
+        lay.addLayout(self._bar_slot)
         tabs = QTabWidget()
         lay.addWidget(tabs, 1)
 
         # ---- main records (SEC0) ----
         self.tbl0 = QTableWidget(len(m.sec0), SEC0_NCOLS)
         self.tbl0.setHorizontalHeaderLabels(_SEC0_HEADERS)
-        self.tbl0.setVerticalHeaderLabels([str(i) for i in range(len(m.sec0))])
+        self.tbl0.setVerticalHeaderLabels(
+            [f"{i}  {self._song_id(rec)}" for i, rec in enumerate(m.sec0)])
         for r, rec in enumerate(m.sec0):
             for c, v in enumerate(rec):
                 self.tbl0.setItem(r, c, QTableWidgetItem(str(v)))
         self.tbl0.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        tabs.addTab(self.tbl0, f"Main records ({len(m.sec0)}×{SEC0_NCOLS})")
+        tabs.addTab(self.tbl0, tr("Main records ({n}x{c})").format(n=len(m.sec0), c=SEC0_NCOLS))
 
         # ---- strings (SEC3/4/5 pool refs) ----
         self.tbl_str = QTableWidget(len(m.strings), 4)
-        self.tbl_str.setHorizontalHeaderLabels(["section", "idx", "pool_off", "text (editable)"])
+        self.tbl_str.setHorizontalHeaderLabels([tr("section"), tr("idx"), tr("pool_off"), tr("text (editable)")])
         for r, s in enumerate(m.strings):
             for c, v in enumerate((s.section, str(s.index), str(s.pool_off))):
                 it = QTableWidgetItem(v)
@@ -598,12 +617,12 @@ class Editor(QDialog):
                 self.tbl_str.setItem(r, c, it)
             self.tbl_str.setItem(r, 3, QTableWidgetItem(s.text))
         self.tbl_str.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        tabs.addTab(self.tbl_str, f"Strings ({len(m.strings)})")
+        tabs.addTab(self.tbl_str, tr("Strings ({n})").format(n=len(m.strings)))
 
         # ---- group tables (SEC4 / SEC5) shown as info via the string tab ----
         # (group index/count columns are editable in the raw int tab below)
         self.tbl_grp = QTableWidget(len(m.sec4) + len(m.sec5), 4)
-        self.tbl_grp.setHorizontalHeaderLabels(["section", "name", "start", "count"])
+        self.tbl_grp.setHorizontalHeaderLabels([tr("section"), tr("name"), tr("start"), tr("count")])
         row = 0
         for i, (ptr, a, b) in enumerate(m.sec4):
             name = next((s.text for s in m.strings if s.section == "sec4" and s.index == i), "")
@@ -612,15 +631,33 @@ class Editor(QDialog):
             name = next((s.text for s in m.strings if s.section == "sec5" and s.index == i), "")
             self._grp_row(row, "sec5", name, a, b); row += 1
         self.tbl_grp.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        tabs.addTab(self.tbl_grp, f"Groups ({len(m.sec4)+len(m.sec5)})")
+        tabs.addTab(self.tbl_grp, tr("Groups ({n})").format(n=len(m.sec4) + len(m.sec5)))
+
+        # shared usability tools: tooltips, edit highlight, filter, copy/paste
+        tips = [tr(_SEC0_TIPS[c]) if c in _SEC0_TIPS else "" for c in range(SEC0_NCOLS)]
+        self._tools = [
+            TableTools(self.tbl0, col_tips=tips),
+            TableTools(self.tbl_str, int_cols=()),
+            TableTools(self.tbl_grp, int_cols=(2, 3)),
+        ]
+        self._bar_slot.addWidget(ToolBar(
+            self._tools, tr("Filter by song id, string or any value...")))
 
         # buttons
         btns = QHBoxLayout()
         btns.addStretch(1)
-        b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-        b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+        b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+        b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_save); btns.addWidget(b_cancel)
         lay.addLayout(btns)
+
+    def _song_id(self, rec) -> str:
+        """The song-id string a SEC0 record points at (col 0), '' if none."""
+        off, pool = rec[0], self.model.pool
+        if not 0 <= off < len(pool):
+            return ""
+        end = pool.find(b"\x00", off)
+        return pool[off:end if end >= 0 else len(pool)].decode("latin1")
 
     def _grp_row(self, row, section, name, a, b):
         for c, v in enumerate((section, name, str(a), str(b))):
@@ -640,7 +677,7 @@ class Editor(QDialog):
             # main records
             for r in range(self.tbl0.rowCount()):
                 for c in range(SEC0_NCOLS):
-                    m.sec0[r][c] = int(self.tbl0.item(r, c).text())
+                    m.sec0[r][c] = parse_int(self.tbl0.item(r, c).text())
 
             # strings
             dirty = False
@@ -654,8 +691,8 @@ class Editor(QDialog):
             row = 0
             for i in range(len(m.sec4)):
                 name = self.tbl_grp.item(row, 1).text()
-                a = int(self.tbl_grp.item(row, 2).text())
-                b = int(self.tbl_grp.item(row, 3).text())
+                a = parse_int(self.tbl_grp.item(row, 2).text())
+                b = parse_int(self.tbl_grp.item(row, 3).text())
                 ptr, _a, _b = m.sec4[i]
                 if (a, b) != (_a, _b):
                     m.sec4[i] = (ptr, a, b)
@@ -665,8 +702,8 @@ class Editor(QDialog):
                 row += 1
             for i in range(len(m.sec5)):
                 name = self.tbl_grp.item(row, 1).text()
-                a = int(self.tbl_grp.item(row, 2).text())
-                b = int(self.tbl_grp.item(row, 3).text())
+                a = parse_int(self.tbl_grp.item(row, 2).text())
+                b = parse_int(self.tbl_grp.item(row, 3).text())
                 ptr, _a, _b = m.sec5[i]
                 if (a, b) != (_a, _b):
                     m.sec5[i] = (ptr, a, b)
@@ -680,7 +717,7 @@ class Editor(QDialog):
 
             out = serialize(m)
         except (ValueError, struct.error) as exc:
-            QMessageBox.critical(self, "Edit error", str(exc))
+            QMessageBox.critical(self, tr("Edit error"), str(exc))
             return
 
         self.result_bytes = out

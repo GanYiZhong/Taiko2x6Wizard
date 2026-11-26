@@ -575,6 +575,9 @@ try:
         QTableWidgetItem, QPushButton, QLabel, QHeaderView, QMessageBox,
         QLineEdit, QWidget,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.bineditors.table_tools import (TableTools, ToolBar, parse_int,
+                                                 remember_size)
 
     class Editor(QDialog):
         """Modal editor. After exec(), ``result_bytes`` holds new bytes if saved."""
@@ -582,7 +585,7 @@ try:
         def __init__(self, data: bytes, title: str = "", parent=None):
             super().__init__(parent)
             self.setWindowTitle(f"tuning.bin Editor — {title}" if title else "tuning.bin Editor")
-            self.resize(1180, 720)
+            remember_size(self, "tuning", (1180, 720))
             self.model = parse(data)
             self.result_bytes: bytes | None = None
             self._build_ui()
@@ -606,7 +609,7 @@ try:
                 lay.addWidget(warn)
                 # read-only string pool view only
                 self.tbl_str = QTableWidget(len(m.strings), 2)
-                self.tbl_str.setHorizontalHeaderLabels(["offset", "text"])
+                self.tbl_str.setHorizontalHeaderLabels([tr("offset"), tr("text")])
                 for r, s in enumerate(m.strings):
                     o = QTableWidgetItem(f"0x{s.offset:X}")
                     o.setFlags(o.flags() & ~Qt.ItemIsEditable)
@@ -619,25 +622,19 @@ try:
                 self.tbl = None  # no editable grid
                 self._rows = []
                 btns = QHBoxLayout(); btns.addStretch(1)
-                b_save = QPushButton("Save (unchanged)"); b_save.clicked.connect(self._save)
-                b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+                b_save = QPushButton(tr("Save (unchanged)")); b_save.clicked.connect(self._save)
+                b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
                 btns.addWidget(b_save); btns.addWidget(b_cancel)
                 lay.addLayout(btns)
                 return
 
-            # search box for filtering the record table
-            top = QHBoxLayout()
-            top.addWidget(QLabel("filter:"))
-            self.ed_filter = QLineEdit()
-            self.ed_filter.setPlaceholderText("song index, player (1P/2P) or difficulty…")
-            self.ed_filter.textChanged.connect(self._apply_filter)
-            top.addWidget(self.ed_filter, 1)
-            lay.addLayout(top)
+            bar_slot = QVBoxLayout()      # filled once the tables exist
+            lay.addLayout(bar_slot)
 
             tabs = QTabWidget()
 
             # ---- records tab ----
-            _field_lbl = {5: "★star", 17: "scoreInit"}
+            _field_lbl = {5: "\u2605star", 17: "scoreInit"}
             cols = ["block", "song", "player", "difficulty"] + [
                 _field_lbl.get(i, f"f{i:02d}") for i in range(RECORD_INTS)]
             rows = []
@@ -657,11 +654,17 @@ try:
                 for c, val in enumerate(rec.values):
                     self.tbl.setItem(r, 4 + c, QTableWidgetItem(str(val)))
             self.tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-            tabs.addTab(self.tbl, f"Chart records ({len(rows)})")
+            for c, tip in ((0, "Block number (song x 2 players)"),
+                           (1, "Song number (block // 2)"),
+                           (2, "1P or 2P"), (3, "Difficulty of this record"),
+                           (4 + 5, "Star rating"),
+                           (4 + 17, "Initial score value")):
+                self.tbl.horizontalHeaderItem(c).setToolTip(tr(tip))
+            tabs.addTab(self.tbl, tr("Chart records ({n})").format(n=len(rows)))
 
             # ---- strings tab (read-only context) ----
             self.tbl_str = QTableWidget(len(self.model.strings), 2)
-            self.tbl_str.setHorizontalHeaderLabels(["offset", "text"])
+            self.tbl_str.setHorizontalHeaderLabels([tr("offset"), tr("text")])
             for r, s in enumerate(self.model.strings):
                 o = QTableWidgetItem(f"0x{s.offset:X}")
                 o.setFlags(o.flags() & ~Qt.ItemIsEditable)
@@ -670,23 +673,26 @@ try:
                 self.tbl_str.setItem(r, 0, o)
                 self.tbl_str.setItem(r, 1, t)
             self.tbl_str.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-            tabs.addTab(self.tbl_str, f"Song-id pool ({len(self.model.strings)})")
+            tabs.addTab(self.tbl_str, tr("Song-id pool ({n})").format(n=len(self.model.strings)))
 
             lay.addWidget(tabs, 1)
+
+            # shared tools: filter, edited highlight, int-range check, copy/paste
+            self._tools = [TableTools(
+                self.tbl, int_cols=range(4, 4 + RECORD_INTS),
+                row_text=lambda r: "%s %s" % (self._rows[r][0].player,
+                                              DIFF_NAMES[self._rows[r][1]]))]
+            bar = ToolBar(self._tools, tr("Filter by song number, 1P/2P, difficulty or value..."))
+            self.ed_filter = bar.ed
+            bar_slot.addWidget(bar)
 
             # ---- buttons ----
             btns = QHBoxLayout()
             btns.addStretch(1)
-            b_save = QPushButton("Save"); b_save.clicked.connect(self._save)
-            b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+            b_save = QPushButton(tr("Save")); b_save.clicked.connect(self._save)
+            b_cancel = QPushButton(tr("Cancel")); b_cancel.clicked.connect(self.reject)
             btns.addWidget(b_save); btns.addWidget(b_cancel)
             lay.addLayout(btns)
-
-        def _apply_filter(self, text: str):
-            text = text.strip().lower()
-            for r, (blk, di, rec) in enumerate(self._rows):
-                hay = f"{blk.song_index} {blk.player.lower()} {DIFF_NAMES[di]} {blk.index}"
-                self.tbl.setRowHidden(r, bool(text) and text not in hay)
 
         # -- save ----------------------------------------------------------- #
         def _save(self):
@@ -701,14 +707,14 @@ try:
                         item = self.tbl.item(r, 4 + c)
                         if item is None:
                             continue
-                        v = int(item.text().strip())
+                        v = parse_int(item.text())
                         if not (-2147483648 <= v <= 4294967295):
                             raise ValueError(f"row {r} field f{c:02d}: {v} out of int32 range")
                         if v > 2147483647:
                             v -= 4294967296   # accept unsigned spelling
                         rec.values[c] = v
             except ValueError as exc:
-                QMessageBox.critical(self, "Edit error", str(exc))
+                QMessageBox.critical(self, tr("Edit error"), str(exc))
                 return
             self.result_bytes = serialize(self.model)
             self.accept()
