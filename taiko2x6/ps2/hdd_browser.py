@@ -14,12 +14,54 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QSettings
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QListWidget,
-    QLabel, QFileDialog, QMessageBox, QProgressDialog, QWidget, QListWidgetItem,
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLineEdit,
+    QLabel, QMessageBox, QProgressDialog, QTreeWidget, QTreeWidgetItem,
 )
 
 from taiko2x6.app import appconfig
+from taiko2x6.app.i18n import tr
 from taiko2x6.ps2 import ps2hdd
+
+
+def human_size(n: int) -> str:
+    """1536 -> '1.5 KB'; exact bytes below 1 KB."""
+    n = int(n)
+    if n < 1024:
+        return f"{n} B"
+    v = float(n)
+    for unit in ("KB", "MB", "GB", "TB"):
+        v /= 1024.0
+        if v < 1024 or unit == "TB":
+            return f"{v:.1f} {unit}"
+
+
+def is_locked_error(exc: BaseException) -> bool:
+    """True when `exc` looks like the image being held by another process
+    (PCSX2 keeps the .img open while it runs)."""
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (5, 32, 33):
+        return True
+    return "locked by another process" in str(exc).lower()
+
+
+def friendly_error(exc: BaseException) -> str:
+    """User-facing text for an exception; explains the PCSX2 lock case."""
+    if is_locked_error(exc):
+        return tr("The image is locked by another program (usually PCSX2). "
+                  "Close PCSX2 and try again.")
+    return str(exc)
+
+
+class _SizeItem(QTreeWidgetItem):
+    """Sorts folders first, then by the column's natural key (name / bytes)."""
+
+    def __lt__(self, other):
+        col = self.treeWidget().sortColumn() if self.treeWidget() else 0
+        a, b = self.data(0, Qt.UserRole), other.data(0, Qt.UserRole)
+        if col == 1:
+            return (a["size"], a["name"].lower()) < (b["size"], b["name"].lower())
+        return (not a["is_dir"], a["name"].lower()) < (not b["is_dir"], b["name"].lower())
 
 
 class _Worker(QThread):
@@ -40,50 +82,70 @@ class _Worker(QThread):
 class HddBrowserDialog(QDialog):
     def __init__(self, parent=None, default_img=""):
         super().__init__(parent)
-        self.setWindowTitle("PS2 HDD Browser (APA + PFS)")
+        self.setWindowTitle(tr("PS2 HDD Browser (APA + PFS)"))
         self.resize(620, 460)
         self.path = ""
         self.hdd = None
+        self._parts = []
+        self._entry_count = 0
+        self._working = False
         self._build_ui()
+        default_img = default_img or appconfig.last_existing("hddimg")
         if default_img and Path(default_img).exists():
             self._open(default_img)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
-        self.lbl_img = QLabel("(no image open)")
-        b_open = QPushButton("Open .img…"); b_open.clicked.connect(lambda: self._open())
+        self.lbl_img = QLabel(tr("(no image open)"))
+        b_open = QPushButton(tr("Open .img…")); b_open.clicked.connect(lambda: self._open())
         top.addWidget(b_open); top.addWidget(self.lbl_img, 1)
         lay.addLayout(top)
 
         prow = QHBoxLayout()
-        prow.addWidget(QLabel("partition:"))
+        prow.addWidget(QLabel(tr("partition:")))
         self.cb_part = QComboBox()
         self.cb_part.currentIndexChanged.connect(self._refresh_files)
         prow.addWidget(self.cb_part, 1)
         lay.addLayout(prow)
 
-        self.lst = QListWidget()
+        self.ed_filter = QLineEdit()
+        self.ed_filter.setPlaceholderText(tr("Filter files…"))
+        self.ed_filter.setClearButtonEnabled(True)
+        self.ed_filter.textChanged.connect(self._apply_filter)
+        lay.addWidget(self.ed_filter)
+
+        self.lst = QTreeWidget()
+        self.lst.setColumnCount(3)
+        self.lst.setHeaderLabels([tr("Name"), tr("Size"), tr("Type")])
+        self.lst.setRootIsDecorated(False)
+        self.lst.setSortingEnabled(True)
+        self.lst.sortByColumn(0, Qt.AscendingOrder)
+        self.lst.header().setStretchLastSection(False)
+        self.lst.setColumnWidth(0, 320)
+        self.lst.itemSelectionChanged.connect(self._update_buttons)
+        self.lst.itemDoubleClicked.connect(lambda *_: self._extract())
         lay.addWidget(self.lst, 1)
 
         btns = QHBoxLayout()
-        self.b_extract = QPushButton("Extract selected…"); self.b_extract.clicked.connect(self._extract)
-        self.b_replace = QPushButton("Replace selected…"); self.b_replace.clicked.connect(self._replace)
-        b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
+        self.b_extract = QPushButton(tr("Extract selected…")); self.b_extract.clicked.connect(self._extract)
+        self.b_replace = QPushButton(tr("Replace selected…")); self.b_replace.clicked.connect(self._replace)
+        b_close = QPushButton(tr("Close")); b_close.clicked.connect(self.accept)
         for b in (self.b_extract, self.b_replace):
             b.setEnabled(False)
         btns.addWidget(self.b_extract); btns.addWidget(self.b_replace)
         btns.addStretch(1); btns.addWidget(b_close)
         lay.addLayout(btns)
 
-        self.status = QLabel(""); self.status.setStyleSheet("color:#999;")
+        self.status = QLabel(tr("Open a PS2 HDD image to begin."))
+        self.status.setStyleSheet("color:#999;")
         lay.addWidget(self.status)
 
     # -- open / browse --------------------------------------------------------
     def _open(self, path=""):
         if not path:
-            path = appconfig.pick_open(self, "hddimg", "Open PS2 HDD image",
-                                       "HDD image (*.img *.raw *.bin);;All files (*)")
+            path = appconfig.pick_open(self, "hddimg", tr("Open PS2 HDD image"),
+                                       tr("HDD image (*.img *.raw *.bin);;All files (*)"))
         if not path:
             return
         try:
@@ -92,7 +154,7 @@ class HddBrowserDialog(QDialog):
             self.hdd = ps2hdd.Ps2Hdd(path)        # read-only
             self.path = path
         except Exception as exc:
-            QMessageBox.critical(self, "Open failed", str(exc))
+            QMessageBox.critical(self, tr("Open failed"), friendly_error(exc))
             return
         try:
             QSettings("TaikoTools", "SYSTEM256Explorer").setValue("recent_hdd_img", path)
@@ -103,12 +165,16 @@ class HddBrowserDialog(QDialog):
         self.cb_part.clear()
         self._parts = [p for p in self.hdd.partitions() if p.get("is_pfs")]
         for p in self._parts:
-            self.cb_part.addItem(f"{p['name']}  ({p['sectors']*512/1e9:.2f} GB)")
+            self.cb_part.addItem(f"{p['name']}  ({human_size(p['sectors'] * 512)})")
         self.cb_part.blockSignals(False)
         if self._parts:
             # default to the first game partition (not a __system one)
+            saved = appconfig.get("hdd", "partition")
             default = next((i for i, p in enumerate(self._parts)
-                            if not p["name"].startswith("__")), 0)
+                            if p["name"] == saved), None)
+            if default is None:
+                default = next((i for i, p in enumerate(self._parts)
+                                if not p["name"].startswith("__")), 0)
             self.cb_part.setCurrentIndex(default)
             self._refresh_files()
 
@@ -118,40 +184,72 @@ class HddBrowserDialog(QDialog):
 
     def _refresh_files(self):
         self.lst.clear()
+        self._update_buttons()
         part = self._cur_part()
         if not part:
             return
+        appconfig.set_value("hdd", "partition", part)
         try:
             entries = self.hdd.pfs_listdir(part, "/")
         except Exception as exc:
-            self.status.setText(f"list failed: {exc}")
+            self.status.setText(tr("list failed: {err}").format(err=friendly_error(exc)))
             return
+        self.lst.setSortingEnabled(False)
         for e in entries:
-            tag = "[dir] " if e.get("is_dir") else ""
-            it = QListWidgetItem(f"{tag}{e['name']}    {e['size']:,} B")
-            it.setData(Qt.UserRole, e)
-            self.lst.addItem(it)
-        self.b_extract.setEnabled(True)
-        self.b_replace.setEnabled(True)
-        self.status.setText(f"{len(entries)} entries in {part}")
+            it = _SizeItem([e["name"], "" if e.get("is_dir") else human_size(e["size"]),
+                            tr("folder") if e.get("is_dir") else tr("file")])
+            it.setData(0, Qt.UserRole, e)
+            it.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            it.setToolTip(1, f"{e['size']:,} B")
+            self.lst.addTopLevelItem(it)
+        self.lst.setSortingEnabled(True)
+        self._entry_count = len(entries)
+        self._apply_filter()
+
+    def _apply_filter(self, *_):
+        q = self.ed_filter.text().strip().lower()
+        shown = 0
+        for i in range(self.lst.topLevelItemCount()):
+            it = self.lst.topLevelItem(i)
+            hit = q in it.text(0).lower()
+            it.setHidden(not hit)
+            shown += hit
+        part = self._cur_part()
+        if part:
+            total = self._entry_count
+            if q:
+                self.status.setText(tr("{shown} of {n} entries in {part}")
+                                    .format(shown=shown, n=total, part=part))
+            else:
+                self.status.setText(tr("{n} entries in {part}").format(n=total, part=part))
+        self._update_buttons()
 
     def _selected(self):
-        it = self.lst.currentItem()
-        return it.data(Qt.UserRole) if it else None
+        sel = [i for i in self.lst.selectedItems() if not i.isHidden()]
+        return sel[0].data(0, Qt.UserRole) if sel else None
+
+    def _update_buttons(self):
+        """Extract/Replace need a selected file and no running job."""
+        e = self._selected()
+        ok = bool(e) and not e.get("is_dir") and not self._working
+        self.b_extract.setEnabled(ok)
+        self.b_replace.setEnabled(ok)
 
     # -- extract --------------------------------------------------------------
     def _extract(self):
         e = self._selected()
         part = self._cur_part()
         if not e or e.get("is_dir"):
-            QMessageBox.information(self, "Extract", "Select a file.")
+            QMessageBox.information(self, tr("Extract"), tr("Select a file."))
             return
-        dest = appconfig.pick_save(self, "hdd_extract", "Extract to", e["name"])
+        dest = appconfig.pick_save(self, "hdd_extract", tr("Extract to"), e["name"])
         if not dest:
             return
         self._run(lambda: self._do_extract(part, "/" + e["name"], dest),
-                  f"Extracting {e['name']} ({e['size']/1e6:.0f} MB)…",
-                  lambda r: self.status.setText(f"extracted → {dest}"))
+                  tr("Extracting {name} ({size})…").format(
+                      name=e["name"], size=human_size(e["size"])),
+                  lambda r: self.status.setText(
+                      tr("extracted → {dest} ({size})").format(dest=dest, size=human_size(r))))
 
     def _do_extract(self, part, fpath, dest):
         data = self.hdd.pfs_read(part, fpath)
@@ -163,23 +261,27 @@ class HddBrowserDialog(QDialog):
         e = self._selected()
         part = self._cur_part()
         if not e or e.get("is_dir"):
-            QMessageBox.information(self, "Replace", "Select a file.")
+            QMessageBox.information(self, tr("Replace"), tr("Select a file."))
             return
-        src = appconfig.pick_open(self, "hdd_replace", f"Replace {e['name']} with…")
+        src = appconfig.pick_open(self, "hdd_replace", tr("Replace {name} with…").format(name=e["name"]))
         if not src:
             return
         new_size = Path(src).stat().st_size
         if QMessageBox.warning(
-                self, "Replace in HDD image",
-                f"This writes directly into:\n{self.path}\n\n"
-                f"{e['name']}: {e['size']:,} → {new_size:,} bytes\n\n"
-                f"The image is modified IN PLACE. {ps2hdd.UNDO_NOTE}\n\n"
-                f"Larger files are supported (free PFS zones are allocated); make "
-                f"sure the partition has enough free space. Continue?",
+                self, tr("Replace in HDD image"),
+                tr("This writes directly into:\n{img}\n\n{name}: {old} → {new}\n\n"
+                   "The image is modified IN PLACE. {note}\n\n"
+                   "Larger files are supported (free PFS zones are allocated); make "
+                   "sure the partition has enough free space. Close PCSX2 first. "
+                   "Continue?").format(
+                    img=self.path, name=e["name"],
+                    old=f"{e['size']:,} B ({human_size(e['size'])})",
+                    new=f"{new_size:,} B ({human_size(new_size)})",
+                    note=ps2hdd.UNDO_NOTE),
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         self._run(lambda: self._do_replace(part, "/" + e["name"], src),
-                  f"Writing {e['name']}…", self._after_replace)
+                  tr("Writing {name}…").format(name=e["name"]), self._after_replace)
 
     def _do_replace(self, part, fpath, src):
         # Runs on the worker thread. Operate on a LOCAL writable handle only —
@@ -199,17 +301,19 @@ class HddBrowserDialog(QDialog):
         try:
             self.hdd = ps2hdd.Ps2Hdd(self.path)
         except Exception as exc:
-            QMessageBox.critical(self, "Reopen failed", str(exc))
-            self.status.setText(f"write ok, reopen failed: {exc}")
+            QMessageBox.critical(self, tr("Reopen failed"), friendly_error(exc))
+            self.status.setText(tr("write ok, reopen failed: {err}").format(err=friendly_error(exc)))
             return
         undo = getattr(self, "_last_undo", None)
-        self.status.setText("replaced in image ✓"
-                            + (f" — undo journal: {Path(undo).name}" if undo else ""))
+        self.status.setText(tr("replaced in image ✓")
+                            + (tr(" — undo journal: {name}").format(name=Path(undo).name)
+                               if undo else ""))
         self._refresh_files()
 
     # -- worker plumbing ------------------------------------------------------
     def _run(self, fn, msg, on_ok):
-        self.b_extract.setEnabled(False); self.b_replace.setEnabled(False)
+        self._working = True
+        self._update_buttons()
         prog = QProgressDialog(msg, None, 0, 0, self)
         prog.setWindowModality(Qt.WindowModal); prog.setCancelButton(None)
         prog.setMinimumDuration(0); prog.show()
@@ -217,12 +321,13 @@ class HddBrowserDialog(QDialog):
 
         def done(r):
             prog.close()
-            self.b_extract.setEnabled(True); self.b_replace.setEnabled(True)
+            self._working = False
+            self._update_buttons()
             if isinstance(r, tuple) and r and r[0] == "ERROR":
                 if isinstance(r[1], NotImplementedError):
-                    QMessageBox.warning(self, "Cannot grow file", str(r[1]))
+                    QMessageBox.warning(self, tr("Cannot grow file"), str(r[1]))
                 else:
-                    QMessageBox.critical(self, "Failed", str(r[1]))
+                    QMessageBox.critical(self, tr("Failed"), friendly_error(r[1]))
                 # ensure we are back in a read-only browsable state. The replace
                 # worker closes self.hdd (sets it None) before opening its own
                 # writable handle; only reopen if we no longer hold one, and
