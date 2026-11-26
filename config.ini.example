@@ -46,3 +46,8 @@ ps2mc_replace = D:/Taiko/extract/GAMEFILE
 ; single-chart / output scratch
 sht          = D:/Taiko/extract/fumen/song1p_m/sht
 outdir       = D:/Taiko/out
+
+; External files (also editable in Settings > External files...)
+t14load      = D:/Taiko/T14LOAD.bin
+vgmstream    = D:/Taiko/vgmstream-win64/vgmstream-cli.exe
+library      = D:/Taiko/library

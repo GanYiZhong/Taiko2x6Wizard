@@ -88,6 +88,18 @@ def set_value(section: str, key: str, value) -> None:
         pass                                       # readonly dir -> just skip
 
 
+def clear_paths() -> None:
+    """Forget every remembered path ([paths]); other sections are kept."""
+    cp = _load()
+    if cp.has_section(_SECTION):
+        cp.remove_section(_SECTION)
+        try:
+            with open(INI_PATH, "w", encoding="utf-8") as f:
+                cp.write(f)
+        except OSError:
+            pass
+
+
 def last_existing(key: str) -> str:
     """The last path for `key` only if it still exists on disk ('' otherwise).
     Use to pre-fill line edits without resurrecting deleted files."""

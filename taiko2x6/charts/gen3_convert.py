@@ -361,6 +361,11 @@ def find_vgmstream(explicit=None):
     if explicit:
         cands += [explicit, os.path.join(explicit, "vgmstream-cli.exe"),
                   os.path.join(explicit, "vgmstream-cli")]
+    from taiko2x6.app import appconfig
+    saved = appconfig.last_existing("vgmstream")          # Settings
+    if saved:
+        cands += [saved, os.path.join(saved, "vgmstream-cli.exe"),
+                  os.path.join(saved, "vgmstream-cli")]
     cands += [os.path.join(VGMSTREAM_DIR, "vgmstream-cli.exe"),
               os.path.join(VGMSTREAM_DIR, "vgmstream-cli")]
     for c in cands:
