@@ -1239,8 +1239,8 @@ class MainWindow(QMainWindow):
         if not pfsshell_tool.find_pfsshell(self._recent_hdd_img() or None):
             QMessageBox.warning(
                 self, "pfsshell",
-                "pfsshell.exe not found. Put it next to this toolkit or next to "
-                "your .img, or set the PFSSHELL_EXE environment variable.")
+                tr("pfsshell.exe not found. Put it next to this toolkit or next "
+                   "to your .img, or set the PFSSHELL_EXE environment variable."))
             return
         dlg = pfsshell_tool.PfsShellDialog(self, default_img=self._recent_hdd_img())
         dlg.exec()
@@ -1288,7 +1288,7 @@ class MainWindow(QMainWindow):
         if os.name != "nt":
             QMessageBox.warning(
                 self, tr("Slim image"),
-                "Slimming uses NTFS sparse files and needs Windows.")
+                tr("Slimming uses NTFS sparse files and needs Windows."))
             return
         dlg = img_slim.ImgSlimDialog(self, default_img=self._recent_hdd_img() or "")
         dlg.exec()

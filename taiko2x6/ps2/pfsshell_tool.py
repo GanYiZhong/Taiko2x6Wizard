@@ -412,7 +412,13 @@ except Exception:  # pragma: no cover
 
 
 if _HAVE_QT:
+    from PySide6.QtWidgets import (QGroupBox, QLineEdit, QProgressBar,
+                                   QFormLayout)
     from taiko2x6.app import appconfig
+    from taiko2x6.app.errors import friendly_error
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.ps2 import dialog_kit as kit
+    from taiko2x6.ps2.hdd_browser import human_size
 
     class _Worker(QThread):
         done = Signal(object)
@@ -428,17 +434,30 @@ if _HAVE_QT:
                 import traceback
                 self.done.emit(("ERROR", exc, traceback.format_exc()))
 
+    def open_problem(path: str) -> str:
+        """Why `path` cannot be opened as an HDD image ('' when it can)."""
+        if not path:
+            return tr("Choose a PS2 HDD image (.img) first.")
+        if not Path(path).exists():
+            # A previous session that died mid temp-rename leaves the image as
+            # _pfsshell_active.img; PfsShell recovers it, so allow that case.
+            if not (Path(path).parent / "_pfsshell_active.img").exists():
+                return tr("The image file does not exist.")
+        elif Path(path).is_dir():
+            return tr("The image path is a folder, not a file.")
+        return ""
+
     class PfsShellDialog(QDialog):
         """Browse a PS2 HDD image with the native pfsshell.exe backend."""
 
         def __init__(self, parent=None, default_img=""):
             super().__init__(parent)
-            self.setWindowTitle("PS2 HDD via pfsshell (APA + PFS)")
-            self.resize(640, 480)
+            self.setWindowTitle(tr("PS2 HDD via pfsshell (APA + PFS)"))
+            self.resize(700, 600)
             self.sh: PfsShell | None = None
             self.path = ""
             self._workers: list[_Worker] = []
-            self._build_ui()
+            self._build_ui(default_img or appconfig.last_existing("hddimg"))
             # Don't gate on exists(): if a previous session died mid temp-rename
             # the image is sitting there as _pfsshell_active.img, so exists() is
             # False and this would skip _open() -- which is the only thing that
@@ -448,61 +467,126 @@ if _HAVE_QT:
             if default_img:
                 self._open(default_img)
 
-        def _build_ui(self):
+        def _build_ui(self, img):
             lay = QVBoxLayout(self)
-            top = QHBoxLayout()
-            self.lbl_img = QLabel("(no image open)")
-            b_open = QPushButton("Open .img…"); b_open.clicked.connect(lambda: self._open())
-            top.addWidget(b_open); top.addWidget(self.lbl_img, 1)
-            lay.addLayout(top)
+            info = QLabel(tr(
+                "Browse a PS2 HDD image with the native pfsshell backend. "
+                "Close any emulator holding the image first."))
+            info.setWordWrap(True)
+            lay.addWidget(info)
 
+            box = QGroupBox(tr("Image"))
+            v = QVBoxLayout(box)
+            row = QHBoxLayout()
+            self.row_img = kit.PathRow(
+                "hddimg", tr("Open PS2 HDD image"),
+                tr("HDD image (*.img *.raw *.bin);;All files (*)"), text=img)
+            self.b_open = QPushButton(tr("Open"))
+            self.b_open.setAutoDefault(False)
+            self.b_open.clicked.connect(lambda: self._open(self.row_img.text()))
+            row.addWidget(self.row_img, 1)
+            row.addWidget(self.b_open)
+            v.addLayout(row)
             prow = QHBoxLayout()
-            prow.addWidget(QLabel("partition:"))
+            prow.addWidget(QLabel(tr("Partition:")))
             self.cb_part = QComboBox()
             self.cb_part.currentIndexChanged.connect(self._refresh_files)
             prow.addWidget(self.cb_part, 1)
-            lay.addLayout(prow)
+            v.addLayout(prow)
+            lay.addWidget(box)
 
+            box2 = QGroupBox(tr("Files"))
+            v2 = QVBoxLayout(box2)
+            self.ed_filter = QLineEdit()
+            self.ed_filter.setPlaceholderText(tr("Filter by name…"))
+            self.ed_filter.setClearButtonEnabled(True)
+            self.ed_filter.textChanged.connect(self._apply_filter)
+            v2.addWidget(self.ed_filter)
             self.lst = QListWidget()
-            lay.addWidget(self.lst, 1)
-
+            self.lst.currentItemChanged.connect(lambda *_: self._update_buttons())
+            v2.addWidget(self.lst, 1)
             btns = QHBoxLayout()
-            self.b_extract = QPushButton("Extract selected…"); self.b_extract.clicked.connect(self._extract)
-            self.b_replace = QPushButton("Replace selected…"); self.b_replace.clicked.connect(self._replace)
-            for b in (self.b_extract, self.b_replace):
-                b.setEnabled(False)
-            b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
-            btns.addWidget(self.b_extract); btns.addWidget(self.b_replace)
-            btns.addStretch(1); btns.addWidget(b_close)
-            lay.addLayout(btns)
+            self.b_extract = QPushButton(tr("Extract selected…"))
+            self.b_extract.clicked.connect(self._extract)
+            self.b_replace = QPushButton(tr("Replace selected…"))
+            self.b_replace.clicked.connect(self._replace)
+            btns.addWidget(self.b_extract)
+            btns.addWidget(self.b_replace)
+            btns.addStretch(1)
+            v2.addLayout(btns)
+            lay.addWidget(box2, 1)
 
-            self.status = QLabel("pfsshell backend. Close any emulator holding the image first.")
-            self.status.setStyleSheet("color:palette(mid);")
+            self.bar = QProgressBar()
+            self.bar.setRange(0, 0)
+            self.bar.setTextVisible(True)
+            self.bar.setVisible(False)
+            lay.addWidget(self.bar)
+            self.status = QLabel("")
+            self.status.setWordWrap(True)
             lay.addWidget(self.status)
+            self.log = kit.make_log()
+            self.log.setMaximumHeight(110)
+            lay.addWidget(self.log)
+            crow = QHBoxLayout()
+            crow.addStretch(1)
+            b_close = QPushButton(tr("Close"))
+            b_close.setAutoDefault(False)
+            b_close.clicked.connect(self.accept)
+            crow.addWidget(b_close)
+            lay.addLayout(crow)
+            self.row_img.changed.connect(self._update_buttons)
+            self._update_buttons()
+
+        def _say(self, s):
+            self.status.setText(s)
+            kit.log_line(self.log, s)
+
+        def _busy(self):
+            return bool(self._workers)
+
+        def _update_buttons(self, *_):
+            busy = self._busy()
+            self.b_open.setEnabled(not busy and not open_problem(self.row_img.text()))
+            self.b_open.setToolTip(open_problem(self.row_img.text()))
+            self.row_img.setEnabled(not busy)
+            self.cb_part.setEnabled(not busy)
+            e = self._selected()
+            ok = bool(e) and not e.get("is_dir") and not busy and self.sh is not None
+            self.b_extract.setEnabled(ok)
+            self.b_replace.setEnabled(ok)
+            tip = "" if ok else tr("Select a file in the list first.")
+            self.b_extract.setToolTip(tip)
+            self.b_replace.setToolTip(tip)
 
         def _open(self, path=""):
             if not path:
-                path = appconfig.pick_open(self, "hddimg", "Open PS2 HDD image",
-                                           "HDD image (*.img *.raw *.bin);;All files (*)")
+                path = appconfig.pick_open(self, "hddimg", tr("Open PS2 HDD image"),
+                                           tr("HDD image (*.img *.raw *.bin);;All files (*)"))
             if not path:
                 return
+            self.row_img.setText(path)
             try:
                 if self.sh:
                     self.sh.close()
                     self.sh = None
                 self.sh = PfsShell(path)
             except PfsShellError as exc:
-                QMessageBox.critical(self, "pfsshell", str(exc))
+                self._say(tr("Could not open the image: {err}").format(
+                    err=friendly_error(exc)))
+                QMessageBox.critical(self, tr("pfsshell"), friendly_error(exc))
                 return
+            appconfig.remember("hddimg", path)
             self.path = path
-            self.lbl_img.setText(path)
+            self.lst.clear()
+            self._say(tr("Opened {path}").format(path=path))
             if self.sh._renamed:
-                self.status.setText(
-                    "image temporarily renamed to _pfsshell_active.img (name has "
-                    "spaces; pfsshell can't parse them) — restored automatically "
-                    "when this dialog closes. Don't launch the game meanwhile.")
+                self._say(tr(
+                    "image temporarily renamed to _pfsshell_active.img (name "
+                    "has spaces; pfsshell can't parse them) — restored "
+                    "automatically when this dialog closes. Don't launch the "
+                    "game meanwhile."))
             self._run(lambda: self.sh.list_partitions(),
-                      "Reading partitions…", self._got_parts)
+                      tr("Reading partitions…"), self._got_parts)
 
         def _got_parts(self, parts):
             # Keep signals blocked through setCurrentIndex too, otherwise
@@ -519,70 +603,90 @@ if _HAVE_QT:
             if parts:
                 self._refresh_files()
             else:
-                self.status.setText("no PFS partitions found")
+                self._say(tr("no PFS partitions found"))
 
         def _cur_part(self):
             return self.cb_part.currentText() or None
 
-        def _refresh_files(self):
+        def _refresh_files(self, *_):
             part = self._cur_part()
-            if not part:
+            if not part or self.sh is None:
                 return
             self._run(lambda: self.sh.listdir(part, "/"),
-                      f"Listing {part}…", self._got_files)
+                      tr("Listing {part}…").format(part=part), self._got_files)
 
         def _got_files(self, entries):
             self.lst.clear()
             for e in entries:
-                tag = "[dir] " if e.get("is_dir") else ""
-                sz = f"   {e['size']:,} B" if e.get("size") is not None else ""
+                tag = tr("[dir] ") if e.get("is_dir") else ""
+                sz = ("   " + human_size(e["size"])) if e.get("size") is not None else ""
                 it = QListWidgetItem(f"{tag}{e['name']}{sz}")
                 it.setData(Qt.UserRole, e)
                 self.lst.addItem(it)
-            self.b_extract.setEnabled(True); self.b_replace.setEnabled(True)
-            self.status.setText(f"{len(entries)} entries")
+            self._apply_filter()
+            self._say(tr("{n} entries").format(n=len(entries)))
+
+        def _apply_filter(self, *_):
+            needle = self.ed_filter.text().strip().lower()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                name = (it.data(Qt.UserRole) or {}).get("name", "").lower()
+                it.setHidden(bool(needle) and needle not in name)
+            self._update_buttons()
 
         def _selected(self):
             it = self.lst.currentItem()
-            return it.data(Qt.UserRole) if it else None
+            return it.data(Qt.UserRole) if it and not it.isHidden() else None
 
         def _extract(self):
             e = self._selected(); part = self._cur_part()
             if not e or e.get("is_dir"):
-                QMessageBox.information(self, "Extract", "Select a file."); return
-            dest = appconfig.pick_save(self, "hdd_extract", "Extract to", e["name"])
+                return
+            dest = appconfig.pick_save(self, "hdd_extract", tr("Extract to"), e["name"])
             if not dest:
                 return
             self._run(lambda: self.sh.extract(part, "/" + e["name"], dest),
-                      f"Extracting {e['name']}…",
-                      lambda r: self.status.setText(f"extracted → {dest} ({r:,} B)"))
+                      tr("Extracting {name}…").format(name=e["name"]),
+                      lambda r: self._say(tr("extracted → {dest} ({size})").format(
+                          dest=dest, size=human_size(r))))
 
         def _replace(self):
             e = self._selected(); part = self._cur_part()
             if not e or e.get("is_dir"):
-                QMessageBox.information(self, "Replace", "Select a file."); return
-            src = appconfig.pick_open(self, "hdd_replace", f"Replace {e['name']} with…")
+                return
+            src = appconfig.pick_open(self, "hdd_replace",
+                                      tr("Replace {name} with…").format(name=e["name"]))
             if not src:
                 return
+            try:
+                new_size = human_size(Path(src).stat().st_size)
+            except OSError as exc:
+                QMessageBox.critical(self, tr("Replace"), str(exc))
+                return
             if QMessageBox.warning(
-                    self, "Replace in HDD image",
-                    f"Write {Path(src).name} into the image as {e['name']}?\n\n"
-                    f"The image is modified in place by pfsshell. Make a backup "
-                    f"first. Continue?",
+                    self, tr("Replace in HDD image"),
+                    tr("Write {src} ({size}) into the image as {name}?\n\n"
+                       "The image is modified in place by pfsshell. Make a "
+                       "backup first. Continue?").format(
+                        src=Path(src).name, size=new_size, name=e["name"]),
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
+
             def ok(r):
-                self.status.setText(f"replaced {e['name']} ✓ ({r:,} B)")
+                self._say(tr("replaced {name} ✓ ({size})").format(
+                    name=e["name"], size=human_size(r)))
                 self._refresh_files()   # else the list keeps showing the old size
 
             self._run(lambda: self.sh.inject(part, "/" + e["name"], src),
-                      f"Writing {e['name']}…", ok)
+                      tr("Writing {name}…").format(name=e["name"]), ok)
 
         # -- worker plumbing --
         def _run(self, fn, msg, on_ok):
-            prog = QProgressDialog(msg, None, 0, 0, self)
-            prog.setWindowModality(Qt.WindowModal); prog.setCancelButton(None)
-            prog.setMinimumDuration(0); prog.show()
+            # Work happens on a QThread; the window stays responsive and the
+            # controls that could start a second job are disabled meanwhile.
+            self.bar.setFormat(msg)
+            self.bar.setVisible(True)
+            self.status.setText(msg)
             w = _Worker(fn)
             # Hold a strong ref until the thread has ACTUALLY finished, not just
             # emitted its result: `done` is delivered from run(), so the QThread
@@ -592,6 +696,7 @@ if _HAVE_QT:
             # and aborted with "QThread: Destroyed while thread is still
             # running".
             self._workers.append(w)
+            self._update_buttons()
 
             def finished():
                 w.deleteLater()
@@ -599,11 +704,15 @@ if _HAVE_QT:
                     self._workers.remove(w)
                 except ValueError:
                     pass
+                if not self._workers:
+                    self.bar.setVisible(False)
+                self._update_buttons()
 
             def done(r):
-                prog.close()
                 if isinstance(r, tuple) and r and r[0] == "ERROR":
-                    QMessageBox.critical(self, "pfsshell failed", str(r[1]))
+                    self._say(tr("Failed: {err}").format(err=r[1]))
+                    QMessageBox.critical(self, tr("pfsshell failed"),
+                                         friendly_error(r[1]))
                     return
                 on_ok(r)
 
