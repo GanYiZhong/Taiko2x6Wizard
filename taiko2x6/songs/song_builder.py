@@ -809,8 +809,10 @@ try:
     from PySide6.QtWidgets import (
         QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QComboBox, QLineEdit,
         QPushButton, QFileDialog, QCheckBox, QPlainTextEdit, QLabel, QMessageBox,
-        QWidget, QProgressDialog, QSpinBox, QDialogButtonBox,
+        QWidget, QProgressDialog, QSpinBox, QDialogButtonBox, QGroupBox,
     )
+    from taiko2x6.app.i18n import tr
+    from taiko2x6.songs import song_dialog_ui as UI
 
     class StarsDialog(QDialog):
         """Ask for the 4 course star ratings.
@@ -824,17 +826,17 @@ try:
 
         def __init__(self, sid, initial, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Star ratings — %s" % sid)
+            self.setWindowTitle(tr("Star ratings — {sid}").format(sid=sid))
             v = QVBoxLayout(self)
-            v.addWidget(QLabel(
+            v.addWidget(QLabel(tr(
                 "This song is not in the game's song list, so it has no star\n"
-                "ratings. Set them here (1–10). Pre-filled from the template."))
+                "ratings. Set them here (1–10). Pre-filled from the template.")))
             form = QFormLayout()
             self._spins = []
-            for course, label in (("easy", "easy 簡單:"),
-                                  ("normal", "normal 普通:"),
-                                  ("hard", "hard 困難:"),
-                                  ("oni", "oni 魔王:")):
+            for course, label in (("easy", tr("easy 簡單:")),
+                                  ("normal", tr("normal 普通:")),
+                                  ("hard", tr("hard 困難:")),
+                                  ("oni", tr("oni 魔王:"))):
                 sp = QSpinBox()
                 sp.setRange(1, 10)
                 sp.setValue(int(initial[_DIFF_INDEX[course]]))
@@ -869,110 +871,222 @@ try:
     class SongBuilderDialog(QDialog):
         def __init__(self, archive, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Custom Song Builder")
-            self.resize(640, 560)
+            self.setWindowTitle(tr("Custom Song Builder"))
+            self.resize(680, 760)
             self.archive = archive
             self.changed = False
             self.new_archive = None      # (list_bytes, data_bytes) when a new song is built
+            self._ids = []
+            self._worker = None
             self._build_ui()
+
+        def _log(self, text):
+            UI.log_append(self.log, text)
 
         def _build_ui(self):
             lay = QVBoxLayout(self)
-            form = QFormLayout()
+            lay.setSpacing(8)
+
+            # ---- Target ------------------------------------------------------
+            g_target = QGroupBox(tr("Target"))
+            f_target = QFormLayout(g_target)
             self.cb_song = QComboBox()
             try:
-                self.cb_song.addItems(song_ids(self.archive))
+                self._ids = song_ids(self.archive)
+                self.cb_song.addItems(self._ids)
             except Exception as exc:
-                QMessageBox.warning(self, "Song Builder", f"Could not list songs: {exc}")
-            self.ed_title = QLineEdit()
-            self.ed_lyr = QLineEdit()
-            self.ed_comp = QLineEdit()
-            self.ed_copy = QLineEdit("© 20XX")
-            self.ck_new = QCheckBox("Add as NEW song (clone selected as template)")
-            self.ck_new.setToolTip(
+                QMessageBox.warning(self, tr("Song Builder"),
+                                    tr("Could not list songs: {err}").format(err=exc))
+            self.ck_new = QCheckBox(tr("Add as NEW song (clone selected as template)"))
+            self.ck_new.setToolTip(tr(
                 "Off: replace the selected song slot.\n"
                 "On: create a brand-new song slot (new groups in DATA.000); the\n"
-                "selected song is used as the template for texture/chart layout.")
-            self.ed_newid = QLineEdit(); self.ed_newid.setPlaceholderText("new song id, e.g. mysong")
+                "selected song is used as the template for texture/chart layout."))
+            self.ed_newid = QLineEdit()
+            self.ed_newid.setPlaceholderText(tr("new song id, e.g. mysong"))
             self.ed_newid.setEnabled(False)
             self.ck_new.toggled.connect(self.ed_newid.setEnabled)
-            form.addRow(self.ck_new)
-            form.addRow("new song id:", self.ed_newid)
-            form.addRow("target / template (id):", self.cb_song)
-            form.addRow("title 曲名:", self.ed_title)
-            form.addRow("作詞 lyricist:", self.ed_lyr)
-            form.addRow("作曲 composer:", self.ed_comp)
-            form.addRow("© copyright:", self.ed_copy)
+            f_target.addRow(self.ck_new)
+            f_target.addRow(tr("new song id:"), self.ed_newid)
+            f_target.addRow(tr("target / template (id):"), self.cb_song)
+            lay.addWidget(g_target)
 
+            # ---- Source ------------------------------------------------------
+            g_src = QGroupBox(tr("Source"))
+            f_src = QFormLayout(g_src)
             self.cb_mode = QComboBox()
-            self.cb_mode.addItems(["TJA + audio file", "Gen3 (Nijiiro) song folder"])
-            self.cb_mode.setToolTip(
+            self.cb_mode.addItems([tr("TJA + audio file"), tr("Gen3 (Nijiiro) song folder")])
+            self.cb_mode.setToolTip(tr(
                 "TJA: convert a .tja chart and a wav/ogg, syncing the music to "
                 "the TJA's BPM/OFFSET.\n"
                 "Gen3: point at a Nijiiro song folder (…/fumen/<id>). Charts, "
                 "title, star ratings and the nus3bank music are all read from "
-                "the game's own data; nothing needs syncing.")
+                "the game's own data; nothing needs syncing."))
             self.cb_mode.currentIndexChanged.connect(self._mode_changed)
-            form.addRow("source mode:", self.cb_mode)
+            f_src.addRow(tr("source mode:"), self.cb_mode)
 
-            self.ed_tja = QLineEdit(appconfig.last_existing("tja")); b_tja = QPushButton("TJA…")
+            self.ed_tja = QLineEdit(appconfig.last_existing("tja"))
+            b_tja = QPushButton(tr("TJA…"))
             b_tja.clicked.connect(lambda: self._pick(self.ed_tja, "TJA charts (*.tja)"))
-            self.ed_audio = QLineEdit(appconfig.last_existing("wav")); b_aud = QPushButton("Audio…")
+            self.ed_audio = QLineEdit(appconfig.last_existing("wav"))
+            b_aud = QPushButton(tr("Audio…"))
             b_aud.clicked.connect(lambda: self._pick(self.ed_audio, "Audio (*.wav *.ogg)"))
             self.row_tja = self._row(self.ed_tja, b_tja)
             self.row_audio = self._row(self.ed_audio, b_aud)
-            form.addRow("chart .tja:", self.row_tja)
-            form.addRow("audio wav/ogg:", self.row_audio)
-            self.lbl_tja = form.labelForField(self.row_tja)
-            self.lbl_audio = form.labelForField(self.row_audio)
+            f_src.addRow(tr("chart .tja:"), self.row_tja)
+            f_src.addRow(tr("audio wav/ogg:"), self.row_audio)
+            self.lbl_tja = f_src.labelForField(self.row_tja)
+            self.lbl_audio = f_src.labelForField(self.row_audio)
 
-            self.ed_gen3 = QLineEdit(); b_g3 = QPushButton("Folder…")
+            self.ed_gen3 = QLineEdit()
+            b_g3 = QPushButton(tr("Folder…"))
             self.ed_gen3.setPlaceholderText(
-                r"…\Data\x64\fumen\<song id>   (e.g. …\fumen\yyhero)")
+                tr("…\\Data\\x64\\fumen\\<song id>   (e.g. …\\fumen\\yyhero)"))
             b_g3.clicked.connect(self._pick_gen3)
             self.row_gen3 = self._row(self.ed_gen3, b_g3)
-            form.addRow("Gen3 song folder:", self.row_gen3)
-            self.lbl_gen3 = form.labelForField(self.row_gen3)
+            f_src.addRow(tr("Gen3 song folder:"), self.row_gen3)
+            self.lbl_gen3 = f_src.labelForField(self.row_gen3)
 
             self.ed_gap = QLineEdit("0")
-            self.ed_gap.setToolTip(
+            self.ed_gap.setToolTip(tr(
                 "Leave at 0. Sync is computed from the TJA's BPM/OFFSET and baked "
                 "in automatically — feed the ORIGINAL .tja/.ogg, not files already "
                 "run through test.py. Use this only to taste-tune a song that "
-                "feels a hair off: + moves the music later, − earlier.")
-            self.row_gap_label = "sync nudge (ms, optional):"
-            form.addRow(self.row_gap_label, self.ed_gap)
-            self.lbl_gap = form.labelForField(self.ed_gap)
-            lay.addLayout(form)
-            self._mode_changed()
+                "feels a hair off: + moves the music later, − earlier."))
+            f_src.addRow(tr("sync nudge (ms, optional):"), self.ed_gap)
+            self.lbl_gap = f_src.labelForField(self.ed_gap)
 
-            opts = QHBoxLayout()
-            self.ck_tex = QCheckBox("textures"); self.ck_tex.setChecked(True)
-            self.ck_chart = QCheckBox("charts"); self.ck_chart.setChecked(True)
-            self.ck_audio = QCheckBox("audio"); self.ck_audio.setChecked(True)
-            self.ck_stars = QCheckBox("difficulty stars"); self.ck_stars.setChecked(True)
+            # parsed-chart preview
+            self.lbl_summary = QLabel()
+            self.lbl_summary.setWordWrap(True)
+            self.tbl_summary = UI.SummaryTable()
+            self.tbl_summary.setVisible(False)
+            f_src.addRow(self.lbl_summary)
+            f_src.addRow(self.tbl_summary)
+            lay.addWidget(g_src)
+
+            # ---- Song info ---------------------------------------------------
+            g_info = QGroupBox(tr("Song info"))
+            f_info = QFormLayout(g_info)
+            self.ed_title = QLineEdit()
+            self.ed_lyr = QLineEdit()
+            self.ed_comp = QLineEdit()
+            self.ed_copy = QLineEdit("© 20XX")
+            f_info.addRow(tr("title 曲名:"), self.ed_title)
+            f_info.addRow(tr("作詞 lyricist:"), self.ed_lyr)
+            f_info.addRow(tr("作曲 composer:"), self.ed_comp)
+            f_info.addRow(tr("© copyright:"), self.ed_copy)
+            lay.addWidget(g_info)
+
+            # ---- Output ------------------------------------------------------
+            g_out = QGroupBox(tr("Output"))
+            opts = QHBoxLayout(g_out)
+            self.ck_tex = QCheckBox(tr("textures")); self.ck_tex.setChecked(True)
+            self.ck_chart = QCheckBox(tr("charts")); self.ck_chart.setChecked(True)
+            self.ck_audio = QCheckBox(tr("audio")); self.ck_audio.setChecked(True)
+            self.ck_stars = QCheckBox(tr("difficulty stars")); self.ck_stars.setChecked(True)
             for w in (self.ck_tex, self.ck_chart, self.ck_audio, self.ck_stars):
                 opts.addWidget(w)
             opts.addStretch(1)
-            lay.addLayout(opts)
+            lay.addWidget(g_out)
 
-            self.log = QPlainTextEdit(readOnly=True)
-            lay.addWidget(QLabel("log:"))
+            # ---- Log + status + buttons --------------------------------------
+            self.log = UI.make_log()
+            lay.addWidget(QLabel(tr("log:")))
             lay.addWidget(self.log, 1)
 
-            btns = QHBoxLayout(); btns.addStretch(1)
-            self.b_build = QPushButton("Build → stage"); self.b_build.clicked.connect(self._build)
-            b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
-            btns.addWidget(self.b_build); btns.addWidget(b_close)
-            lay.addLayout(btns)
+            self.lbl_status = UI.status_label()
+            lay.addWidget(self.lbl_status)
+            box, self.b_build = UI.make_buttons(
+                tr("Build → stage"), tr("Close"), self._build, self.accept)
+            lay.addWidget(box)
+
+            # re-validate on any input change
+            for e in (self.ed_tja, self.ed_audio, self.ed_gen3, self.ed_newid,
+                      self.ed_gap):
+                e.textChanged.connect(self._validate)
+            self.ed_tja.textChanged.connect(self._refresh_tja_summary)
+            self.ck_new.toggled.connect(self._validate)
+            self.cb_song.currentIndexChanged.connect(self._validate)
+            self._mode_changed()
+            self._refresh_tja_summary()
 
         def _row(self, edit, btn):
-            w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
-            h.addWidget(edit, 1); h.addWidget(btn)
-            return w
+            return UI.path_row(edit, btn)
 
         def _is_gen3(self):
             return self.cb_mode.currentIndex() == 1
+
+        # -- validation -------------------------------------------------------
+        def _validate(self, *_):
+            """Mark missing/bad inputs inline; Build stays off until clean."""
+            if not hasattr(self, "b_build"):
+                return
+            problems = []
+            g3 = self._is_gen3()
+            if not self.cb_song.currentText():
+                problems.append(tr("No target song in this archive."))
+            if g3:
+                folder = self.ed_gen3.text().strip()
+                bad = not folder or not Path(folder).is_dir()
+                UI.mark_bad(self.ed_gen3, bad, tr("Choose an existing Gen3 song folder."))
+                if bad:
+                    problems.append(tr("Choose a Gen3 song folder."))
+                for e in (self.ed_tja, self.ed_audio, self.ed_gap):
+                    UI.mark_bad(e, False)
+            else:
+                UI.mark_bad(self.ed_gen3, False)
+                for e, what in ((self.ed_tja, tr("TJA file")),
+                                (self.ed_audio, tr("Audio file"))):
+                    msg = UI.file_problem(e.text(), what)
+                    UI.mark_bad(e, bool(msg), msg or "")
+                    if msg:
+                        problems.append(msg)
+                try:
+                    float(self.ed_gap.text().strip() or "0")
+                    UI.mark_bad(self.ed_gap, False)
+                except ValueError:
+                    UI.mark_bad(self.ed_gap, True, tr("Enter a number of milliseconds."))
+                    problems.append(tr("Sync nudge must be a number."))
+            if self.ck_new.isChecked():
+                nid = self.ed_newid.text().strip()
+                msg = None
+                if not nid and not g3:
+                    msg = tr("Enter a new song id.")
+                elif nid and nid in self._ids:
+                    msg = tr("This archive already has a song called '{id}'.").format(id=nid)
+                UI.mark_bad(self.ed_newid, bool(msg), msg or "")
+                if msg:
+                    problems.append(msg)
+            else:
+                UI.mark_bad(self.ed_newid, False)
+            UI.set_status(self.lbl_status, problems)
+            self.b_build.setEnabled(self._worker is None and not problems)
+
+        def _refresh_tja_summary(self, *_):
+            """Parse the chosen .tja and show title/BPM/courses before building."""
+            if self._is_gen3():
+                return
+            path = self.ed_tja.text().strip()
+            if not path or not Path(path).is_file():
+                self.lbl_summary.setText("")
+                self.tbl_summary.set_rows([])
+                return
+            try:
+                text, warn = _read_tja_text(path)
+            except Exception as exc:
+                self.lbl_summary.setText(tr("Could not read TJA: {err}").format(err=exc))
+                self.tbl_summary.set_rows([])
+                return
+            s = UI.summarize_tja(text)
+            warns = ([warn] if warn else []) + s["warnings"]
+            line = UI.tja_summary_line(s)
+            if warns:
+                line += "\n" + "\n".join("⚠ " + w for w in warns)
+            self.lbl_summary.setText(line)
+            self.tbl_summary.set_rows(s["rows"])
+            if s["title"] and not self.ed_title.text().strip():
+                self.ed_title.setPlaceholderText(s["title"])
 
         def _mode_changed(self, *_):
             """Show only the rows the selected source actually uses."""
@@ -984,6 +1098,10 @@ try:
             for w in (self.row_gen3, self.lbl_gen3):
                 if w is not None:
                     w.setVisible(g3)
+            if g3:
+                self._show_gen3_summary(getattr(self, "_gen3", None))
+            else:
+                self._refresh_tja_summary()
             # Gen3 songs carry their own id/title/stars, so those are filled in
             # from the game data rather than typed.
             for w in (self.ed_title, self.ed_newid):
@@ -1002,15 +1120,28 @@ try:
                     self.ck_new.setChecked(self._new_saved)
                     self._new_forced = False
                 self.ck_new.setEnabled(True)
+            self._validate()
 
         def _pick_gen3(self):
-            d = QFileDialog.getExistingDirectory(
-                self, "Choose a Gen3 song folder (…/fumen/<id>)",
-                self.ed_gen3.text())
+            d = appconfig.pick_dir(self, "gen3_dir",
+                                   tr("Choose a Gen3 song folder (…/fumen/<id>)"))
             if not d:
                 return
             self.ed_gen3.setText(d)
             self._load_gen3_preview(d)
+
+        def _show_gen3_summary(self, song):
+            if not song:
+                self.lbl_summary.setText("")
+                self.tbl_summary.set_rows([])
+                return
+            self.lbl_summary.setText(
+                tr("Title: {t}").format(t=song.get("title") or song["sid"]))
+            rows = []
+            for course in sorted(song.get("sht", {})):
+                rows.append((course, song.get("stars", {}).get(course),
+                             song.get("onpu", {}).get(course)))
+            self.tbl_summary.set_rows(rows)
 
         def _load_gen3_preview(self, folder):
             """Fill id/title/stars from the game's own data, and say what came
@@ -1019,8 +1150,8 @@ try:
                 from taiko2x6.charts import gen3_song
                 song = gen3_song.load_song(folder)
             except Exception as exc:
-                self.log.appendPlainText("Gen3: %s" % exc)
-                QMessageBox.warning(self, "Gen3 song", str(exc))
+                self._log(tr("Gen3: {err}").format(err=exc))
+                QMessageBox.warning(self, tr("Gen3 song"), str(exc))
                 return
             self._gen3 = song
             self._gen3_folder = folder
@@ -1032,19 +1163,21 @@ try:
             self.ed_title.setReadOnly(not editable)
             self.ed_newid.setReadOnly(not editable)
             self.log.clear()
-            self.log.appendPlainText(
-                "Gen3 song %s — %r\n  stars: %s\n  charts: %s\n  audio: %s"
-                % (song["sid"], song["title"],
-                   song["stars"] or "(unknown — Build will ask you for them)",
-                   ", ".join(sorted(song["sht"])) or "(none)",
-                   song["audio_path"] or "(none)"))
+            self._log(
+                tr("Gen3 song {sid} — {title}\n  stars: {stars}\n  charts: {charts}\n  audio: {audio}").format(
+                    sid=song["sid"], title=repr(song["title"]),
+                    stars=song["stars"] or tr("(unknown — Build will ask you for them)"),
+                    charts=", ".join(sorted(song["sht"])) or tr("(none)"),
+                    audio=song["audio_path"] or tr("(none)")))
             for w in song["warnings"]:
-                self.log.appendPlainText("WARNING: " + w)
+                self._log("WARNING: " + w)
+            self._show_gen3_summary(song)
+            self._validate()
 
         def _pick(self, edit, filt):
             # remembers the last-used path per file type in config.ini
             p = appconfig.pick_open(self, appconfig.key_for_filter(filt),
-                                    "Choose file", filt)
+                                    tr("Choose file"), filt)
             if p:
                 edit.setText(p)
 
@@ -1064,21 +1197,21 @@ try:
             tja_path = self.ed_tja.text().strip()
             if tja_path:
                 if not Path(tja_path).exists():
-                    QMessageBox.warning(self, "Song Builder",
-                                        f"TJA file not found:\n{tja_path}")
+                    QMessageBox.warning(self, tr("Song Builder"),
+                                        tr("TJA file not found:\n{path}").format(path=tja_path))
                     return
                 try:
                     tja_text, tja_warn = _read_tja_text(tja_path)
                     if tja_warn:
-                        self.log.appendPlainText("WARNING: " + tja_warn)
+                        self._log("WARNING: " + tja_warn)
                 except Exception as exc:
-                    QMessageBox.critical(self, "Song Builder",
-                                         f"Could not read TJA:\n{exc}")
+                    QMessageBox.critical(self, tr("Song Builder"),
+                                         tr("Could not read TJA:\n{err}").format(err=exc))
                     return
             audio_path = self.ed_audio.text().strip()
             if audio_path and not Path(audio_path).exists():
-                QMessageBox.warning(self, "Song Builder",
-                                    f"Audio file not found:\n{audio_path}")
+                QMessageBox.warning(self, tr("Song Builder"),
+                                    tr("Audio file not found:\n{path}").format(path=audio_path))
                 return
             audio_path = audio_path or None
             try:
@@ -1089,14 +1222,14 @@ try:
             if new_mode:
                 new_id = self.ed_newid.text().strip()
                 if not new_id:
-                    QMessageBox.warning(self, "Add new song", "Enter a new song id.")
+                    QMessageBox.warning(self, tr("Add new song"), tr("Enter a new song id."))
                     return
-                msg = "Building new song — rebuilding DATA.000 (~1 min). Please wait…"
+                msg = tr("Building new song — rebuilding DATA.000 (~1 min). Please wait…")
                 # DB step builds a SongManager (QWidget) — must run on the GUI thread.
                 try:
                     db_pre, stars = prepare_new_song_db(self.archive, new_id, sid, tja_text)
                 except Exception as exc:
-                    QMessageBox.critical(self, "Add new song", str(exc))
+                    QMessageBox.critical(self, tr("Add new song"), str(exc))
                     return
 
                 def task(log):
@@ -1108,7 +1241,7 @@ try:
                         lead_silence_ms=gap_ms,
                         precomputed_db=db_pre, stars=stars, log=log)
             else:
-                msg = "Building — generating assets…"
+                msg = tr("Building — generating assets…")
 
                 def task(log):
                     return build_song(
@@ -1121,6 +1254,9 @@ try:
                         log=log)
 
             # run off the UI thread so the window stays responsive
+            self._start_worker(task, msg, new_mode)
+
+        def _start_worker(self, task, msg, new_mode):
             self.b_build.setEnabled(False)
             self._prog = QProgressDialog(msg, None, 0, 0, self)
             self._prog.setWindowModality(Qt.WindowModal)
@@ -1128,7 +1264,7 @@ try:
             self._prog.setMinimumDuration(0)
             self._prog.show()
             self._worker = _BuildWorker(task)
-            self._worker.log_sig.connect(self.log.appendPlainText)
+            self._worker.log_sig.connect(self._log)
             self._worker.done_sig.connect(lambda res: self._on_built(res, new_mode))
             self._worker.start()
 
@@ -1137,7 +1273,7 @@ try:
             the game's own data, so nothing here is typed or synced."""
             folder = self.ed_gen3.text().strip()
             if not folder:
-                QMessageBox.warning(self, "Gen3 song", "Choose a Gen3 song folder.")
+                QMessageBox.warning(self, tr("Gen3 song"), tr("Choose a Gen3 song folder."))
                 return
             # Reload only when the FOLDER changed — keying this off the id field
             # would wipe an id the user typed for a song musicinfo doesn't know.
@@ -1153,9 +1289,9 @@ try:
             new_id = self.ed_newid.text().strip() or song["sid"]
             if new_id in song_ids(self.archive):
                 QMessageBox.warning(
-                    self, "Gen3 song",
-                    "This archive already has a song called '%s'. Remove it "
-                    "first, or use Song Manager to replace it." % new_id)
+                    self, tr("Gen3 song"),
+                    tr("This archive already has a song called '{id}'. Remove it "
+                       "first, or use Song Manager to replace it.").format(id=new_id))
                 return
 
             from taiko2x6.charts import gen3_song
@@ -1169,16 +1305,16 @@ try:
                 dlg = StarsDialog(song["sid"], _template_stars(self.archive, k_src),
                                   self)
                 if dlg.exec() != QDialog.Accepted:
-                    self.log.appendPlainText("cancelled: no star ratings set.")
+                    self._log(tr("cancelled: no star ratings set."))
                     return
                 stars = dlg.stars()
-                self.log.appendPlainText("stars: set by hand -> %s" % stars)
+                self._log(tr("stars: set by hand -> {stars}").format(stars=stars))
             # DB step builds a SongManager (QWidget) — GUI thread only.
             try:
                 db_pre, stars = prepare_new_song_db(
                     self.archive, new_id, template_sid, None, stars=stars)
             except Exception as exc:
-                QMessageBox.critical(self, "Gen3 song", str(exc))
+                QMessageBox.critical(self, tr("Gen3 song"), str(exc))
                 return
 
             title = self.ed_title.text().strip() or song["title"] or new_id
@@ -1193,55 +1329,50 @@ try:
                     charts=kw["charts"], audio_vag=kw["audio_vag"],
                     precomputed_db=db_pre, stars=stars, log=log)
 
-            self.b_build.setEnabled(False)
-            self._prog = QProgressDialog(
-                "Building %s from Gen3 data — decoding audio and rebuilding "
-                "DATA.000 (~1 min). Please wait…" % new_id, None, 0, 0, self)
-            self._prog.setWindowModality(Qt.WindowModal)
-            self._prog.setCancelButton(None)
-            self._prog.setMinimumDuration(0)
-            self._prog.show()
-            self._worker = _BuildWorker(task)
-            self._worker.log_sig.connect(self.log.appendPlainText)
-            self._worker.done_sig.connect(lambda res: self._on_built(res, True))
-            self._worker.start()
+            self._start_worker(
+                task,
+                tr("Building {id} from Gen3 data — decoding audio and rebuilding "
+                   "DATA.000 (~1 min). Please wait…").format(id=new_id),
+                True)
 
         def _on_built(self, res, new_mode):
             self._prog.close()
-            self.b_build.setEnabled(True)
             # Release the finished worker so a subsequent build gets a fresh
             # QThread and the old one isn't GC'd while still referenced.
             worker = self._worker
             if worker is not None:
                 worker.deleteLater()
                 self._worker = None
+            self._validate()
             if isinstance(res, tuple) and len(res) == 3 and res[0] is _BUILD_ERROR:
-                self.log.appendPlainText("FAILED:\n" + res[2])
-                QMessageBox.critical(self, "Build failed", str(res[1]))
+                self._log("FAILED:\n" + res[2])
+                QMessageBox.critical(self, tr("Build failed"), str(res[1]))
                 return
             if new_mode:
                 lb, db, summ = res
                 self.new_archive = (lb, db)
-                self.log.appendPlainText(
-                    f"\nNEW SONG built: {summ['groups']} groups, {summ['extra_files']} "
-                    f"select files, audio={'yes' if summ['audio'] else 'no'}, db={summ['db']}")
+                self._log("\n" + tr(
+                    "NEW SONG built: {groups} groups, {files} select files, audio={audio}, db={db}").format(
+                    groups=summ["groups"], files=summ["extra_files"],
+                    audio=tr("yes") if summ["audio"] else tr("no"), db=summ["db"]))
                 if summ.get("warnings"):
-                    self.log.appendPlainText("WARNINGS:\n  " + "\n  ".join(summ["warnings"]))
+                    self._log(tr("WARNINGS:") + "\n  " + "\n  ".join(summ["warnings"]))
                 if summ["errors"]:
-                    self.log.appendPlainText("ERRORS:\n  " + "\n  ".join(summ["errors"]))
-                self.log.appendPlainText("\nClose this dialog to write DATA.000 + LIST.BIN.")
+                    self._log(tr("ERRORS:") + "\n  " + "\n  ".join(summ["errors"]))
+                self._log("\n" + tr("Close this dialog to write DATA.000 + LIST.BIN."))
             else:
                 summ = res
                 self.changed = (self.changed or bool(summ["textures"]) or bool(summ["charts"])
                                 or bool(summ["stars"]) or bool(summ["audio"]))
-                self.log.appendPlainText(
-                    f"\nDONE: {summ['textures']} textures, {summ['charts']} charts staged; "
-                    f"audio={'staged' if summ['audio'] else 'no'}; stars={summ['stars']}")
+                self._log("\n" + tr(
+                    "DONE: {tex} textures, {charts} charts staged; audio={audio}; stars={stars}").format(
+                    tex=summ["textures"], charts=summ["charts"],
+                    audio=tr("staged") if summ["audio"] else tr("no"), stars=summ["stars"]))
                 if summ.get("warnings"):
-                    self.log.appendPlainText("WARNINGS:\n  " + "\n  ".join(summ["warnings"]))
+                    self._log(tr("WARNINGS:") + "\n  " + "\n  ".join(summ["warnings"]))
                 if summ["errors"]:
-                    self.log.appendPlainText("ERRORS:\n  " + "\n  ".join(summ["errors"]))
-                self.log.appendPlainText("\nStaged edits — use the main window's Save to write DATA.000.")
+                    self._log(tr("ERRORS:") + "\n  " + "\n  ".join(summ["errors"]))
+                self._log("\n" + tr("Staged edits — use the main window's Save to write DATA.000."))
 
 except ImportError:
     SongBuilderDialog = None  # type: ignore
