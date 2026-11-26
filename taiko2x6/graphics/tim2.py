@@ -302,6 +302,24 @@ def encode_indexed4_into_template(template: bytes, indices, palette_rgba) -> byt
     return bytes(out)
 
 
+def encode_rgba_into_template(template: bytes, rgba, dither: bool = False) -> bytes:
+    """Import a free-colour RGBA image into a 4-bit TIM2 template.
+
+    The palette is generated per image (alpha-aware median-cut + k-means, see
+    ``quantize.quantize_rgba``); images with <= 16 colours round-trip exactly.
+    `rgba` must match the template's width/height. Alpha is converted to the
+    PS2 0..128 scale. The fixed-palette song-plate path does not use this."""
+    import numpy as np
+    from taiko2x6.graphics import quantize
+    lay = first_picture_layout(template)
+    arr = np.asarray(rgba, dtype=np.uint8)
+    if arr.shape != (lay["height"], lay["width"], 4):
+        raise ValueError(f"image {arr.shape} does not match template "
+                         f"{lay['width']}x{lay['height']} RGBA")
+    idx, pal = quantize.quantize_rgba(arr, min(16, lay["clut_colors"]), dither=dither)
+    return encode_indexed4_into_template(template, idx, quantize.to_ps2_alpha(pal))
+
+
 def crop_transparent_bottom(data: bytes, row_align: int = 8):
     """Drop the fully transparent rows under a 4-bit indexed TIM2's picture.
 
